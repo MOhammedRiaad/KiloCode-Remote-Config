@@ -41,12 +41,15 @@ The full vision is in [`factory/VISION.md`](factory/VISION.md); the stack is rec
 [`docs/architecture/ADR-0001-tech-stack.md`](docs/architecture/ADR-0001-tech-stack.md).
 
 ### Status
-Only the project skeleton (T-001) is shipped. The plugin is a no-op stub: it loads, exposes a
-`config` hook that changes nothing, and does no I/O. Fetching, auth, JSONC parsing, placeholders,
-merging, caching, the validator, installers and key provisioning are planned and not yet built.
+The project skeleton (T-001) and an internal JSONC parser (F-001) are shipped. The plugin is still
+a no-op at runtime: it loads, exposes a `config` hook that changes nothing, and does no I/O. The
+parser exists (as `__internals.parseJsonc`) but is not yet used by the hook. Fetching, auth,
+placeholders, merging, caching, the validator, installers and key provisioning are planned and not
+yet built.
 
 ### Features shipped so far
 - `backend/plugin/azdo-remote-config.ts`: stub plugin (Kilo v1 module shape, supported Kilo range `>=7.2.0 <8.0.0`).
+- `parseJsonc`: zero-dependency JSONC parser (comments, trailing commas) with input-free error messages. Internal only, reachable via `__internals`; not yet wired into the `config` hook.
 - Lint that enforces the FR-11 constraints (single file, zero npm runtime dependencies).
 - Strict TypeScript type-check and a `node:test` test suite.
 - One quality gate, `scripts/ci.sh`, used locally and in GitHub Actions.

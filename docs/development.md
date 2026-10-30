@@ -28,7 +28,7 @@ metadata). It is also what GitHub Actions runs (`.github/workflows/ci.yml`).
 - Relative imports in non-plugin sources use the `.ts` extension.
 
 ## Tests
-Files: `backend/test/**/*.test.ts`. Tests must not touch the network or real Azure DevOps, `az`,
+Files: `backend/test/**/*.test.ts`. Parser tests live in `backend/test/plugin/jsonc.test.ts` and reach `parseJsonc` through `__internals`. Tests must not touch the network or real Azure DevOps, `az`,
 Bifrost or Kilo; use fakes.
 
 ## Layout

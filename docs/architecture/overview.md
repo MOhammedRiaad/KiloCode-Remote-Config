@@ -1,6 +1,7 @@
 # Architecture overview - Kilo Shared Config
 
-Last updated: cycle-0002 (T-001). Stack: ADR-0001. Plugin module shape: ADR-0002.
+Last updated: cycle-0003 (F-001). Stack: ADR-0001. Plugin module shape: ADR-0002.
+JSONC parser: ADR-0003.
 Contract: `contracts/plugin-interface.md`.
 
 ## Components
@@ -8,7 +9,7 @@ Contract: `contracts/plugin-interface.md`.
 | ID | Component | Source in this repo | Deployed to | Status |
 |---|---|---|---|---|
 | C1 | Shared config repo validation (PR gate) | `backend/validator/` | Azure DevOps `kilo-config` pipeline | planned |
-| C2 | Remote config plugin (single file, FR-11) | `backend/plugin/azdo-remote-config.ts` | `~/.config/kilo/azdo/azdo-remote-config.ts` | **stub (T-001)** |
+| C2 | Remote config plugin (single file, FR-11) | `backend/plugin/azdo-remote-config.ts` | `~/.config/kilo/azdo/azdo-remote-config.ts` | **stub (T-001) + JSONC parser (F-001)** |
 | C3 | Personal config template | `backend/templates/` | `~/.config/kilo/kilo.jsonc` | planned |
 | C4 | Bifrost gateway | external, not in repo | - | external |
 | C5 | Bootstrap installer | `backend/installer/` (`install.ps1`, `install.sh`) | C1 repo | planned |

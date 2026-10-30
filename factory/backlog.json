@@ -48,7 +48,7 @@
       "title": "Plugin: JSONC parser",
       "type": "feature",
       "priority": 1,
-      "status": "todo",
+      "status": "done",
       "scope": {
         "backend": true,
         "frontend": false
@@ -56,17 +56,18 @@
       "depends_on": [
         "T-001"
       ],
-      "description": "FR-4 / AC-5. Pure function inside the single plugin file that parses JSONC.",
+      "description": "FR-4 / AC-5. Pure, exported function (e.g. `parseJsonc(text: string): unknown`) inside the single plugin file backend/plugin/azdo-remote-config.ts. Strips line/block comments and trailing commas outside strings, then JSON.parse. Zero runtime deps (FR-11). Not yet wired into the config hook (F-006).",
       "acceptance_criteria": [
-        "Given JSONC with `//` line comments and `/* */` block comments, When parsed, Then the result equals the same document without comments.",
-        "Given JSONC with trailing commas in objects and arrays, When parsed, Then it parses to the expected object.",
-        "Given a string value containing `https://host/path` or `/* not a comment */`, When parsed, Then the string value is preserved exactly.",
-        "Given strings containing escaped quotes (`\\\"`) followed by `//`, When parsed, Then string boundaries are respected and content is preserved.",
-        "Given invalid JSONC, When parsed, Then a descriptive error is thrown (caller handles it; no crash of Kilo).",
-        "Given the Appendix A example from VISION.md, When parsed, Then provider.bifrost.options.baseURL equals `https://bifrost.yourcompany.internal/v1`."
+        "Given JSONC with `//` line comments and `/* */` block comments (including a multi-line block comment and a comment at end of file without trailing newline), When parsed, Then the result deep-equals the same document without comments.",
+        "Given JSONC with trailing commas in objects and arrays (including nested and with whitespace/comments between the comma and the closing bracket), When parsed, Then it parses to the expected object.",
+        "Given string values containing `https://host/path`, `/* not a comment */` and a literal `,}` sequence, When parsed, Then each string value is preserved exactly.",
+        "Given strings containing escaped quotes (`\\\"`) and escaped backslashes (a string ending in an escaped backslash, e.g. JSON source `\"C:\\\\\"`) followed by `//`, When parsed, Then string boundaries are respected and content is preserved.",
+        "Given invalid JSONC (unterminated string, unterminated block comment, or malformed JSON), When parsed, Then an Error with a descriptive message is thrown and the input text is not echoed in full in the message.",
+        "Given the Appendix A example from VISION.md, When parsed, Then provider.bifrost.options.baseURL equals `https://bifrost.yourcompany.internal/v1` and provider.bifrost.models has keys `azure/gpt-5` and `azure/gpt-5-mini`.",
+        "Given the plugin package after the change, When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0 and backend/package.json still has no runtime `dependencies`."
       ],
       "source": "vision",
-      "cycle_done": null
+      "cycle_done": 3
     },
     {
       "id": "F-002",
@@ -88,7 +89,8 @@
         "Given `\"x\": \"pre-{env:MISSING}-post\"`, When resolved, Then x equals `pre--post`.",
         "Given `\"x\": \"{file:~/secret.txt}\"` and that file exists under a faked home directory, When resolved, Then x equals the trimmed file contents and `~/` was expanded to home.",
         "Given `\"x\": \"{file:/does/not/exist}\"`, When resolved, Then x is dropped and the unresolved list contains `file:/does/not/exist`.",
-        "Given placeholders nested in objects and arrays, When resolved, Then all nested values are resolved by the same rules."
+        "Given placeholders nested in objects and arrays, When resolved, Then all nested values are resolved by the same rules.",
+        "Given `{file:...}` resolution fails for any reason (missing, directory, unreadable), When resolved, Then only the placeholder name is reported, never file contents or partial secrets (security follow-up, cycle 0002)."
       ],
       "source": "vision",
       "cycle_done": null
@@ -113,7 +115,8 @@
         "Given local `provider.bifrost.options.apiKey` and a shared provider.bifrost block, When merged in either mode, Then apiKey is unchanged.",
         "Given keys present locally but absent from the shared file, When merged, Then those keys are unchanged.",
         "Given the shared file contains `$schema` and `plugin`, When merged, Then the local `$schema` and `plugin` values are unchanged.",
-        "Given a config object reference, When merged, Then the same object reference is mutated (not replaced) and nested objects are deep-merged."
+        "Given a config object reference, When merged, Then the same object reference is mutated (not replaced) and nested objects are deep-merged.",
+        "Given overlay/remote config containing own keys `__proto__`, `constructor` or `prototype`, When merged, Then those keys are skipped or own-defined and Object.prototype is not polluted (regression test)."
       ],
       "source": "vision",
       "cycle_done": null
@@ -162,7 +165,8 @@
         "Given no pat option but AZDO_PAT or AZURE_DEVOPS_EXT_PAT set, When fetching, Then that PAT is used with Basic auth (AZDO_PAT preferred).",
         "Given no PAT anywhere, When fetching, Then the faked `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` token is used as `Bearer`.",
         "Given a server that does not respond within timeoutMs, When fetching, Then the fetch is aborted and a timeout error is returned.",
-        "Given a non-2xx response, When fetching, Then an error including the HTTP status (but no token) is returned."
+        "Given a non-2xx response, When fetching, Then an error including the HTTP status (but no token) is returned.",
+        "Given a remote config response larger than a fixed cap (e.g. 1 MiB), When fetched, Then it is rejected before parseJsonc is called (parseJsonc memory is ~50x input size)."
       ],
       "source": "vision",
       "cycle_done": null
@@ -190,7 +194,8 @@
         "Given the fetch fails and no cache exists, When the config hook runs, Then the config is unchanged and an error is logged (AC-4).",
         "Given any internal exception (parse error, unwritable cache, logger failure), When the config hook runs, Then it does not throw (FR-10).",
         "Given a run with a PAT, a bearer token and an `sk-bf-` key present, When all log calls are captured, Then none contains any of those secret values (AC-9).",
-        "Given `{env:MISSING}` in the shared file, When the hook runs, Then the log names `env:MISSING` and contains no value (AC-8)."
+        "Given `{env:MISSING}` in the shared file, When the hook runs, Then the log names `env:MISSING` and contains no value (AC-8).",
+        "Given a successful fetch on POSIX, When the cache file is written, Then its permissions are 0600 and the cache directory is created if missing (security follow-up, cycle 0002)."
       ],
       "source": "vision",
       "cycle_done": null
@@ -469,6 +474,25 @@
         "Given a release, When release.yml runs, Then backend/dist/azdo-remote-config.ts is attached and byte-identical to the source."
       ],
       "source": "architect",
+      "cycle_done": null
+    },
+    {
+      "id": "T-004",
+      "title": "Escape raw BOM literal and lint invisible characters",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [],
+      "description": "backend/plugin/azdo-remote-config.ts:38 holds a raw U+FEFF in the BOM constant; replace with the \"\ufeff\" escape and add a CI check (e.g. in check-fr11 or a script) that flags invisible characters in source files. Optionally copy unchanged text runs by slice in parseJsonc to cut memory.",
+      "acceptance_criteria": [
+        "Given the plugin source, When inspected, Then the BOM constant is written as \"\ufeff\" and the file contains no raw U+FEFF.",
+        "Given a source file containing a raw invisible character, When the CI check runs, Then it exits non-zero."
+      ],
+      "source": "review",
       "cycle_done": null
     }
   ]

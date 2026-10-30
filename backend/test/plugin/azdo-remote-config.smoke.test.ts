@@ -68,6 +68,8 @@ test("no named export is a function and __internals has no server key", () => {
   }
   assert.equal(typeof mod.__internals, "object");
   assert.equal("server" in mod.__internals, false);
+  assert.equal(typeof (mod.__internals as { parseJsonc?: unknown }).parseJsonc, "function");
+  assert.deepEqual(Object.keys(mod.__internals), ["parseJsonc"]);
 });
 
 test("SUPPORTED_KILO_RANGE is fixed", () => {
