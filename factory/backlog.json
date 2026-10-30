@@ -1,0 +1,17 @@
+{
+  "_schema": {
+    "id": "F-001 (features), B-001 (bugs), T-001 (tech debt / chores)",
+    "type": "feature | bug | chore | tech-debt | security",
+    "priority": "1 (highest) .. 5",
+    "status": "todo | in_progress | done | blocked",
+    "scope": {
+      "backend": "bool",
+      "frontend": "bool"
+    },
+    "acceptance_criteria": [
+      "Given/When/Then statements, each independently testable"
+    ],
+    "source": "vision | security | review | release | po",
+    "cycle_done": "cycle number that shipped it, or null"
+  }
+}

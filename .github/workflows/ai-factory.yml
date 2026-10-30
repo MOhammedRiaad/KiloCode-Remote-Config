@@ -1,0 +1,64 @@
+name: AI Factory
+
+# Runs the autonomous SDLC loop on a schedule in a disposable GitHub runner.
+# Required repository secrets:
+#   ANTHROPIC_API_KEY   (or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`)
+#   FACTORY_GH_TOKEN    fine-grained PAT: contents, pull requests, issues, workflows = read/write.
+#                       Needed so PRs/tags created by the factory trigger CI and Release
+#                       (events from the default GITHUB_TOKEN do not trigger workflows).
+# Repo settings: allow squash merge; optionally enable auto-merge and require the CI checks on main.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      cycles:
+        description: "Cycles to run in this job"
+        default: "3"
+
+concurrency:
+  group: ai-factory
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  factory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.FACTORY_GH_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Configure git identity
+        run: |
+          git config user.name "AI Factory"
+          git config user.email "ai-factory@users.noreply.github.com"
+      - name: Run factory loop
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ secrets.FACTORY_GH_TOKEN }}
+          FACTORY_MAX_CYCLES: ${{ github.event.inputs.cycles || '3' }}
+          # The runner is disposable, so the agents get full tool access here.
+          FACTORY_PERMISSION_MODE: bypassPermissions
+        run: bash scripts/factory-loop.sh
+      - name: Upload factory logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-logs-${{ github.run_id }}
+          path: factory/logs/
+          if-no-files-found: ignore

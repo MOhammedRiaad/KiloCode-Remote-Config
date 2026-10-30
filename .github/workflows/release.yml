@@ -1,0 +1,46 @@
+name: Release
+
+# The ci-releaser agent pushes a vX.Y.Z tag and creates the GitHub Release.
+# This workflow verifies the tagged commit and attaches build artifacts to that release.
+# (Tags pushed with the default GITHUB_TOKEN do not trigger workflows — the factory uses FACTORY_GH_TOKEN.)
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify tagged commit
+        run: bash scripts/ci.sh
+      - name: Package build outputs
+        run: |
+          mkdir -p dist-release
+          for d in backend/dist frontend/dist backend/build frontend/build; do
+            if [ -d "$d" ]; then tar -czf "dist-release/$(echo "$d" | tr '/' '-').tar.gz" -C "$d" .; fi
+          done
+          ls -la dist-release
+      - name: Create release if missing and upload artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            awk -v v="${TAG#v}" '$0 ~ "^## \\[" v "\\]" {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > notes.md
+            gh release create "$TAG" --title "$TAG" --notes-file notes.md
+          fi
+          if compgen -G "dist-release/*.tar.gz" > /dev/null; then
+            gh release upload "$TAG" dist-release/*.tar.gz --clobber
+          fi
