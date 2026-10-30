@@ -69,7 +69,12 @@ test("no named export is a function and __internals has no server key", () => {
   assert.equal(typeof mod.__internals, "object");
   assert.equal("server" in mod.__internals, false);
   assert.equal(typeof (mod.__internals as { parseJsonc?: unknown }).parseJsonc, "function");
-  assert.deepEqual(Object.keys(mod.__internals), ["parseJsonc"]);
+  assert.equal(typeof mod.__internals.resolvePlaceholders, "function");
+  assert.deepEqual(Object.keys(mod.__internals), ["parseJsonc", "resolvePlaceholders"]);
+});
+
+test("runtime named exports are exactly the documented set", () => {
+  assert.deepEqual(Object.keys(mod).sort(), ["PLUGIN_ID", "SUPPORTED_KILO_RANGE", "__internals", "default"]);
 });
 
 test("SUPPORTED_KILO_RANGE is fixed", () => {

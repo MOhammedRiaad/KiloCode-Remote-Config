@@ -1,7 +1,7 @@
 # Architecture overview - Kilo Shared Config
 
-Last updated: cycle-0003 (F-001). Stack: ADR-0001. Plugin module shape: ADR-0002.
-JSONC parser: ADR-0003.
+Last updated: cycle-0004 (F-002). Stack: ADR-0001. Plugin module shape: ADR-0002.
+JSONC parser: ADR-0003. Placeholder resolution: ADR-0004.
 Contract: `contracts/plugin-interface.md`.
 
 ## Components
@@ -9,7 +9,7 @@ Contract: `contracts/plugin-interface.md`.
 | ID | Component | Source in this repo | Deployed to | Status |
 |---|---|---|---|---|
 | C1 | Shared config repo validation (PR gate) | `backend/validator/` | Azure DevOps `kilo-config` pipeline | planned |
-| C2 | Remote config plugin (single file, FR-11) | `backend/plugin/azdo-remote-config.ts` | `~/.config/kilo/azdo/azdo-remote-config.ts` | **stub (T-001) + JSONC parser (F-001)** |
+| C2 | Remote config plugin (single file, FR-11) | `backend/plugin/azdo-remote-config.ts` | `~/.config/kilo/azdo/azdo-remote-config.ts` | **stub (T-001) + JSONC parser (F-001) + placeholder resolver (F-002, not yet wired)** |
 | C3 | Personal config template | `backend/templates/` | `~/.config/kilo/kilo.jsonc` | planned |
 | C4 | Bifrost gateway | external, not in repo | - | external |
 | C5 | Bootstrap installer | `backend/installer/` (`install.ps1`, `install.sh`) | C1 repo | planned |
@@ -26,7 +26,8 @@ Kilo start
   -> calls hooks.config(resolvedConfig)
        C2: settings (opts > KILO_AZDO_* env > defaults)
            -> fetch kilo.jsonc via AzDO Git Items API (PAT Basic | az Entra Bearer, timeout)
-           -> parse JSONC -> resolve {env:}/{file:} -> write cache
+           -> parse JSONC -> resolve {env:}/{file:} (ADR-0004; ~/ or absolute paths only)
+           -> log unresolved names (never values) -> write cache
               (on failure: read cache; no cache: local only)
            -> merge into resolvedConfig in place (defaults | enforce)
            -> log via client.app.log (service azdo-remote-config, no secrets)
@@ -37,9 +38,13 @@ Every step of C2 is wrapped so no failure can stop Kilo (FR-10).
 
 ## Internal structure of C2 (single file, sections in this order)
 
+0. `node:` imports only (since F-002: `node:fs`, `node:os`, `node:path`)
 1. Types (structural Kilo types, contract section 1)
 2. Constants (`PLUGIN_ID`, `SUPPORTED_KILO_RANGE`, defaults)
-3. Pure helpers: settings, JSONC parser, placeholder resolver, merge
+3. Pure helpers: settings, JSONC parser, placeholder resolver (sync; env / homedir / readFile
+   injectable, defaults process.env / os.homedir / a guarded reader: `fs.statSync` then
+   `fs.readFileSync`, regular files of at most 1 MiB only; UNC-style `{file:}` paths are
+   rejected before any read), merge
 4. I/O helpers with injectable seams: fetch, `az` runner, cache fs, clock
 5. `AzdoRemoteConfig` server function and `config` hook
 6. Exports: `__internals`, constants, `default { id, server }`

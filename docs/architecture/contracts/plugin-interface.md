@@ -1,6 +1,7 @@
 # Contract: `azdo-remote-config` plugin interface
 
-- Version: 0.2.0 (F-001, cycle-0003; 0.1.0 was T-001, cycle-0002)
+- Version: 0.3.1 (F-002 rework 1, cycle-0004: default `{file:}` reader guard and UNC rejection;
+  0.3.0 was F-002, cycle-0004; 0.2.0 was F-001, cycle-0003; 0.1.0 was T-001, cycle-0002)
 - Owner: Architect. Implemented by: `backend/plugin/azdo-remote-config.ts`.
 - This product has **no HTTP API of its own** and no frontend; this typed contract replaces an
   OpenAPI document. It defines (1) what Kilo passes to the plugin, (2) what the plugin returns,
@@ -46,11 +47,17 @@ export type PluginServer = (input: PluginInput, options?: PluginOptions) => Prom
 | `default` | object | `{ id: "azdo-remote-config", server: PluginServer }` |
 | `PLUGIN_ID` | string const | `"azdo-remote-config"` (also the logger `service` name, FR-9) |
 | `SUPPORTED_KILO_RANGE` | string const | `">=7.2.0 <8.0.0"` |
-| `__internals` | plain object | Test/validator seam. `{ parseJsonc }` since F-001 (section 2a); later F-items add further pure helpers. Never has a `server` key; never itself a function. |
+| `__internals` | plain object | Test/validator seam. `{ parseJsonc, resolvePlaceholders }` since F-002 (sections 2a, 2b), in that key order; later F-items add further pure helpers. Never has a `server` key; never itself a function. |
 | types | `export type` / `export interface` | as in section 1 |
 
-No other named exports. No named export may be a function. Helpers inside `__internals` are
-module-local functions (not exported by name).
+No other named exports: the runtime named exports are exactly `PLUGIN_ID`, `SUPPORTED_KILO_RANGE`
+and `__internals` (plus `default`). No named export may be a function. Helpers inside
+`__internals` are module-local functions (not exported by name). Their helper types (e.g.
+`PlaceholderDeps`, `PlaceholderResult`) are module-local too and are not exported.
+
+Imports (FR-11, ADR-0001, ADR-0004): the plugin file may import only `node:` built-ins. Since
+F-002 it imports `readFileSync` and `statSync` from `node:fs`, `homedir` from `node:os`, and
+`isAbsolute` and `join` from `node:path`.
 
 ## 2a. `__internals.parseJsonc` (F-001, FR-4, ADR-0003)
 
@@ -72,6 +79,43 @@ Access: `import { __internals } from "../../plugin/azdo-remote-config.ts"; __int
 | Anything else invalid (incl. empty / whitespace-only input) | Throws `Error`: `Invalid JSONC: malformed JSON`. The underlying `SyntaxError` is discarded (not set as `cause`). |
 | Error message rule | Every message starts with `Invalid JSONC: ` and contains only fixed text and 1-based line / column numbers (UTF-16 code units; `\n` starts a new line, `\r\n` counts as one line break). **No substring of the input ever appears in a message.** |
 | Lenient, unspecified | `[,]` and `{,}` may parse as empty containers. Callers must not rely on either outcome. |
+
+## 2b. `__internals.resolvePlaceholders` (F-002, FR-5, ADR-0004)
+
+```ts
+interface PlaceholderDeps {                              // module-local, not exported
+  env?: Readonly<Record<string, string | undefined>>;   // default: process.env, read at call time
+  homedir?: () => string;                                // default: os.homedir, called lazily
+  readFile?: (path: string) => string;                   // default: guarded reader (see table)
+}
+const MAX_PLACEHOLDER_FILE_BYTES = 1024 * 1024;          // module-local, 1 MiB, not exported
+interface PlaceholderResult { value: unknown; unresolved: string[] } // module-local
+
+function resolvePlaceholders(input: unknown, deps?: PlaceholderDeps): PlaceholderResult;
+```
+
+Access: `__internals.resolvePlaceholders(parsed, { env, homedir, readFile })`. Each omitted
+dep uses its default. Synchronous.
+
+| Aspect | Contract |
+|---|---|
+| Placeholder grammar | A match of the regex `\{(env\|file):([^{}\r\n]+)\}` (backslash before the pipe is only Markdown table escaping): `{`, then `env` or `file`, then `:`, then one or more characters that are not `{`, `}`, CR or LF, then `}`. Name/path used verbatim (no trim). Non-matching text (e.g. `{env:}`, `{foo:x}`, unclosed `{env:X`) is literal and unchanged. |
+| Multiple per string | Every placeholder in a string is resolved, left to right, in one pass. Resolved values are **not** re-scanned (an env value containing `{file:...}` stays literal). `$` sequences in values are copied literally. |
+| `{env:NAME}` | Resolved iff `NAME` is an **own** property of `env` whose value is a **non-empty** string. Otherwise unresolved (inherited members such as `constructor` never resolve). |
+| `{file:PATH}` UNC rejection | Checked first. If the first two characters of `PATH` as written are both `/` or `\` (regex `^[\\/]{2}`: `\\host\share\x`, `//host/share/x`, `\\.\pipe\x`, `\\?\C:\x`, `\/x`, `/\x`), the placeholder is unresolved and **neither `homedir` nor `readFile` is called**. Applies to the default and to injected readers. Not re-applied to the expanded `~/` target. |
+| `{file:PATH}` target | `~/rest` or `~\rest` (tilde followed by a forward or back slash) -> `join(homedir(), rest)` (`node:path` join). `isAbsolute(PATH)` -> `PATH`. Anything else (relative path, bare `~`, `~user`) -> unresolved, and `readFile` is **not called**. |
+| Default reader (only when `deps.readFile` is omitted) | `(p) => { const st = statSync(p); if (!st.isFile() \|\| st.size > MAX_PLACEHOLDER_FILE_BYTES) throw new Error("unreadable"); return readFileSync(p, "utf8"); }`. Only regular files of at most 1 048 576 bytes are read (exactly 1 MiB is allowed). Directories, FIFOs / pipes, character or block devices (e.g. `/dev/zero`, `/dev/urandom`, `/dev/stdin`), sockets, files over the cap, and symlinks to any of these -> unresolved, and they return promptly (no blocking open, no unbounded read). `statSync` follows symlinks and runs before any open. The thrown error is discarded like every reader error. |
+| Injected reader | Called as is: no stat, no file-type check, no size cap. The UNC and relative-path rules still apply before it is called. |
+| `{file:PATH}` value | `readFile(target).trim()`. Unresolved if `homedir()` or `readFile()` throws (including the default reader's guard), the reader returns a non-string, or the trimmed value is empty. |
+| Whole-string unresolved | If the string is **exactly one** placeholder and it is unresolved, the value is dropped: an object key is omitted (`!("x" in out)`), an array element is removed (`["{env:SET}","{env:MISSING}","keep"]` -> `["abc","keep"]`), and a root string gives `value: undefined`. |
+| Partial unresolved | Any other string: each unresolved placeholder becomes `""` (`pre-{env:MISSING}-post` -> `pre--post`; `{env:A}{env:B}` both missing -> `""`, kept). |
+| `unresolved` | `"env:" + NAME` / `"file:" + PATH`, using the name or path **as written** (never a value, never an expanded path). De-duplicated, in first-occurrence order (depth-first, object key order, array index order, left to right). Empty array when everything resolved. |
+| Other values | Numbers, booleans, `null` and strings without placeholders are returned unchanged. |
+| Containers | Arrays -> new array. Any other non-null object -> new ordinary object (prototype `Object.prototype`) with the input's own enumerable string keys in their original order. Every key is written with `Object.defineProperty` (enumerable, writable, configurable), so `__proto__`, `constructor` and `prototype` stay own data properties of the result. `Object.prototype` is never modified. |
+| Purity | Input never mutated. No logging, no global state. The only I/O is through `homedir` / `readFile`. |
+| Secret safety | Errors from `homedir`/`readFile` are caught without binding and discarded. They are never rethrown, never set as `cause`, and never copied into `value` or `unresolved`. File contents appear only in `value`, and only on success. |
+| Depth cap / throws | The root container is level 0. A container at level 64 or deeper (that is, more than 64 nested containers) throws `Error("Placeholder resolution: config nested too deeply")`. A cyclic input throws the same error. This is the **only** error the function may throw. 64 nested arrays resolve; 65 throw. |
+| Wiring | Not called by the `config` hook yet (F-006 wires it, logs `unresolved`, and catches everything). |
 
 ## 3. Behaviour contract
 

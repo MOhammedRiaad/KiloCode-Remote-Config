@@ -1,6 +1,11 @@
 // azdo-remote-config: Kilo plugin that applies a remote Azure DevOps config.
 // Single file, zero runtime dependencies (FR-11). See docs/architecture/ADR-0001-tech-stack.md
-// and ADR-0002-plugin-module-shape.md. T-001 stub: no I/O, no logging.
+// and ADR-0002-plugin-module-shape.md, ADR-0003, ADR-0004. The config hook is still a no-op;
+// the JSONC parser and the placeholder resolver are helpers only (not wired yet).
+
+import { readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 
 /** Kilo log levels accepted by client.app.log. */
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -35,7 +40,7 @@ export const PLUGIN_ID = "azdo-remote-config";
 
 export const SUPPORTED_KILO_RANGE = ">=7.2.0 <8.0.0";
 
-const BOM = "﻿";
+const BOM = "\uFEFF";
 
 function isLineBreak(ch: string | undefined): boolean {
   return ch === "\n" || ch === "\r";
@@ -151,8 +156,129 @@ function parseJsonc(text: string): unknown {
   }
 }
 
+// ---- Placeholder resolver (ADR-0004) ----
+
+// Module-local types: deliberately not exported.
+interface PlaceholderDeps {
+  env?: Readonly<Record<string, string | undefined>>;
+  homedir?: () => string;
+  readFile?: (path: string) => string;
+}
+
+interface PlaceholderResult {
+  value: unknown;
+  unresolved: string[];
+}
+
+const PLACEHOLDER = /\{(env|file):([^{}\r\n]+)\}/g;
+const WHOLE_PLACEHOLDER = /^\{(env|file):([^{}\r\n]+)\}$/;
+const MAX_PLACEHOLDER_DEPTH = 64;
+const MAX_PLACEHOLDER_FILE_BYTES = 1024 * 1024;
+const DROP: unique symbol = Symbol("drop");
+
+// Default reader: regular files up to the cap only. statSync runs before any open, so a FIFO or
+// device is rejected without blocking. Callers discard the error.
+function readGuardedFile(path: string): string {
+  const st = statSync(path);
+  if (!st.isFile() || st.size > MAX_PLACEHOLDER_FILE_BYTES) throw new Error("unreadable");
+  return readFileSync(path, "utf8");
+}
+
+// UNC-like: the first two characters are each a forward or back slash (includes mixed forms).
+function isUncLike(path: string): boolean {
+  const isSlash = (c: string | undefined) => c === "/" || c === "\\";
+  return isSlash(path[0]) && isSlash(path[1]);
+}
+
+// Resolves one file path to its trimmed content, or undefined. Errors are discarded on purpose:
+// they may carry file contents or paths.
+function readPlaceholderFile(path: string, deps: Required<PlaceholderDeps>): string | undefined {
+  try {
+    if (isUncLike(path)) return undefined;
+    let target: string;
+    if (path.startsWith("~/") || path.startsWith("~\\")) target = join(deps.homedir(), path.slice(2));
+    else if (isAbsolute(path)) target = path;
+    else return undefined;
+    const content = deps.readFile(target);
+    if (typeof content !== "string") return undefined;
+    const trimmed = content.trim();
+    return trimmed === "" ? undefined : trimmed;
+  } catch {
+    return undefined;
+  }
+}
+
+function lookupPlaceholder(kind: string, name: string, deps: Required<PlaceholderDeps>): string | undefined {
+  if (kind === "file") return readPlaceholderFile(name, deps);
+  if (!Object.prototype.hasOwnProperty.call(deps.env, name)) return undefined;
+  const value = deps.env[name];
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+function resolveContainer(
+  input: object,
+  depth: number,
+  walk: (node: unknown, depth: number) => unknown,
+): unknown {
+  if (depth >= MAX_PLACEHOLDER_DEPTH) throw new Error("Placeholder resolution: config nested too deeply");
+  if (Array.isArray(input)) {
+    const out: unknown[] = [];
+    for (const item of input) {
+      const resolved = walk(item, depth + 1);
+      if (resolved !== DROP) out.push(resolved);
+    }
+    return out;
+  }
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(input)) {
+    const resolved = walk((input as Record<string, unknown>)[key], depth + 1);
+    if (resolved === DROP) continue;
+    Object.defineProperty(out, key, { value: resolved, enumerable: true, writable: true, configurable: true });
+  }
+  return out;
+}
+
+// Single pass, never re-scans resolved values. Returns a new value; the input is not mutated.
+function resolvePlaceholders(input: unknown, deps: PlaceholderDeps = {}): PlaceholderResult {
+  const full: Required<PlaceholderDeps> = {
+    env: deps.env ?? process.env,
+    homedir: deps.homedir ?? homedir,
+    readFile: deps.readFile ?? readGuardedFile,
+  };
+  const unresolved: string[] = [];
+  const seen = new Set<string>();
+  const note = (kind: string, name: string): void => {
+    const entry = `${kind}:${name}`;
+    if (seen.has(entry)) return;
+    seen.add(entry);
+    unresolved.push(entry);
+  };
+  const resolveString = (text: string): unknown => {
+    const whole = WHOLE_PLACEHOLDER.exec(text);
+    if (whole) {
+      const found = lookupPlaceholder(whole[1]!, whole[2]!, full);
+      if (found !== undefined) return found;
+      note(whole[1]!, whole[2]!);
+      return DROP;
+    }
+    return text.replace(PLACEHOLDER, (_match, kind: string, name: string) => {
+      const found = lookupPlaceholder(kind, name, full);
+      if (found !== undefined) return found;
+      note(kind, name);
+      return "";
+    });
+  };
+  const walk = (node: unknown, depth: number): unknown => {
+    if (typeof node === "string") return resolveString(node);
+    if (typeof node === "object" && node !== null) return resolveContainer(node, depth, walk);
+    return node;
+  };
+  const value = walk(input, 0);
+  return { value: value === DROP ? undefined : value, unresolved };
+}
+
 /** Test/validator seam. Never has a `server` key and never holds the entry point. */
-export const __internals = { parseJsonc };
+export const __internals = { parseJsonc, resolvePlaceholders };
 
 const AzdoRemoteConfig: PluginServer = async () => {
   return { config: async () => {} };
