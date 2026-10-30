@@ -1,6 +1,7 @@
 # Contract: `azdo-remote-config` plugin interface
 
-- Version: 0.4.0 (F-003, cycle-0005: `__internals.mergeConfig`, section 2c; 0.3.1 was F-002
+- Version: 0.5.0 (F-004, cycle-0006: `__internals.resolveSettings`, section 2d, section 4 now
+  normative; 0.4.0 was F-003, cycle-0005: `__internals.mergeConfig`, section 2c; 0.3.1 was F-002
   rework 1, cycle-0004: default `{file:}` reader guard and UNC rejection; 0.3.0 was F-002,
   cycle-0004; 0.2.0 was F-001, cycle-0003; 0.1.0 was T-001, cycle-0002)
 - Owner: Architect. Implemented by: `backend/plugin/azdo-remote-config.ts`.
@@ -48,13 +49,14 @@ export type PluginServer = (input: PluginInput, options?: PluginOptions) => Prom
 | `default` | object | `{ id: "azdo-remote-config", server: PluginServer }` |
 | `PLUGIN_ID` | string const | `"azdo-remote-config"` (also the logger `service` name, FR-9) |
 | `SUPPORTED_KILO_RANGE` | string const | `">=7.2.0 <8.0.0"` |
-| `__internals` | plain object | Test/validator seam. `{ parseJsonc, resolvePlaceholders, mergeConfig }` since F-003 (sections 2a, 2b, 2c), in that key order; later F-items add further pure helpers. Never has a `server` key; never itself a function. |
+| `__internals` | plain object | Test/validator seam. `{ parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings }` since F-004 (sections 2a, 2b, 2c, 2d), in that key order; later F-items add further pure helpers. Never has a `server` key; never itself a function. |
 | types | `export type` / `export interface` | as in section 1 |
 
 No other named exports: the runtime named exports are exactly `PLUGIN_ID`, `SUPPORTED_KILO_RANGE`
 and `__internals` (plus `default`). No named export may be a function. Helpers inside
 `__internals` are module-local functions (not exported by name). Their helper types (e.g.
-`PlaceholderDeps`, `PlaceholderResult`) and constants (e.g. `MAX_MERGE_DEPTH`) are module-local too
+`PlaceholderDeps`, `PlaceholderResult`, `Settings`, `SettingsDeps`, `SettingsResult`) and constants
+(e.g. `MAX_MERGE_DEPTH`, `DEFAULT_TIMEOUT_MS`) are module-local too
 and are not exported.
 
 Imports (FR-11, ADR-0001, ADR-0004): the plugin file may import only `node:` built-ins. Since
@@ -152,6 +154,61 @@ Returns `undefined`.
 | Out of contract | Frozen / sealed / non-configurable `target` properties: `Object.defineProperty` may throw `TypeError`. F-006 catches everything. |
 | Wiring | Not called by the `config` hook yet (F-006). |
 
+## 2d. `__internals.resolveSettings` (F-004, FR-1, FR-8, settings half of FR-3, ADR-0006)
+
+```ts
+type Mode = "defaults" | "enforce";                       // module-local
+type RequiredSetting = "org" | "project" | "repo";        // module-local
+interface Settings {                                      // module-local
+  org: string | undefined; project: string | undefined; repo: string | undefined;
+  path: string; branch: string; mode: Mode;
+  pat: string | undefined;                                // own NON-enumerable property
+  timeoutMs: number;
+}
+interface SettingsDeps { env?: Readonly<Record<string, string | undefined>> } // default process.env
+interface SettingsResult { settings: Settings; missing: RequiredSetting[]; warnings: string[] }
+const DEFAULT_PATH = "/kilo.jsonc"; const DEFAULT_BRANCH = "main";            // module-local
+const DEFAULT_TIMEOUT_MS = 5000; const MAX_TIMEOUT_MS = 2147483647;          // module-local
+
+function resolveSettings(options?: unknown, deps?: SettingsDeps): SettingsResult;
+```
+
+Access: `__internals.resolveSettings(options, { env })`. Synchronous. `options` is the raw second
+element of the Kilo plugin tuple (anything).
+
+| Aspect | Contract |
+|---|---|
+| Purity | No I/O, no logging, no global state; never writes to `options`, `deps` or env. |
+| Options shape | Used iff non-null, non-array object (checked inside `try`). `undefined` / `null` -> no options, no warning. Anything else -> no options + W0. |
+| Env | `deps.env` if it is a non-null, non-array object; `process.env` (read at call time) if `deps` or `deps.env` is `undefined`; any other `deps.env` -> empty env. |
+| Reads | Only the 8 fixed option keys and 8 fixed env names. Each read: `Object.getOwnPropertyDescriptor` inside `try`; only own **data** properties count (inherited, accessor, or throwing-trap -> absent; getters never invoked). Other keys (incl. own `__proto__` / `constructor` / `prototype`) are never read or copied. |
+| Precedence | Per setting: option, then env, then default. Absent (`undefined` / `null` / not own) or empty (whitespace-only string) -> skip silently. Invalid -> skip with warning. First valid value wins. |
+| Defaults | org / project / repo / pat: `undefined`. path `/kilo.jsonc`, branch `main`, mode `defaults`, timeoutMs `5000`. |
+| Trim | Every string value is `trim()`-ed before validation; the trimmed value is returned. |
+| org, project, repo | string; valid iff non-empty, no control chars (code unit <= 0x1F or 0x7F), none of `/ \ ? # %`, not exactly `.` or `..`. Else W1 (non-string) / W2. |
+| branch | string; valid iff non-empty, no control chars, no space, none of `\ ? # %`, no `..`, no `//`, does not start or end with `/`. Else W1 / W2. |
+| path | string; prepend `/` if missing; valid iff no control chars, none of `\ ? # %`, and every segment after the leading `/` (split on `/`) is non-empty and not `.` / `..`. `teams/a/kilo.jsonc` -> `/teams/a/kilo.jsonc`; `/`, `/a/`, `/a//b`, `/a/../b`, `./x` -> W2. Else W1 / W2. |
+| mode | exactly `defaults` or `enforce` after trim (case-sensitive). Anything else (any type) -> W3. |
+| pat | string; valid iff non-empty after trim. No charset check. Non-string -> W1. |
+| timeoutMs | number: `Number.isInteger(v) && 1 <= v <= 2147483647`. string: trimmed matches `^[0-9]+$` and `Number(trimmed)` in 1..2147483647. Anything else (incl. `0`, negatives, `NaN`, `Infinity`, `2.5`, `"1e3"`, `"abc"`, booleans, objects) -> W4. |
+| `settings` | Fresh ordinary object; keys created in order org, project, repo, path, branch, mode, pat, timeoutMs. `pat` is defined with `enumerable: false, writable: false, configurable: false` (also when `undefined`), so `Object.keys(settings)` has 7 keys and `JSON.stringify(settings)` never contains the PAT. |
+| `missing` | `["org","project","repo"]` filtered to those whose final value is `undefined`, in that order. |
+| `warnings` | Only the fixed texts below. W0 first, then by setting order org..timeoutMs, option before env. At most one per setting and source. |
+| Throws | Never (no `throw` statement; all reads of untrusted input guarded). |
+| Secret safety | No input value (PAT or other) ever appears in `missing` or `warnings`. |
+| Wiring | Not called by `server` / `config` yet (F-006). F-005 adds `AZDO_PAT` / `AZURE_DEVOPS_EXT_PAT` / `az` after `KILO_AZDO_PAT` and must still URL-encode every interpolated value. |
+
+Warning texts. `<src>` is `plugin option <name>` or `environment variable <ENV> (<name>)`, where
+`<name>` is the camelCase setting name and `<ENV>` the env var from section 4:
+
+| Id | Text |
+|---|---|
+| W0 | `Ignored plugin options: expected an object.` |
+| W1 | `Ignored <src>: expected a string.` |
+| W2 | `Ignored <src>: contains characters or segments that are not allowed.` |
+| W3 | `Ignored <src>: expected "defaults" or "enforce".` |
+| W4 | `Ignored <src>: expected a whole number of milliseconds from 1 to 2147483647.` |
+
 ## 3. Behaviour contract
 
 ### `server(input, options)`
@@ -169,20 +226,18 @@ Returns `undefined`.
 - **Later (F-006):** mutates `config` in place per FR-6 through `mergeConfig` (section 2c); never
   replaces the object.
 
-## 4. Plugin options schema (FR-1) - informative, implemented by a later item
+## 4. Plugin options schema (FR-1) - normative since 0.5.0 (rules: section 2d, ADR-0006)
 
 | Option | Type | Env fallback | Default |
 |---|---|---|---|
-| `org` | string | `KILO_AZDO_ORG` | none (required for fetch) |
-| `project` | string | `KILO_AZDO_PROJECT` | none (required for fetch) |
-| `repo` | string | `KILO_AZDO_REPO` | `kilo-config` |
+| `org` | string | `KILO_AZDO_ORG` | none (required for fetch; listed in `missing`) |
+| `project` | string | `KILO_AZDO_PROJECT` | none (required; listed in `missing`) |
+| `repo` | string | `KILO_AZDO_REPO` | none (required; listed in `missing`). Supersedes the informative `kilo-config` default of 0.4.0. |
 | `path` | string | `KILO_AZDO_PATH` | `/kilo.jsonc` |
 | `branch` | string | `KILO_AZDO_BRANCH` | `main` |
 | `mode` | `"defaults" \| "enforce"` | `KILO_AZDO_MODE` | `defaults` |
-| `pat` | string (secret) | `AZDO_PAT`, `AZURE_DEVOPS_EXT_PAT` | none -> `az` Entra token |
-| `timeoutMs` | positive integer | `KILO_AZDO_TIMEOUT_MS` | `5000` |
-
-The exact validation rules are fixed by the item that implements FR-1.
+| `pat` | string (secret) | `KILO_AZDO_PAT`; then (F-005) `AZDO_PAT`, `AZURE_DEVOPS_EXT_PAT` | none -> `az` Entra token (F-005) |
+| `timeoutMs` | positive integer (1..2147483647) or digit string | `KILO_AZDO_TIMEOUT_MS` | `5000` |
 
 ## 5. Outbound calls (informative, later items)
 

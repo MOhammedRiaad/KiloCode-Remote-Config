@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.0] - 2026-10-30
+
+### Added
+- F-004: plugin settings resolution (options, env, defaults) in `__internals`, resolving each setting from plugin options first, then environment variables, then built-in defaults.
+- F-004: warnings are emitted in setting order (option before env) with a leading W0 warning, and never include secret values.
+- F-004: environment is read from an injectable `deps.env` at call time; a malformed `deps.env` is treated as empty rather than falling back to `process.env`.
+
+### Security
+- F-004: accessor properties on options are never invoked, prototype-polluting keys are never read or copied, and throwing or revoked proxies never throw.
+
+## [0.3.0] - 2026-10-30
+
+### Added
+- T-008 (F-003): in-place `mergeConfig` with `defaults` and `enforce` modes (ADR-0005, contract 0.4.0).
+
+### Security
+- T-008: `apiKey` is never overwritten or applied by the merge.
+- T-008: prototype-named keys are skipped and merge depth is capped.
+
 ## [0.2.0] - 2026-10-30
 
 ### Added

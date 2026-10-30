@@ -71,7 +71,13 @@ test("no named export is a function and __internals has no server key", () => {
   assert.equal(typeof (mod.__internals as { parseJsonc?: unknown }).parseJsonc, "function");
   assert.equal(typeof mod.__internals.resolvePlaceholders, "function");
   assert.equal(typeof mod.__internals.mergeConfig, "function");
-  assert.deepEqual(Object.keys(mod.__internals), ["parseJsonc", "resolvePlaceholders", "mergeConfig"]);
+  assert.equal(typeof mod.__internals.resolveSettings, "function");
+  assert.deepEqual(Object.keys(mod.__internals), [
+    "parseJsonc",
+    "resolvePlaceholders",
+    "mergeConfig",
+    "resolveSettings",
+  ]);
 });
 
 test("runtime named exports are exactly the documented set", () => {

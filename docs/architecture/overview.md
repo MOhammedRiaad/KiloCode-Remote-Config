@@ -1,7 +1,8 @@
 # Architecture overview - Kilo Shared Config
 
-Last updated: cycle-0005 (F-003). Stack: ADR-0001. Plugin module shape: ADR-0002.
+Last updated: cycle-0006 (F-004). Stack: ADR-0001. Plugin module shape: ADR-0002.
 JSONC parser: ADR-0003. Placeholder resolution: ADR-0004. Config merge: ADR-0005.
+Settings resolution: ADR-0006.
 Contract: `contracts/plugin-interface.md`.
 
 ## Components
@@ -9,7 +10,7 @@ Contract: `contracts/plugin-interface.md`.
 | ID | Component | Source in this repo | Deployed to | Status |
 |---|---|---|---|---|
 | C1 | Shared config repo validation (PR gate) | `backend/validator/` | Azure DevOps `kilo-config` pipeline | planned |
-| C2 | Remote config plugin (single file, FR-11) | `backend/plugin/azdo-remote-config.ts` | `~/.config/kilo/azdo/azdo-remote-config.ts` | **stub (T-001) + JSONC parser (F-001) + placeholder resolver (F-002) + merge (F-003); helpers not yet wired (F-006)** |
+| C2 | Remote config plugin (single file, FR-11) | `backend/plugin/azdo-remote-config.ts` | `~/.config/kilo/azdo/azdo-remote-config.ts` | **stub (T-001) + JSONC parser (F-001) + placeholder resolver (F-002) + merge (F-003) + settings resolution (F-004); helpers not yet wired (F-006)** |
 | C3 | Personal config template | `backend/templates/` | `~/.config/kilo/kilo.jsonc` | planned |
 | C4 | Bifrost gateway | external, not in repo | - | external |
 | C5 | Bootstrap installer | `backend/installer/` (`install.ps1`, `install.sh`) | C1 repo | planned |
@@ -24,7 +25,10 @@ Kilo start
   -> reads ~/.config/kilo/kilo.jsonc (C3), finds plugin tuple ["./azdo/azdo-remote-config.ts", {opts}]
   -> loads C2 (default export {id, server}) and calls server(input, opts) -> hooks
   -> calls hooks.config(resolvedConfig)
-       C2: settings (opts > KILO_AZDO_* env > defaults)
+       C2: settings (ADR-0006: opts > KILO_AZDO_* env > defaults; own data props only; trimmed;
+           URL-unsafe org/project/repo/branch/path values and ./.. path segments rejected;
+           returns {settings, missing, warnings}; pat non-enumerable; never throws)
+           -> missing org/project/repo: skip fetch, log names, use cache or local only
            -> fetch kilo.jsonc via AzDO Git Items API (PAT Basic | az Entra Bearer, timeout)
            -> parse JSONC -> resolve {env:}/{file:} (ADR-0004; ~/ or absolute paths only)
            -> log unresolved names (never values) -> write cache
@@ -43,11 +47,12 @@ Every step of C2 is wrapped so no failure can stop Kilo (FR-10).
 0. `node:` imports only (since F-002: `node:fs`, `node:os`, `node:path`)
 1. Types (structural Kilo types, contract section 1)
 2. Constants (`PLUGIN_ID`, `SUPPORTED_KILO_RANGE`, defaults)
-3. Pure helpers: settings, JSONC parser, placeholder resolver (sync; env / homedir / readFile
+3. Pure helpers: JSONC parser, placeholder resolver (sync; env / homedir / readFile
    injectable, defaults process.env / os.homedir / a guarded reader: `fs.statSync` then
    `fs.readFileSync`, regular files of at most 1 MiB only; UNC-style `{file:}` paths are
    rejected before any read), merge (`mergeConfig`, ADR-0005: two phases, sanitize then merge,
-   pure apart from mutating its `target` argument)
+   pure apart from mutating its `target` argument), settings (`resolveSettings`, ADR-0006:
+   options > `KILO_AZDO_*` env > defaults; env injectable, default `process.env` at call time)
 4. I/O helpers with injectable seams: fetch, `az` runner, cache fs, clock
 5. `AzdoRemoteConfig` server function and `config` hook
 6. Exports: `__internals`, constants, `default { id, server }`
@@ -58,7 +63,7 @@ Every step of C2 is wrapped so no failure can stop Kilo (FR-10).
 backend/                     # the only package (ADR-0001 section 7)
   plugin/azdo-remote-config.ts
   tools/check-fr11.mjs
-  test/plugin/*.test.ts       # jsonc, placeholders, merge, smoke
+  test/plugin/*.test.ts       # jsonc, placeholders, merge, settings, smoke
   validator/ templates/ installer/ provisioning/   # created by later items
 docs/architecture/           # this folder: overview, ADRs, contracts
 factory/                     # backlog, state, run reports

@@ -2,7 +2,7 @@
 
 ## Current status
 
-The Kilo azdo-remote-config plugin is at an early stage (T-001 skeleton, F-001 JSONC parser, F-002 placeholders, F-003 merge helper).
+The Kilo azdo-remote-config plugin is at an early stage (T-001 skeleton, F-001 JSONC parser, F-002 placeholders, F-003 merge helper, F-004 settings resolution).
 There is nothing to install or configure for end users yet.
 
 What exists today:
@@ -19,6 +19,10 @@ What exists today:
 - An internal merge helper (F-003). It is not used by the plugin yet, so it has no user-visible
   effect today. The rules below describe how the shared config will be merged into your Kilo config
   once it is wired in.
+
+- An internal settings resolver (F-004). It is not used by the plugin yet, so it has no
+  user-visible effect today: setting any `KILO_AZDO_*` variable or plugin option changes nothing at
+  runtime. The section below describes how settings will be resolved once it is wired in.
 
 Not yet available (planned, see `factory/VISION.md`): using the parser, resolver and merge helper on a fetched file, fetching the shared config from Azure DevOps,
 merging it into Kilo, the local cache, the bootstrap installers and key provisioning.
@@ -82,5 +86,40 @@ selects enforce mode; any other value (including `ENFORCE`, an empty value or no
 Security: the merge ignores a shared `apiKey`, but the shared file can still set `baseURL` or
 `headers` for a provider that uses your local `apiKey`, which could send your key to another host.
 Keep the shared repository PR-gated and reviewed.
+
+## Plugin settings (not active yet)
+
+The resolver exists but the plugin does not call it yet. Each setting can come from a plugin option
+or from an environment variable. Precedence per setting: plugin option, then environment variable,
+then default.
+
+| Setting | Env variable | Default |
+|---------|--------------|---------|
+| `org` | `KILO_AZDO_ORG` | none (required) |
+| `project` | `KILO_AZDO_PROJECT` | none (required) |
+| `repo` | `KILO_AZDO_REPO` | none (required) |
+| `path` | `KILO_AZDO_PATH` | `/kilo.jsonc` |
+| `branch` | `KILO_AZDO_BRANCH` | `main` |
+| `mode` | `KILO_AZDO_MODE` | `defaults` |
+| `pat` | `KILO_AZDO_PAT` | none |
+| `timeoutMs` | `KILO_AZDO_TIMEOUT_MS` | `5000` |
+
+- `org`, `project` and `repo` have no defaults (`repo` no longer defaults to `kilo-config`). If one
+  is still unset after resolution it is reported as missing.
+- Values are trimmed. An unset or whitespace-only value is skipped silently.
+- `org`, `project`, `repo`: no control characters, none of `/ \ ? # %`, and not `.` or `..`.
+- `branch`: no control characters, no spaces, none of `\ ? # %`, no `..` or `//`, and it must not
+  start or end with `/`.
+- `path`: a leading `/` is added if missing (`teams/a/kilo.jsonc` becomes `/teams/a/kilo.jsonc`).
+  No control characters, none of `\ ? # %`, and no empty, `.` or `..` segments.
+- `mode`: exactly `defaults` or `enforce`, lowercase.
+- `timeoutMs`: a whole number from 1 to 2147483647 (milliseconds). A number or a string of digits.
+- `pat`: any non-empty string. Today `KILO_AZDO_PAT` is the only source; the `AZDO_PAT`,
+  `AZURE_DEVOPS_EXT_PAT` and `az` fallbacks arrive with F-005.
+
+An invalid value is ignored with a warning and the next source is tried (option, then environment
+variable, then default). Warnings contain fixed text and the setting name only, never the value, so a
+PAT is never exposed through them. Example: an invalid `mode` option with `KILO_AZDO_MODE=enforce`
+set resolves to `enforce`, plus a warning about the option.
 
 This page will describe setup and settings once the remaining features ship.

@@ -13,9 +13,9 @@ export default { id: "azdo-remote-config", server }
 
 - `config` hook: receives Kilo's resolved config; in the current stub it does nothing.
 - Named exports: `PLUGIN_ID` (`"azdo-remote-config"`), `SUPPORTED_KILO_RANGE` (`">=7.2.0 <8.0.0"`)
-  and `__internals` (test seam, currently `{ parseJsonc, resolvePlaceholders }`).
+  and `__internals` (test seam, now `{ parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings }`).
 - The plugin settings (`org`, `project`, `repo`, `path`, `branch`, `mode`, `pat`, `timeoutMs`) are
-  not read yet.
+  not read by the hook yet; see `resolveSettings` below.
 
 ## `parseJsonc` (internal)
 
@@ -148,4 +148,70 @@ __internals.mergeConfig(
 Security: the shared `apiKey` is never applied, but the shared file can still set `baseURL` or
 `headers` next to a local `apiKey`. The shared repository must be PR-gated.
 
-Authoritative contract: `docs/architecture/contracts/plugin-interface.md` (v0.4.0), ADR-0002, ADR-0003 (`docs/architecture/ADR-0003-jsonc-parser.md`), ADR-0004 (`docs/architecture/ADR-0004-placeholder-resolution.md`) and ADR-0005 (`docs/architecture/ADR-0005-config-merge.md`).
+## `resolveSettings` (internal)
+
+Reachable only as `__internals.resolveSettings`; it is not a named export and the `config` hook does
+not call it yet. Synchronous, never throws, no I/O, does not mutate `options`, `deps` or env.
+
+```ts
+resolveSettings(options?: unknown, deps?: { env?: Readonly<Record<string, string | undefined>> }): {
+  settings: {
+    org: string | undefined; project: string | undefined; repo: string | undefined;
+    path: string; branch: string; mode: "defaults" | "enforce";
+    pat: string | undefined;   // non-enumerable
+    timeoutMs: number;
+  };
+  missing: Array<"org" | "project" | "repo">;
+  warnings: string[];
+}
+```
+
+`options` is the raw plugin options object (anything is accepted). `deps.env` defaults to
+`process.env`, read at call time. If `options` is not an object (or is an array), it is ignored with
+warning W0. Only own data properties are read; getters are never invoked.
+
+Per setting the order is option, then env, then default. Absent, `null` or whitespace-only values are
+skipped silently. Every string is trimmed. An invalid value is skipped with a warning and the next
+source is tried.
+
+| Setting | Env variable | Default | Valid when |
+|---------|--------------|---------|------------|
+| `org`, `project`, `repo` | `KILO_AZDO_ORG`, `KILO_AZDO_PROJECT`, `KILO_AZDO_REPO` | `undefined` | string; no control chars, none of `/ \ ? # %`, not `.` or `..` |
+| `path` | `KILO_AZDO_PATH` | `/kilo.jsonc` | string; leading `/` added if missing; no control chars, none of `\ ? # %`; no empty, `.` or `..` segments |
+| `branch` | `KILO_AZDO_BRANCH` | `main` | string; no control chars, no space, none of `\ ? # %`, no `..`, no `//`, no leading or trailing `/` |
+| `mode` | `KILO_AZDO_MODE` | `defaults` | exactly `defaults` or `enforce` (case-sensitive) |
+| `pat` | `KILO_AZDO_PAT` | `undefined` | non-empty string |
+| `timeoutMs` | `KILO_AZDO_TIMEOUT_MS` | `5000` | integer 1..2147483647, as a number or a string of digits only |
+
+Results:
+- `missing` lists `org`, `project`, `repo` (in that order) whose final value is `undefined`. They have
+  no defaults.
+- `settings.pat` is an own non-enumerable, read-only property (present even when `undefined`), so
+  `Object.keys(settings)` has 7 keys and `JSON.stringify(settings)` never contains the PAT.
+  `KILO_AZDO_PAT` is the only PAT source for now; `AZDO_PAT`, `AZURE_DEVOPS_EXT_PAT` and `az`
+  fallbacks arrive with F-005.
+- `warnings` holds only the fixed texts below, never an input value. Order: W0 first, then by
+  setting (`org` .. `timeoutMs`), option before env. `<src>` is `plugin option <name>` or
+  `environment variable <ENV> (<name>)`.
+
+| Id | Text |
+|----|------|
+| W0 | `Ignored plugin options: expected an object.` |
+| W1 | `Ignored <src>: expected a string.` |
+| W2 | `Ignored <src>: contains characters or segments that are not allowed.` |
+| W3 | `Ignored <src>: expected "defaults" or "enforce".` |
+| W4 | `Ignored <src>: expected a whole number of milliseconds from 1 to 2147483647.` |
+
+Example:
+```ts
+const { settings, missing, warnings } = __internals.resolveSettings(
+  { org: "acme", project: "p", mode: "Enforce", path: "teams/a/kilo.jsonc" },
+  { env: { KILO_AZDO_REPO: "cfg", KILO_AZDO_MODE: "enforce", KILO_AZDO_TIMEOUT_MS: "8000" } },
+);
+// settings: { org: "acme", project: "p", repo: "cfg", path: "/teams/a/kilo.jsonc",
+//             branch: "main", mode: "enforce", timeoutMs: 8000 }   (pat hidden, undefined)
+// missing:  []
+// warnings: ['Ignored plugin option mode: expected "defaults" or "enforce".']
+```
+
+Authoritative contract: `docs/architecture/contracts/plugin-interface.md` (v0.5.0), ADR-0006 (`docs/architecture/ADR-0006-settings-resolution.md`), ADR-0002, ADR-0003 (`docs/architecture/ADR-0003-jsonc-parser.md`), ADR-0004 (`docs/architecture/ADR-0004-placeholder-resolution.md`) and ADR-0005 (`docs/architecture/ADR-0005-config-merge.md`).

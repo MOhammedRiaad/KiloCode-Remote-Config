@@ -42,9 +42,9 @@ The full vision is in [`factory/VISION.md`](factory/VISION.md); the stack is rec
 
 ### Status
 The project skeleton (T-001), an internal JSONC parser (F-001), an internal placeholder resolver
-(F-002) and an internal config merge helper (F-003) are shipped. The plugin is still a no-op at runtime: it loads, exposes a `config` hook that
+(F-002) and an internal config merge helper (F-003) and an internal settings resolver (F-004) are shipped. The plugin is still a no-op at runtime: it loads, exposes a `config` hook that
 changes nothing, and does no I/O. The parser, resolver and merge helper exist (as `__internals.parseJsonc`,
-`__internals.resolvePlaceholders` and `__internals.mergeConfig`) but are not yet used by the hook. Fetching, auth, merging,
+`__internals.resolvePlaceholders`, `__internals.mergeConfig` and `__internals.resolveSettings`) but are not yet used by the hook. Fetching, auth, merging,
 caching, the validator, installers and key provisioning are planned and not yet built.
 
 ### Features shipped so far
@@ -52,6 +52,7 @@ caching, the validator, installers and key provisioning are planned and not yet 
 - `parseJsonc`: zero-dependency JSONC parser (comments, trailing commas) with input-free error messages. Internal only, reachable via `__internals`; not yet wired into the `config` hook.
 - `resolvePlaceholders`: resolves `{env:NAME}` and `{file:path}` placeholders in a parsed config. Internal only, reachable via `__internals`; not yet wired into the `config` hook. See [API](docs/api.md).
 - `mergeConfig`: merges a shared config into a Kilo config object in place, in `defaults` or `enforce` mode, never overwriting a local `apiKey` and never applying a shared one. Internal only, reachable via `__internals`; not yet wired into the `config` hook. See [API](docs/api.md).
+- `resolveSettings`: resolves the 8 plugin settings (`org`, `project`, `repo`, `path`, `branch`, `mode`, `pat`, `timeoutMs`) from plugin options, then `KILO_AZDO_*` environment variables, then defaults, and reports missing required settings and warnings. Internal only, reachable via `__internals`; not yet wired into the `config` hook. See [API](docs/api.md).
 - Lint that enforces the FR-11 constraints (single file, zero npm runtime dependencies).
 - Strict TypeScript type-check and a `node:test` test suite.
 - One quality gate, `scripts/ci.sh`, used locally and in GitHub Actions.

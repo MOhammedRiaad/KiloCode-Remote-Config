@@ -128,7 +128,7 @@
       "title": "Plugin: settings resolution (options, env, defaults)",
       "type": "feature",
       "priority": 2,
-      "status": "todo",
+      "status": "done",
       "scope": {
         "backend": true,
         "frontend": false
@@ -136,16 +136,19 @@
       "depends_on": [
         "T-001"
       ],
-      "description": "FR-1 / FR-8. Resolve org, project, repo, path, branch, mode, pat, timeoutMs.",
+      "description": "FR-1 / FR-8 (and the settings half of FR-3). Pure helper exposed as `__internals.resolveSettings(options, deps?)` (ADR-0002 seam) inside the single plugin file backend/plugin/azdo-remote-config.ts. Resolves org, project, repo, path, branch, mode, pat, timeoutMs with precedence: plugin option (non-empty string / finite number) > KILO_AZDO_* env var (KILO_AZDO_ORG, KILO_AZDO_PROJECT, KILO_AZDO_REPO, KILO_AZDO_PATH, KILO_AZDO_BRANCH, KILO_AZDO_MODE, KILO_AZDO_PAT, KILO_AZDO_TIMEOUT_MS) > built-in default (path `/kilo.jsonc`, branch `main`, mode `defaults`, timeoutMs 5000; org/project/repo/pat have no default). Returns `{ settings, missing, warnings }` where `missing` lists required setting names (org, project, repo) that are unset and `warnings` are fixed messages naming settings only, never values. Env is injectable (default process.env, own properties only). The AZDO_PAT / AZURE_DEVOPS_EXT_PAT fallback and the az token belong to F-005; logging through Kilo's logger is wired in F-006. Not yet wired into the server/config hook. Zero runtime deps (FR-11).",
       "acceptance_criteria": [
-        "Given plugin options set `org`, When settings resolve, Then options win over KILO_AZDO_ORG.",
-        "Given no option but KILO_AZDO_BRANCH=dev, When settings resolve, Then branch equals `dev`.",
-        "Given neither options nor env, When settings resolve, Then built-in defaults apply (path `/kilo.jsonc`, branch `main`, mode `defaults`, timeoutMs 5000).",
-        "Given an invalid mode value, When settings resolve, Then mode falls back to `defaults` and a warning is logged.",
-        "Given a non-numeric or non-positive timeoutMs, When settings resolve, Then 5000 is used."
+        "Given options `{org:\"opt\"}` and an injected env with KILO_AZDO_ORG=env, When `__internals.resolveSettings` runs, Then settings.org equals `opt`; and Given no `branch` option and KILO_AZDO_BRANCH=dev, Then settings.branch equals `dev` (option > env precedence verified for each of org, project, repo, path, branch, mode, pat, timeoutMs).",
+        "Given no options (undefined) and an empty env, When settings resolve, Then path is `/kilo.jsonc`, branch is `main`, mode is `defaults`, timeoutMs is 5000, org/project/repo/pat are undefined, and `missing` deep-equals [\"org\",\"project\",\"repo\"].",
+        "Given mode `enforce` from options or from KILO_AZDO_MODE, When settings resolve, Then mode is `enforce`; and Given an invalid mode (e.g. `force`, `ENFORCE`, a number) from options or env, When settings resolve, Then mode is `defaults` and `warnings` contains an entry naming `mode`.",
+        "Given timeoutMs 3000 as an option number, or KILO_AZDO_TIMEOUT_MS=`2500` in env, When settings resolve, Then timeoutMs is 3000 or 2500 respectively; and Given a non-numeric, zero, negative, NaN, Infinity or non-integer value (option or env), When settings resolve, Then timeoutMs is 5000 and `warnings` contains an entry naming `timeoutMs`.",
+        "Given options that are null, an array, a string or a number, or option values of the wrong type (number for org, object for branch) or empty/whitespace-only strings, When settings resolve, Then no error is thrown and each such value is ignored so the env value or default applies; string values are trimmed, and a path without a leading `/` (e.g. `teams/a/kilo.jsonc`) is normalised to `/teams/a/kilo.jsonc`.",
+        "Given a `pat` option and KILO_AZDO_PAT both set, When settings resolve, Then settings.pat equals the option value; and Given any input containing a pat value (valid or wrongly typed), When `missing`, `warnings` and any thrown error are inspected, Then none of them contains the pat value.",
+        "Given inputs, When settings resolve, Then the options object and env are not mutated, an env created via Object.create({KILO_AZDO_ORG:\"inh\"}) does not supply org (own properties only), and own keys `__proto__`/`constructor`/`prototype` in options do not pollute Object.prototype or the returned settings.",
+        "Given the plugin package after the change, When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0, backend/package.json has no runtime `dependencies`, and the only new export surface is the `resolveSettings` key on `__internals`."
       ],
       "source": "vision",
-      "cycle_done": null
+      "cycle_done": 6
     },
     {
       "id": "F-005",
@@ -168,7 +171,9 @@
         "Given no PAT anywhere, When fetching, Then the faked `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` token is used as `Bearer`.",
         "Given a server that does not respond within timeoutMs, When fetching, Then the fetch is aborted and a timeout error is returned.",
         "Given a non-2xx response, When fetching, Then an error including the HTTP status (but no token) is returned.",
-        "Given a remote config response larger than a fixed cap (e.g. 1 MiB), When fetched, Then it is rejected before parseJsonc is called (parseJsonc memory is ~50x input size)."
+        "Given a remote config response larger than a fixed cap (e.g. 1 MiB), When fetched, Then it is rejected before parseJsonc is called (parseJsonc memory is ~50x input size).",
+        "Given a setting value containing a lone surrogate (e.g. U+D800) that passed resolveSettings, When F-005 builds the Azure DevOps URL, Then it neither throws a URIError nor sends a request; the setting is treated as invalid (guard via isWellFormed with a contract amendment, or catch URIError). All values are URL-encoded.",
+        "Given PAT sources, When resolved, Then precedence is plugin option, KILO_AZDO_PAT, AZDO_PAT, AZURE_DEVOPS_EXT_PAT, then az (contract 0.5.0: KILO_AZDO_PAT already handled by resolveSettings)."
       ],
       "source": "vision",
       "cycle_done": null
@@ -199,7 +204,8 @@
         "Given `{env:MISSING}` in the shared file, When the hook runs, Then the log names `env:MISSING` and contains no value (AC-8).",
         "Given a successful fetch on POSIX, When the cache file is written, Then its permissions are 0600 and the cache directory is created if missing (security follow-up, cycle 0002).",
         "Given a Windows host where process.env lookups are case-insensitive, When {env:NAME} placeholders are resolved through the hook, Then behaviour is documented/tested (injected envs are case-sensitive; process.env is not).",
-        "Given a frozen/sealed Kilo config making mergeConfig throw a TypeError, When the hook runs, Then the error is caught and a fixed message is logged (never err.message), and Kilo continues (FR-10)."
+        "Given a frozen/sealed Kilo config making mergeConfig throw a TypeError, When the hook runs, Then the error is caught and a fixed message is logged (never err.message), and Kilo continues (FR-10).",
+        "Given resolved settings with a PAT, When logging, Then settings are never logged with %o, showHidden or util.inspect(showHidden) (the non-enumerable pat would show); only setting names and fixed warnings are logged."
       ],
       "source": "vision",
       "cycle_done": null
@@ -581,6 +587,46 @@
       "acceptance_criteria": [
         "Given a local config reusing the same object in many places (30 levels, 2 refs each), When mergeConfig runs in enforce mode with a conflict, Then it completes quickly (WeakSet visited tracking).",
         "Given a sparse array in shared input, When sanitized, Then holes become null as the ADR states."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-008",
+      "title": "CHANGELOG missing v0.3.0 (F-003) entry",
+      "type": "chore",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": false,
+        "frontend": false
+      },
+      "depends_on": [],
+      "description": "Cycle 0006 backfilled CHANGELOG [0.3.0]. Remaining: make release prepare (scripts/ci.sh or a check script) fail when VERSION has no matching CHANGELOG section, so this cannot recur (0.1.0 and 0.3.0 were both missed).",
+      "acceptance_criteria": [
+        "Given VERSION is X.Y.Z and CHANGELOG.md has no [X.Y.Z] section, When bash scripts/ci.sh runs, Then it exits non-zero with a clear message.",
+        "Given matching sections exist, When ci.sh runs, Then the check passes."
+      ],
+      "source": "release",
+      "cycle_done": null
+    },
+    {
+      "id": "T-009",
+      "title": "resolveSettings optional hardening",
+      "type": "tech-debt",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-004"
+      ],
+      "description": "Optional security info items from cycle 0006: extend hasControlChar to C1 controls and bidi overrides; cap string setting values at about 1024 characters with W2; reject lone surrogates in validators (needs a contract amendment) if not handled in F-005.",
+      "acceptance_criteria": [
+        "Given an org/project/repo/branch/path value with C1 controls or bidi overrides, When resolved, Then it is ignored with the fixed W2 warning.",
+        "Given a value longer than the cap, When resolved, Then it is ignored with W2."
       ],
       "source": "security",
       "cycle_done": null

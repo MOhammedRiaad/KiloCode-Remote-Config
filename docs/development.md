@@ -28,7 +28,7 @@ metadata). It is also what GitHub Actions runs (`.github/workflows/ci.yml`).
 - Relative imports in non-plugin sources use the `.ts` extension.
 
 ## Tests
-Files: `backend/test/**/*.test.ts`. Parser tests live in `backend/test/plugin/jsonc.test.ts` and reach `parseJsonc` through `__internals`. Placeholder tests live in `backend/test/plugin/placeholders.test.ts` and inject `env`, `homedir` and `readFile` fakes; only the default-reader cases touch the real filesystem (temp files). Merge tests live in `backend/test/plugin/merge.test.ts` and call `__internals.mergeConfig` with plain objects. Tests must not touch the network or real Azure DevOps, `az`,
+Files: `backend/test/**/*.test.ts`. Parser tests live in `backend/test/plugin/jsonc.test.ts` and reach `parseJsonc` through `__internals`. Placeholder tests live in `backend/test/plugin/placeholders.test.ts` and inject `env`, `homedir` and `readFile` fakes; only the default-reader cases touch the real filesystem (temp files). Merge tests live in `backend/test/plugin/merge.test.ts` and call `__internals.mergeConfig` with plain objects. Settings tests live in `backend/test/plugin/settings.test.ts` and inject `env` through `deps`; they never read the real environment. Tests must not touch the network or real Azure DevOps, `az`,
 Bifrost or Kilo; use fakes.
 
 The plugin now imports `node:fs`, `node:os` and `node:path` (allowed by FR-11; still `node:` only).

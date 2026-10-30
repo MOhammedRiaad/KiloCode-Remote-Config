@@ -1,7 +1,8 @@
 // azdo-remote-config: Kilo plugin that applies a remote Azure DevOps config.
 // Single file, zero runtime dependencies (FR-11). See docs/architecture/ADR-0001-tech-stack.md
-// and ADR-0002-plugin-module-shape.md, ADR-0003, ADR-0004, ADR-0005. The config hook is still a
-// no-op; the JSONC parser, the placeholder resolver and the config merge are helpers only (not wired yet).
+// and ADR-0002-plugin-module-shape.md, ADR-0003, ADR-0004, ADR-0005, ADR-0006. The config hook is
+// still a no-op; the JSONC parser, the placeholder resolver, the config merge and the settings
+// resolver (options, KILO_AZDO_* env, defaults) are helpers only (not wired yet).
 
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -369,8 +370,210 @@ function mergeConfig(target: unknown, shared: unknown, mode?: unknown): void {
   mergeInto(target, sanitizeShared(shared), mode === "enforce");
 }
 
+// ---- Settings resolution (ADR-0006) ----
+
+// Module-local types: deliberately not exported.
+type Mode = "defaults" | "enforce";
+type RequiredSetting = "org" | "project" | "repo";
+
+interface Settings {
+  org: string | undefined;
+  project: string | undefined;
+  repo: string | undefined;
+  path: string;
+  branch: string;
+  mode: Mode;
+  pat: string | undefined; // own non-enumerable property
+  timeoutMs: number;
+}
+
+interface SettingsDeps {
+  env?: Readonly<Record<string, string | undefined>>;
+}
+
+interface SettingsResult {
+  settings: Settings;
+  missing: RequiredSetting[];
+  warnings: string[];
+}
+
+// undefined: absent or empty (skip silently); { value }: valid; { warn }: invalid (fixed text only).
+type Check = undefined | { value: unknown } | { warn: string };
+
+interface SettingSpec {
+  name: string;
+  env: string;
+  check: (raw: unknown) => Check;
+}
+
+const DEFAULT_PATH = "/kilo.jsonc";
+const DEFAULT_BRANCH = "main";
+const DEFAULT_MODE: Mode = "defaults";
+const DEFAULT_TIMEOUT_MS = 5000;
+const MAX_TIMEOUT_MS = 2147483647;
+
+const WARN_NOT_STRING = "expected a string.";
+const WARN_NOT_ALLOWED = "contains characters or segments that are not allowed.";
+const WARN_MODE = 'expected "defaults" or "enforce".';
+const WARN_TIMEOUT = "expected a whole number of milliseconds from 1 to 2147483647.";
+const WARN_OPTIONS = "Ignored plugin options: expected an object.";
+
+// Own data property only; getters are never invoked and any throw counts as absent.
+function readOwn(source: unknown, key: string): unknown {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(source, key);
+    return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Non-null, non-array object; a revoked proxy counts as not an object.
+function isRecordLike(value: unknown): boolean {
+  try {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+function hasControlChar(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function hasAnyChar(text: string, chars: string): boolean {
+  for (const ch of chars) if (text.includes(ch)) return true;
+  return false;
+}
+
+function isAbsentValue(raw: unknown): boolean {
+  return raw === undefined || raw === null;
+}
+
+// Shared shape for string settings: absent/empty skip, non-string and rule failures warn.
+function checkString(raw: unknown, accept: (trimmed: string) => unknown): Check {
+  if (isAbsentValue(raw)) return undefined;
+  if (typeof raw !== "string") return { warn: WARN_NOT_STRING };
+  const trimmed = raw.trim();
+  if (trimmed === "") return undefined;
+  const value = accept(trimmed);
+  return value === undefined ? { warn: WARN_NOT_ALLOWED } : { value };
+}
+
+function acceptName(trimmed: string): string | undefined {
+  if (hasControlChar(trimmed) || hasAnyChar(trimmed, "/\\?#%")) return undefined;
+  return trimmed === "." || trimmed === ".." ? undefined : trimmed;
+}
+
+function acceptBranch(trimmed: string): string | undefined {
+  if (hasControlChar(trimmed) || hasAnyChar(trimmed, " \\?#%")) return undefined;
+  if (trimmed.includes("..") || trimmed.includes("//")) return undefined;
+  return trimmed.startsWith("/") || trimmed.endsWith("/") ? undefined : trimmed;
+}
+
+function acceptPath(trimmed: string): string | undefined {
+  if (hasControlChar(trimmed) || hasAnyChar(trimmed, "\\?#%")) return undefined;
+  const normalised = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  const segments = normalised.slice(1).split("/");
+  return segments.every((s) => s !== "" && s !== "." && s !== "..") ? normalised : undefined;
+}
+
+function checkMode(raw: unknown): Check {
+  if (isAbsentValue(raw)) return undefined;
+  if (typeof raw === "string" && raw.trim() === "") return undefined;
+  const trimmed = typeof raw === "string" ? raw.trim() : undefined;
+  return trimmed === "defaults" || trimmed === "enforce" ? { value: trimmed } : { warn: WARN_MODE };
+}
+
+function checkPat(raw: unknown): Check {
+  return checkString(raw, (trimmed) => trimmed);
+}
+
+function isDigitString(text: string): boolean {
+  if (text === "") return false;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x30 || code > 0x39) return false;
+  }
+  return true;
+}
+
+function inTimeoutRange(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= MAX_TIMEOUT_MS;
+}
+
+function checkTimeout(raw: unknown): Check {
+  if (isAbsentValue(raw)) return undefined;
+  if (typeof raw === "string" && raw.trim() === "") return undefined;
+  let candidate = Number.NaN;
+  if (typeof raw === "number") candidate = raw;
+  else if (typeof raw === "string" && isDigitString(raw.trim())) candidate = Number(raw.trim());
+  return inTimeoutRange(candidate) ? { value: candidate } : { warn: WARN_TIMEOUT };
+}
+
+const SETTING_SPECS = {
+  org: { name: "org", env: "KILO_AZDO_ORG", check: (raw) => checkString(raw, acceptName) },
+  project: { name: "project", env: "KILO_AZDO_PROJECT", check: (raw) => checkString(raw, acceptName) },
+  repo: { name: "repo", env: "KILO_AZDO_REPO", check: (raw) => checkString(raw, acceptName) },
+  path: { name: "path", env: "KILO_AZDO_PATH", check: (raw) => checkString(raw, acceptPath) },
+  branch: { name: "branch", env: "KILO_AZDO_BRANCH", check: (raw) => checkString(raw, acceptBranch) },
+  mode: { name: "mode", env: "KILO_AZDO_MODE", check: checkMode },
+  pat: { name: "pat", env: "KILO_AZDO_PAT", check: checkPat },
+  timeoutMs: { name: "timeoutMs", env: "KILO_AZDO_TIMEOUT_MS", check: checkTimeout },
+} satisfies Record<string, SettingSpec>;
+
+// Option first, then env; an invalid source warns (fixed text) and falls through. undefined: use default.
+function pickSetting(spec: SettingSpec, options: unknown, env: unknown, warnings: string[]): unknown {
+  const sources: Array<[unknown, string, string]> = [
+    [options, spec.name, `plugin option ${spec.name}`],
+    [env, spec.env, `environment variable ${spec.env} (${spec.name})`],
+  ];
+  for (const [source, key, label] of sources) {
+    const result = spec.check(readOwn(source, key));
+    if (result === undefined) continue;
+    if ("warn" in result) warnings.push(`Ignored ${label}: ${result.warn}`);
+    else return result.value;
+  }
+  return undefined;
+}
+
+function selectEnv(deps: unknown): unknown {
+  const injected = readOwn(deps, "env");
+  if (injected === undefined) return process.env;
+  return isRecordLike(injected) ? injected : {};
+}
+
+// Resolves settings: option > KILO_AZDO_* env > default. Never throws, never mutates its inputs.
+// Warnings and `missing` hold fixed texts only; the PAT is reachable solely through settings.pat.
+function resolveSettings(options?: unknown, deps?: SettingsDeps): SettingsResult {
+  const warnings: string[] = [];
+  const optionsObject = isRecordLike(options) ? options : undefined;
+  if (optionsObject === undefined && !isAbsentValue(options)) warnings.push(WARN_OPTIONS);
+  const env = selectEnv(deps);
+  const pick = (spec: SettingSpec): unknown => pickSetting(spec, optionsObject, env, warnings);
+  const org = pick(SETTING_SPECS.org) as string | undefined;
+  const project = pick(SETTING_SPECS.project) as string | undefined;
+  const repo = pick(SETTING_SPECS.repo) as string | undefined;
+  const path = (pick(SETTING_SPECS.path) as string | undefined) ?? DEFAULT_PATH;
+  const branch = (pick(SETTING_SPECS.branch) as string | undefined) ?? DEFAULT_BRANCH;
+  const mode = (pick(SETTING_SPECS.mode) as Mode | undefined) ?? DEFAULT_MODE;
+  const pat = pick(SETTING_SPECS.pat) as string | undefined;
+  const timeoutMs = (pick(SETTING_SPECS.timeoutMs) as number | undefined) ?? DEFAULT_TIMEOUT_MS;
+  const settings = { org, project, repo, path, branch, mode, timeoutMs } as Settings;
+  Object.defineProperty(settings, "pat", { value: pat, enumerable: false, writable: false, configurable: false });
+  const missing: RequiredSetting[] = [];
+  if (org === undefined) missing.push("org");
+  if (project === undefined) missing.push("project");
+  if (repo === undefined) missing.push("repo");
+  return { settings, missing, warnings };
+}
+
 /** Test/validator seam. Never has a `server` key and never holds the entry point. */
-export const __internals = { parseJsonc, resolvePlaceholders, mergeConfig };
+export const __internals = { parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings };
 
 const AzdoRemoteConfig: PluginServer = async () => {
   return { config: async () => {} };
