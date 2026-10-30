@@ -31,32 +31,39 @@ dispatches each agent, parses its `FACTORY_RESULT` block, commits between phases
 findings back to the owning engineer, and updates `factory/state.json`.
 Every agent writes an audit report to `factory/runs/cycle-NNNN/`.
 
-## The product: Zühlke Car Finder
+## The product: Kilo azdo-remote-config
 
-The factory builds the product under `backend/` (Node 22, Express, TypeScript) and `frontend/`
-(React, Vite, TypeScript). See [`docs/architecture/ADR-0001-tech-stack.md`](docs/architecture/ADR-0001-tech-stack.md).
+Kilo (CLI and VS Code extension) has no built-in way to load configuration from a remote source.
+This product is a Kilo plugin, `azdo-remote-config`, that loads one shared, PR-reviewed
+`kilo.jsonc` from Azure DevOps at startup and merges it into Kilo's config, so every engineer runs
+the same models, agents and settings while authenticating to the model gateway with their own key.
+The full vision is in [`factory/VISION.md`](factory/VISION.md); the stack is recorded in
+[`docs/architecture/ADR-0001-tech-stack.md`](docs/architecture/ADR-0001-tech-stack.md).
+
+### Status
+Only the project skeleton (T-001) is shipped. The plugin is a no-op stub: it loads, exposes a
+`config` hook that changes nothing, and does no I/O. Fetching, auth, JSONC parsing, placeholders,
+merging, caching, the validator, installers and key provisioning are planned and not yet built.
 
 ### Features shipped so far
-- `GET /api/health` liveness endpoint and a uniform JSON error envelope ([API reference](docs/api.md)).
-- Sign-up and login with email and password: register, log in, log out, with a server-side session in an HttpOnly cookie ([user guide](docs/user-guide.md), [API](docs/api.md)).
-- Security hardening: rate limiting on login/register (per IP and per email, `429` + `Retry-After`), security headers on API and UI, CORS closed by default with an exact-origin allow-list, backend port bound to localhost only (configuration in [development](docs/development.md)).
-- Web shell showing the product name and whether the API is online or offline.
-- Single-command local run with Docker Compose, configuration through environment variables.
+- `backend/plugin/azdo-remote-config.ts`: stub plugin (Kilo v1 module shape, supported Kilo range `>=7.2.0 <8.0.0`).
+- Lint that enforces the FR-11 constraints (single file, zero npm runtime dependencies).
+- Strict TypeScript type-check and a `node:test` test suite.
 - One quality gate, `scripts/ci.sh`, used locally and in GitHub Actions.
 
 ### Quick start
-Prerequisites: Node.js 22.13+ and Docker.
+Prerequisite: Node.js 22.18 or newer (native TypeScript support). There is no frontend, no server and no Docker step.
 
 ```bash
-docker compose up --build     # UI http://localhost:8080, API http://localhost:3000/api/health
-bash scripts/ci.sh            # lint, typecheck, test and build both packages
+cd backend
+npm ci              # install dev dependencies (typescript, @types/node)
+npm run lint        # FR-11 guard rails
+npm run typecheck   # tsc --noEmit
+npm test            # node --test
+cd .. && bash scripts/ci.sh   # the full gate, as CI runs it
 ```
 
-If port 8080 or 3000 is busy, set `FRONTEND_PORT` / `BACKEND_PORT`, for example
-`FRONTEND_PORT=18080 BACKEND_PORT=13000 docker compose up --build`.
-
 More: [user guide](docs/user-guide.md), [API](docs/api.md), [development](docs/development.md).
-
 
 ## Factory quick start (local)
 

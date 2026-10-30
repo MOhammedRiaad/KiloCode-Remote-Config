@@ -1,6 +1,6 @@
 {
-  "status": "idle",
-  "cycle": 1,
+  "status": "running",
+  "cycle": 2,
   "max_cycles": 50,
   "phase": "idle",
   "current_item": null,
@@ -9,8 +9,14 @@
   "max_rework": 3,
   "consecutive_blocked": 0,
   "max_consecutive_blocked": 3,
-  "last_release": "v0.0.0",
+  "last_release": "v0.0.1",
   "history": [
-   
+    {
+      "cycle": 2,
+      "item": "T-001",
+      "result": "released",
+      "version": "v0.0.1",
+      "rework": 0
+    }
   ]
 }

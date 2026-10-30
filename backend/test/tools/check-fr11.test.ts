@@ -1,0 +1,72 @@
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { test } from "node:test";
+
+const backendRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const script = join(backendRoot, "tools", "check-fr11.mjs");
+
+function run(args: string[] = []) {
+  return spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
+}
+
+function fixture(opts: { deps?: Record<string, string>; plugin?: string; extra?: string }) {
+  const root = mkdtempSync(join(tmpdir(), "fr11-"));
+  mkdirSync(join(root, "plugin"));
+  writeFileSync(join(root, "package.json"), JSON.stringify({ dependencies: opts.deps ?? {} }));
+  writeFileSync(join(root, "plugin", "azdo-remote-config.ts"), opts.plugin ?? "export default {};\n");
+  if (opts.extra) writeFileSync(join(root, "plugin", opts.extra), "export {};\n");
+  return root;
+}
+
+function runOn(opts: Parameters<typeof fixture>[0]) {
+  const root = fixture(opts);
+  try {
+    return run(["--root", root]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("real tree passes", () => {
+  const r = run();
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /check-fr11: PASS/);
+});
+
+test("clean fixture passes with node: import", () => {
+  const r = runOn({ plugin: 'import { tmpdir } from "node:os";\nexport default { tmpdir };\n' });
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test("non-empty dependencies fail", () => {
+  const r = runOn({ deps: { leftpad: "1.0.0" } });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /dependencies/);
+});
+
+test("npm import fails", () => {
+  const r = runOn({ plugin: 'import x from "lodash";\nexport default x;\n' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /lodash/);
+});
+
+test("dynamic npm import fails", () => {
+  const r = runOn({ plugin: 'export default await import("lodash");\n' });
+  assert.equal(r.status, 1);
+});
+
+test("require fails", () => {
+  const r = runOn({ plugin: 'const x = require("node:fs");\nexport default x;\n' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /require/);
+});
+
+test("extra file in plugin/ fails", () => {
+  const r = runOn({ extra: "helper.ts" });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /plugin\//);
+});

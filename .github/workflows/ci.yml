@@ -23,19 +23,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
       - name: Quality gate (install, lint, test, build)
         run: bash scripts/ci.sh
-
-  docker-smoke:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - name: Docker compose smoke test
-        run: bash scripts/smoke-docker.sh
 
   secret-scan:
     runs-on: ubuntu-latest

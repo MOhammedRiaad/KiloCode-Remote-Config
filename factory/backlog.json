@@ -13,5 +13,463 @@
     ],
     "source": "vision | security | review | release | po",
     "cycle_done": "cycle number that shipped it, or null"
-  }
+  },
+  "_notes": [
+    "Product has no UI. 'backend' scope = plugin (C2), validation tooling (C1), installers (C5) and key provisioning (C6), all living under backend/. 'frontend' is false for every item.",
+    "FR-11: the shipped plugin must be ONE TypeScript file with zero runtime npm dependencies. Dev-only tooling (test runner, type-checker) is allowed.",
+    "External systems (Azure DevOps, az CLI, Bifrost, Kilo) are never called for real in tests; they are faked/mocked."
+  ],
+  "items": [
+    {
+      "id": "T-001",
+      "title": "Project skeleton & CI",
+      "type": "chore",
+      "priority": 1,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [],
+      "description": "Architect picks the stack (expected: TypeScript, zero runtime deps, built-in or dev-only test runner) and records it in ADR-0001, including the supported Kilo version range and the layout under backend/ (plugin single file, validation tooling, installers, provisioning). Senior BE creates a minimal plugin stub and one smoke test. CI releaser wires scripts/ci.sh and GitHub Actions to a green pipeline.",
+      "acceptance_criteria": [
+        "Given a clean checkout, When `bash scripts/ci.sh` is run, Then it exits 0 and the output shows the backend package's type-check and test steps were executed (not the 'no packages yet' path).",
+        "Given the repository, When docs/architecture/ADR-0001-tech-stack.md is read by an automated check, Then the file exists and contains sections for language/runtime, test runner, supported Kilo version range, and the zero-runtime-dependency single-file plugin constraint (FR-11).",
+        "Given the backend package, When the test suite runs, Then a smoke test imports the single plugin source file (e.g. backend/plugin/azdo-remote-config.ts) and asserts it exports a plugin function that, when invoked with a minimal fake Kilo context, returns an object exposing a `config` hook.",
+        "Given backend/package.json, When an automated check inspects it, Then the `dependencies` field is absent or empty (only devDependencies are allowed).",
+        "Given a push or pull request to main, When the GitHub Actions CI workflow runs, Then it executes `bash scripts/ci.sh` (verifiable by a check that .github/workflows/ci.yml invokes scripts/ci.sh).",
+        "Given the plugin stub, When its `config` hook is invoked with a config object, Then it resolves without throwing and leaves the object unchanged (no-op until F-features land)."
+      ],
+      "source": "po",
+      "cycle_done": 2
+    },
+    {
+      "id": "F-001",
+      "title": "Plugin: JSONC parser",
+      "type": "feature",
+      "priority": 1,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-001"
+      ],
+      "description": "FR-4 / AC-5. Pure function inside the single plugin file that parses JSONC.",
+      "acceptance_criteria": [
+        "Given JSONC with `//` line comments and `/* */` block comments, When parsed, Then the result equals the same document without comments.",
+        "Given JSONC with trailing commas in objects and arrays, When parsed, Then it parses to the expected object.",
+        "Given a string value containing `https://host/path` or `/* not a comment */`, When parsed, Then the string value is preserved exactly.",
+        "Given strings containing escaped quotes (`\\\"`) followed by `//`, When parsed, Then string boundaries are respected and content is preserved.",
+        "Given invalid JSONC, When parsed, Then a descriptive error is thrown (caller handles it; no crash of Kilo).",
+        "Given the Appendix A example from VISION.md, When parsed, Then provider.bifrost.options.baseURL equals `https://bifrost.yourcompany.internal/v1`."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-002",
+      "title": "Plugin: {env:} and {file:} placeholder resolution",
+      "type": "feature",
+      "priority": 1,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-001"
+      ],
+      "description": "FR-5 / AC-8. Recursively resolve placeholders in the parsed shared config; return the list of unresolved placeholder names (never values).",
+      "acceptance_criteria": [
+        "Given `\"x\": \"{env:SET_VAR}\"` and SET_VAR=abc, When resolved, Then x equals `abc`.",
+        "Given `\"x\": \"{env:MISSING}\"` with MISSING unset, When resolved, Then key x is absent from the result and the unresolved list contains `env:MISSING`.",
+        "Given `\"x\": \"pre-{env:MISSING}-post\"`, When resolved, Then x equals `pre--post`.",
+        "Given `\"x\": \"{file:~/secret.txt}\"` and that file exists under a faked home directory, When resolved, Then x equals the trimmed file contents and `~/` was expanded to home.",
+        "Given `\"x\": \"{file:/does/not/exist}\"`, When resolved, Then x is dropped and the unresolved list contains `file:/does/not/exist`.",
+        "Given placeholders nested in objects and arrays, When resolved, Then all nested values are resolved by the same rules."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-003",
+      "title": "Plugin: in-place merge with defaults/enforce modes",
+      "type": "feature",
+      "priority": 1,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-001"
+      ],
+      "description": "FR-6 / AC-6 / AC-7. Deep merge of shared config into Kilo's resolved config object, mutating it in place.",
+      "acceptance_criteria": [
+        "Given local and shared both set `model` differently, When merged in `defaults` mode, Then the local value is kept.",
+        "Given local and shared both set `model` differently, When merged in `enforce` mode, Then the shared value is kept.",
+        "Given local `provider.bifrost.options.apiKey` and a shared provider.bifrost block, When merged in either mode, Then apiKey is unchanged.",
+        "Given keys present locally but absent from the shared file, When merged, Then those keys are unchanged.",
+        "Given the shared file contains `$schema` and `plugin`, When merged, Then the local `$schema` and `plugin` values are unchanged.",
+        "Given a config object reference, When merged, Then the same object reference is mutated (not replaced) and nested objects are deep-merged."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-004",
+      "title": "Plugin: settings resolution (options, env, defaults)",
+      "type": "feature",
+      "priority": 2,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-001"
+      ],
+      "description": "FR-1 / FR-8. Resolve org, project, repo, path, branch, mode, pat, timeoutMs.",
+      "acceptance_criteria": [
+        "Given plugin options set `org`, When settings resolve, Then options win over KILO_AZDO_ORG.",
+        "Given no option but KILO_AZDO_BRANCH=dev, When settings resolve, Then branch equals `dev`.",
+        "Given neither options nor env, When settings resolve, Then built-in defaults apply (path `/kilo.jsonc`, branch `main`, mode `defaults`, timeoutMs 5000).",
+        "Given an invalid mode value, When settings resolve, Then mode falls back to `defaults` and a warning is logged.",
+        "Given a non-numeric or non-positive timeoutMs, When settings resolve, Then 5000 is used."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-005",
+      "title": "Plugin: Azure DevOps fetch and authentication",
+      "type": "feature",
+      "priority": 2,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-004"
+      ],
+      "description": "FR-2 / FR-3 / FR-8. Fetch via Git Items API using injected fetch and injected `az` runner for testability.",
+      "acceptance_criteria": [
+        "Given settings, When fetching, Then the request URL targets `https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/items` with path, versionDescriptor.version=branch, versionDescriptor.versionType=branch, includeContent=true, api-version=7.1 (all URL-encoded).",
+        "Given a `pat` option, When fetching, Then the Authorization header is `Basic base64(':' + pat)`.",
+        "Given no pat option but AZDO_PAT or AZURE_DEVOPS_EXT_PAT set, When fetching, Then that PAT is used with Basic auth (AZDO_PAT preferred).",
+        "Given no PAT anywhere, When fetching, Then the faked `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` token is used as `Bearer`.",
+        "Given a server that does not respond within timeoutMs, When fetching, Then the fetch is aborted and a timeout error is returned.",
+        "Given a non-2xx response, When fetching, Then an error including the HTTP status (but no token) is returned."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-006",
+      "title": "Plugin: cache, fallback, logging and never-crash wiring",
+      "type": "feature",
+      "priority": 2,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-001",
+        "F-002",
+        "F-003",
+        "F-005"
+      ],
+      "description": "FR-7 / FR-9 / FR-10 / AC-3 / AC-4 / AC-8 / AC-9. Wire the full startup sequence into the plugin's config hook.",
+      "acceptance_criteria": [
+        "Given a successful fetch, When the config hook runs, Then the resolved config is written to `<home>/.cache/kilo-azdo/remote-config.json` and merged into the config.",
+        "Given the fetch fails and a cache exists, When the config hook runs, Then the cached config is merged and a warning is logged with service `azdo-remote-config` (AC-3).",
+        "Given the fetch fails and no cache exists, When the config hook runs, Then the config is unchanged and an error is logged (AC-4).",
+        "Given any internal exception (parse error, unwritable cache, logger failure), When the config hook runs, Then it does not throw (FR-10).",
+        "Given a run with a PAT, a bearer token and an `sk-bf-` key present, When all log calls are captured, Then none contains any of those secret values (AC-9).",
+        "Given `{env:MISSING}` in the shared file, When the hook runs, Then the log names `env:MISSING` and contains no value (AC-8)."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-007",
+      "title": "Shared config repo: example kilo.jsonc and validation script",
+      "type": "feature",
+      "priority": 2,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-001"
+      ],
+      "description": "FR-12 / FR-13 / AC-13. Template content for C1 plus a zero-dependency validator CLI used by the PR pipeline.",
+      "acceptance_criteria": [
+        "Given the shipped example /kilo.jsonc, When validated, Then the validator exits 0.",
+        "Given a file containing an `apiKey` field at any depth, When validated, Then the validator exits non-zero and names the JSON path.",
+        "Given a file containing a string matching `sk-bf-`, When validated, Then the validator exits non-zero without printing the full secret.",
+        "Given a file with invalid JSONC, When validated, Then the validator exits non-zero with a parse error.",
+        "Given a file whose structure violates the vendored Kilo config schema subset (e.g. `provider` not an object), When validated, Then the validator exits non-zero."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-008",
+      "title": "Shared config repo: Azure Pipelines PR gate and branch policy setup",
+      "type": "feature",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-007"
+      ],
+      "description": "FR-13 / FR-14. azure-pipelines.yml running the validator on PRs, and a script (az repos policy) that applies the main branch policy.",
+      "acceptance_criteria": [
+        "Given azure-pipelines.yml, When parsed by a test, Then it triggers on PRs to main and runs the validator against kilo.jsonc and teams/*/kilo.jsonc.",
+        "Given the branch-policy script run in dry-run mode, When executed, Then it prints `az repos policy` commands for: minimum 1 reviewer, required platform-team reviewer group, and build validation on the pipeline.",
+        "Given the branch-policy script without required arguments, When executed, Then it exits non-zero with usage help."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-009",
+      "title": "Personal config template",
+      "type": "feature",
+      "priority": 2,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-001"
+      ],
+      "description": "FR-16 / FR-17. Template matching Appendix B.",
+      "acceptance_criteria": [
+        "Given the template, When parsed, Then its top-level keys are only `$schema`, `plugin` and `provider`.",
+        "Given the template, When inspected, Then `plugin` has exactly one entry pointing at `./azdo/azdo-remote-config.ts` with options org, project, repo, path, branch, mode.",
+        "Given the template, When inspected, Then `provider` contains only `bifrost.options.apiKey` with a placeholder value that does not match a real key pattern.",
+        "Given the template, When validated by the F-007 validator's secret check, Then no real `sk-bf-` secret is detected (placeholder only)."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-010",
+      "title": "Bootstrap installer for macOS/Linux (install.sh)",
+      "type": "feature",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-006",
+        "F-009"
+      ],
+      "description": "FR-18..FR-23 / AC-12 / AC-14 for POSIX. Tests run with a temp HOME and faked az/curl.",
+      "acceptance_criteria": [
+        "Given a temp HOME with no Kilo config, When install.sh runs, Then the plugin is at `~/.config/kilo/azdo/azdo-remote-config.ts` and the personal config is created from the template.",
+        "Given an existing personal config with other keys, When install.sh runs, Then only the plugin entry and apiKey are added/updated and other keys are preserved.",
+        "Given install.sh, When it runs, Then nothing is written to `~/.config/kilo/plugin/` (plugin loads exactly once, AC-12).",
+        "Given az missing and no PAT, When install.sh runs, Then it prints a clear fix and exits non-zero.",
+        "Given install.sh is run twice, When the config directory is diffed, Then the second run changed nothing except the plugin file (AC-14).",
+        "Given faked AzDO and Bifrost endpoints, When the smoke test step runs, Then it reports pass or fail for both checks without printing the key."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-011",
+      "title": "Bootstrap installer for Windows (install.ps1)",
+      "type": "feature",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-010"
+      ],
+      "description": "FR-18..FR-23 / AC-12 / AC-14 for Windows, behaviour parity with install.sh. Tests via Pester or pwsh where available; skipped with a clear message otherwise.",
+      "acceptance_criteria": [
+        "Given a temp USERPROFILE with no Kilo config, When install.ps1 runs, Then the plugin and personal config are created as with install.sh.",
+        "Given an existing personal config with other keys, When install.ps1 runs, Then other keys are preserved.",
+        "Given install.ps1, When it runs, Then nothing is written to the auto-loaded plugin directory.",
+        "Given az missing and no PAT, When install.ps1 runs, Then it prints a clear fix and exits non-zero.",
+        "Given install.ps1 is run twice, Then the second run changes nothing except the plugin file."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-012",
+      "title": "Key provisioning: create virtual key per engineer",
+      "type": "feature",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-001"
+      ],
+      "description": "FR-24 / FR-27. CLI calling Bifrost governance API (faked in tests).",
+      "acceptance_criteria": [
+        "Given an email, budget, rate limit and model list, When `create` runs, Then one POST to the governance virtual-keys endpoint is made with name = email and those limits.",
+        "Given a successful create, When output and logs are captured, Then the key value is never printed to stdout/logs; it is written only to a per-engineer file with 0600 permissions (or delivered via a pluggable secure-channel hook).",
+        "Given a governance API error, When `create` runs, Then it exits non-zero with the HTTP status and no admin token in output.",
+        "Given the admin token, When the tool runs, Then it is read from an env var, never from a CLI argument or the shared repo."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-013",
+      "title": "Key provisioning: bulk CSV, list and disable (offboarding)",
+      "type": "feature",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-012"
+      ],
+      "description": "FR-25 / FR-26 / AC-11.",
+      "acceptance_criteria": [
+        "Given a CSV of engineers where some already have keys, When `bulk` runs, Then keys are created only for engineers without one (no duplicates).",
+        "Given `bulk` is run twice with the same CSV, Then the second run creates nothing.",
+        "Given `list`, When run, Then it prints engineer names and key status without key values.",
+        "Given `disable alice@x`, When run, Then only alice's key is disabled and no other key is modified (AC-11).",
+        "Given `disable` for an unknown email, When run, Then it exits non-zero and modifies nothing."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-014",
+      "title": "End-to-end simulated startup test",
+      "type": "feature",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-006",
+        "F-007"
+      ],
+      "description": "AC-1 / AC-2 / AC-10 simulated: local fake AzDO + fake Bifrost servers exercise the whole plugin flow.",
+      "acceptance_criteria": [
+        "Given a fake AzDO server serving a shared kilo.jsonc, When the plugin config hook runs, Then the resulting config lists the Bifrost models (AC-1, simulated).",
+        "Given the shared file changes on the fake server, When the hook runs again, Then the new value is in effect with no other change (AC-2).",
+        "Given the fake Bifrost enforces auth, When a request without a virtual key is made, Then it is rejected with 401 and the installer smoke test reports fail (AC-10, simulated)."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-015",
+      "title": "Per-team config files support",
+      "type": "feature",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-006",
+        "F-008"
+      ],
+      "description": "FR-15. Example /teams/<team>/kilo.jsonc and validation coverage; plugin `path` option selects it.",
+      "acceptance_criteria": [
+        "Given path `/teams/payments/kilo.jsonc`, When the plugin fetches, Then the request targets that path.",
+        "Given an example team file, When validated, Then the validator exits 0.",
+        "Given a team file with an apiKey, When the pipeline validator runs over teams/*, Then it fails."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-016",
+      "title": "User and operator documentation",
+      "type": "feature",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": false,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-010",
+        "F-013"
+      ],
+      "description": "Engineer setup guide, platform-team runbook (config change, key provisioning, offboarding), KILO_PURE caveat, supported Kilo version range, Phase 0 assumptions A1-A3 checklist.",
+      "acceptance_criteria": [
+        "Given docs/, When an automated check runs, Then engineer setup, platform runbook and troubleshooting pages exist and link to each other.",
+        "Given the troubleshooting page, When checked, Then it mentions KILO_PURE=1, az login and the cache location.",
+        "Given all docs, When scanned for `sk-bf-` followed by real-looking key material, Then none is found."
+      ],
+      "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "T-002",
+      "title": "Harden FR-11 lint against import evasions",
+      "type": "tech-debt",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-001"
+      ],
+      "description": "Security/review: backend/tools/check-fr11.mjs regexes can be bypassed (template-literal or variable import(), createRequire, a \"/*\" string literal). Use ts.preProcessFile/AST, reject non-literal import() and createRequire, and add fixtures for these plus untested branches (export-from, bare import, missing/invalid package.json, missing plugin/, --root without value).",
+      "acceptance_criteria": [
+        "Given a plugin file using import(`lodash`), import(variable), createRequire, or a \"/*\" string hiding an import, When check-fr11 runs, Then it exits 1.",
+        "Given fixtures for export-from, bare import, missing/invalid package.json, missing plugin/ and --root without a value, When tests run, Then each is covered and behaves as specified."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-003",
+      "title": "Release build step packaging the plugin file",
+      "type": "chore",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-001"
+      ],
+      "description": "Copy plugin/azdo-remote-config.ts to backend/dist/ so release.yml attaches it as an artefact; fits with the installer items.",
+      "acceptance_criteria": [
+        "Given a release, When release.yml runs, Then backend/dist/azdo-remote-config.ts is attached and byte-identical to the source."
+      ],
+      "source": "architect",
+      "cycle_done": null
+    }
+  ]
 }
