@@ -1,7 +1,7 @@
 // azdo-remote-config: Kilo plugin that applies a remote Azure DevOps config.
 // Single file, zero runtime dependencies (FR-11). See docs/architecture/ADR-0001-tech-stack.md
-// and ADR-0002-plugin-module-shape.md, ADR-0003, ADR-0004. The config hook is still a no-op;
-// the JSONC parser and the placeholder resolver are helpers only (not wired yet).
+// and ADR-0002-plugin-module-shape.md, ADR-0003, ADR-0004, ADR-0005. The config hook is still a
+// no-op; the JSONC parser, the placeholder resolver and the config merge are helpers only (not wired yet).
 
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -277,8 +277,100 @@ function resolvePlaceholders(input: unknown, deps: PlaceholderDeps = {}): Placeh
   return { value: value === DROP ? undefined : value, unresolved };
 }
 
+// ---- Config merge (ADR-0005) ----
+
+const MAX_MERGE_DEPTH = 64;
+const OMIT: unique symbol = Symbol("omit");
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function isApiKeyName(key: string): boolean {
+  return key.toLowerCase() === "apikey";
+}
+
+function isPrototypeKey(key: string): boolean {
+  return key === "__proto__" || key === "constructor" || key === "prototype";
+}
+
+function tooDeep(): Error {
+  return new Error("Config merge: config nested too deeply");
+}
+
+function defineOwn(target: object, key: string, value: unknown): void {
+  Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+function hasOwn(target: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(target, key);
+}
+
+// Phase 1: deep clone of the shared value without secrets or prototype keys. The only phase that throws.
+function sanitizeNode(node: unknown, depth: number, topLevel: boolean): unknown {
+  if (node === null || typeof node === "string" || typeof node === "number" || typeof node === "boolean") {
+    return node;
+  }
+  if (Array.isArray(node)) {
+    if (depth >= MAX_MERGE_DEPTH) throw tooDeep();
+    return node.map((item) => {
+      const clean = sanitizeNode(item, depth + 1, false);
+      return clean === OMIT ? null : clean;
+    });
+  }
+  if (!isPlainObject(node)) return OMIT;
+  if (depth >= MAX_MERGE_DEPTH) throw tooDeep();
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(node)) {
+    if (isApiKeyName(key) || isPrototypeKey(key)) continue;
+    if (topLevel && (key === "$schema" || key === "plugin")) continue;
+    const clean = sanitizeNode(node[key], depth + 1, false);
+    if (clean !== OMIT) defineOwn(out, key, clean);
+  }
+  return out;
+}
+
+function sanitizeShared(shared: Record<string, unknown>): Record<string, unknown> {
+  return sanitizeNode(shared, 0, true) as Record<string, unknown>;
+}
+
+// True when the value holds an apiKey-named own key at any depth; reaching the depth cap counts as true.
+function containsApiKey(value: unknown, depth: number): boolean {
+  if (Array.isArray(value)) {
+    if (depth >= MAX_MERGE_DEPTH) return true;
+    return value.some((item) => containsApiKey(item, depth + 1));
+  }
+  if (!isPlainObject(value)) return false;
+  if (depth >= MAX_MERGE_DEPTH) return true;
+  return Object.keys(value).some((key) => isApiKeyName(key) || containsApiKey(value[key], depth + 1));
+}
+
+// Phase 2: merge the sanitized tree into the target; keys of the target not in the tree are untouched.
+function mergeInto(target: Record<string, unknown>, source: Record<string, unknown>, enforce: boolean): void {
+  for (const key of Object.keys(source)) {
+    const incoming = source[key];
+    const local = hasOwn(target, key) ? target[key] : undefined;
+    if (local === undefined) {
+      defineOwn(target, key, incoming);
+    } else if (isPlainObject(local) && isPlainObject(incoming)) {
+      mergeInto(local, incoming, enforce);
+    } else if (enforce && !containsApiKey(local, 0)) {
+      defineOwn(target, key, incoming);
+    }
+  }
+}
+
+// Merges `shared` into `target` in place. Only mode "enforce" lets shared values win; any other
+// mode keeps local values. Non-object inputs are a no-op. Throws only for over-deep or cyclic shared.
+function mergeConfig(target: unknown, shared: unknown, mode?: unknown): void {
+  if (!isPlainObject(target) || !isPlainObject(shared)) return;
+  mergeInto(target, sanitizeShared(shared), mode === "enforce");
+}
+
 /** Test/validator seam. Never has a `server` key and never holds the entry point. */
-export const __internals = { parseJsonc, resolvePlaceholders };
+export const __internals = { parseJsonc, resolvePlaceholders, mergeConfig };
 
 const AzdoRemoteConfig: PluginServer = async () => {
   return { config: async () => {} };

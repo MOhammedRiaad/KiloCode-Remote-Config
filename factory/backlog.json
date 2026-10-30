@@ -101,7 +101,7 @@
       "title": "Plugin: in-place merge with defaults/enforce modes",
       "type": "feature",
       "priority": 1,
-      "status": "todo",
+      "status": "done",
       "scope": {
         "backend": true,
         "frontend": false
@@ -109,18 +109,19 @@
       "depends_on": [
         "T-001"
       ],
-      "description": "FR-6 / AC-6 / AC-7. Deep merge of shared config into Kilo's resolved config object, mutating it in place.",
+      "description": "FR-6 / AC-6 / AC-7. Pure helper exposed as `__internals.mergeConfig(target, shared, mode)` (ADR-0002 seam) inside the single plugin file backend/plugin/azdo-remote-config.ts. Deep-merges the (already parsed and placeholder-resolved) shared config into Kilo's resolved config object, mutating `target` in place. Plain objects are merged recursively; arrays and scalars are leaf values whose conflict is decided by mode (`defaults`: local wins; `enforce`: shared wins); a key absent locally is added from shared in both modes. Top-level `$schema` and `plugin` in the shared config are ignored. Any `apiKey` key at any depth in the shared config is never applied (local apiKey always preserved; vision AC-6, FR-12). Values copied from shared are deep-cloned so target never aliases shared. An unrecognised mode is treated as `defaults` (conservative). Not yet wired into the config hook (F-006). Zero runtime deps (FR-11).",
       "acceptance_criteria": [
-        "Given local and shared both set `model` differently, When merged in `defaults` mode, Then the local value is kept.",
-        "Given local and shared both set `model` differently, When merged in `enforce` mode, Then the shared value is kept.",
-        "Given local `provider.bifrost.options.apiKey` and a shared provider.bifrost block, When merged in either mode, Then apiKey is unchanged.",
-        "Given keys present locally but absent from the shared file, When merged, Then those keys are unchanged.",
-        "Given the shared file contains `$schema` and `plugin`, When merged, Then the local `$schema` and `plugin` values are unchanged.",
-        "Given a config object reference, When merged, Then the same object reference is mutated (not replaced) and nested objects are deep-merged.",
-        "Given overlay/remote config containing own keys `__proto__`, `constructor` or `prototype`, When merged, Then those keys are skipped or own-defined and Object.prototype is not polluted (regression test)."
+        "Given local `{model:'a'}` and shared `{model:'b', small_model:'s'}`, When `__internals.mergeConfig` runs in `defaults` mode, Then target.model equals `a` and target.small_model equals `s` (shared-only keys are added).",
+        "Given local `{model:'a', provider:{bifrost:{options:{baseURL:'L'}}}}` and shared `{model:'b', provider:{bifrost:{options:{baseURL:'S'}}}}`, When merged in `enforce` mode, Then target.model equals `b` and target.provider.bifrost.options.baseURL equals `S`; and When merged in `defaults` mode, Then both local values are kept (AC-7).",
+        "Given local `provider.bifrost.options.apiKey = 'sk-bf-local'` and a shared provider.bifrost block whose options contain `apiKey: 'sk-bf-shared'` plus `baseURL`, When merged in `defaults` and in `enforce` mode, Then apiKey still equals `sk-bf-local`, baseURL is merged per mode, and with a local config that has no apiKey the shared apiKey is not added (AC-6).",
+        "Given local keys absent from the shared file at top level and nested (e.g. `provider.other`, `provider.bifrost.options.headers`, `agent.x`), When merged in either mode, Then those keys and their values are unchanged.",
+        "Given a shared config with top-level `$schema` and `plugin`, When merged in either mode, Then the local `$schema` and `plugin` values are unchanged, and when absent locally they are not added.",
+        "Given a target object, When merged, Then the function mutates and keeps the same target reference (including existing nested object references such as target.provider), the shared input is not mutated, and mutating a nested object or array in shared after the merge does not change target.",
+        "Given arrays or type conflicts (local `instructions:['a']` vs shared `['b','c']`; local object vs shared string), When merged, Then arrays are replaced wholesale (never concatenated) and conflicts resolve by mode (`defaults` keeps local, `enforce` takes shared), and an unrecognised mode behaves as `defaults`.",
+        "Given a shared config parsed from JSON containing own keys `__proto__`, `constructor` or `prototype` at top level and nested, When merged, Then Object.prototype is not polluted and no such key alters target's prototype; and When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0, backend/package.json has no runtime `dependencies`, and the only new export surface is the `mergeConfig` key on `__internals`."
       ],
       "source": "vision",
-      "cycle_done": null
+      "cycle_done": 5
     },
     {
       "id": "F-004",
@@ -197,7 +198,8 @@
         "Given a run with a PAT, a bearer token and an `sk-bf-` key present, When all log calls are captured, Then none contains any of those secret values (AC-9).",
         "Given `{env:MISSING}` in the shared file, When the hook runs, Then the log names `env:MISSING` and contains no value (AC-8).",
         "Given a successful fetch on POSIX, When the cache file is written, Then its permissions are 0600 and the cache directory is created if missing (security follow-up, cycle 0002).",
-        "Given a Windows host where process.env lookups are case-insensitive, When {env:NAME} placeholders are resolved through the hook, Then behaviour is documented/tested (injected envs are case-sensitive; process.env is not)."
+        "Given a Windows host where process.env lookups are case-insensitive, When {env:NAME} placeholders are resolved through the hook, Then behaviour is documented/tested (injected envs are case-sensitive; process.env is not).",
+        "Given a frozen/sealed Kilo config making mergeConfig throw a TypeError, When the hook runs, Then the error is caught and a fixed message is logged (never err.message), and Kilo continues (FR-10)."
       ],
       "source": "vision",
       "cycle_done": null
@@ -222,7 +224,8 @@
         "Given a file containing a string matching `sk-bf-`, When validated, Then the validator exits non-zero without printing the full secret.",
         "Given a file with invalid JSONC, When validated, Then the validator exits non-zero with a parse error.",
         "Given a file whose structure violates the vendored Kilo config schema subset (e.g. `provider` not an object), When validated, Then the validator exits non-zero.",
-        "Given a shared config containing a relative {file:} path, bare ~, ~user or UNC-style path, When validated, Then the validator warns that it will never resolve."
+        "Given a shared config containing a relative {file:} path, bare ~, ~user or UNC-style path, When validated, Then the validator warns that it will never resolve.",
+        "Given a shared config whose baseURL host is outside an expected set, or containing keys named like Object.prototype members (hasOwnProperty, toString), When validated, Then the validator warns/fails accordingly (security findings from cycle 0005)."
       ],
       "source": "vision",
       "cycle_done": null
@@ -490,7 +493,7 @@
         "frontend": false
       },
       "depends_on": [],
-      "description": "backend/plugin/azdo-remote-config.ts:38 holds a raw U+FEFF in the BOM constant; replace with the \"\\ufeff\" escape sequence (six ASCII characters) and add a CI check (e.g. in check-fr11 or a script) that flags invisible characters in source files. Optionally copy unchanged text runs by slice in parseJsonc to cut memory (security low finding, cycle 0003).",
+      "description": "PO cycle 0005: the BOM constant is already written as the ASCII escape (verified, line 43; cycle 0004 review confirmed), so AC1 is a regression check only. Remaining work: add a CI check (e.g. in check-fr11 or a script) that flags invisible characters in source files. Optionally copy unchanged text runs by slice in parseJsonc to cut memory (security low finding, cycle 0003).",
       "acceptance_criteria": [
         "Given the plugin source, When inspected, Then the BOM constant is written as the ASCII escape \"\\ufeff\" and the file contains no raw U+FEFF.",
         "Given a source file containing a raw invisible character, When the CI check runs, Then it exits non-zero."
@@ -529,11 +532,12 @@
       "depends_on": [
         "F-002"
       ],
-      "description": "Review info findings on backend/test/plugin/placeholders.test.ts: the inherited-env-names test would pass without the own-property check; the 1 MiB cap is only tested at cap+1. Security info: also check length after reading to cover /proc pseudo-files reporting size 0.",
+      "description": "Review info findings (cycle 0004) on backend/test/plugin/placeholders.test.ts: the inherited-env-names test would pass without the own-property check; the 1 MiB cap is only tested at cap+1. Security info finding 5 (cycle 0004): also check length after reading to cover /proc pseudo-files reporting size 0 and files grown after stat (TOCTOU).",
       "acceptance_criteria": [
         "Given an env created via Object.create({INH:'x'}), When {env:INH} is resolved, Then it is unresolved (test fails if the own-property check is removed).",
         "Given a file of exactly 1 MiB, When read with the default reader, Then it resolves; at 1 MiB + 1 it does not.",
-        "Given a reader result longer than the cap, When resolved, Then it is treated as unresolved."
+        "Given a reader result longer than the cap, When resolved, Then it is treated as unresolved.",
+        "Given shared {toString:'x'} merged into {} in defaults mode, When mergeConfig runs, Then target.toString is the own value 'x' (test fails if the own-property read guard is removed)."
       ],
       "source": "review",
       "cycle_done": null
@@ -556,6 +560,27 @@
       "acceptance_criteria": [
         "Given an allowlist of env names and path prefixes, When a placeholder outside it is resolved, Then it is unresolved and reported by name only.",
         "Given no allowlist configured, When resolving, Then behaviour is unchanged (backwards compatible)."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-007",
+      "title": "mergeConfig hardening: visited set and sparse arrays",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-003"
+      ],
+      "description": "Security/review low+info findings in backend/plugin/azdo-remote-config.ts: containsApiKey keeps no visited set (exponential on local graphs with shared references); sanitizeShared uses node.map which keeps sparse holes instead of null per ADR-0005 (copy with an index loop).",
+      "acceptance_criteria": [
+        "Given a local config reusing the same object in many places (30 levels, 2 refs each), When mergeConfig runs in enforce mode with a conflict, Then it completes quickly (WeakSet visited tracking).",
+        "Given a sparse array in shared input, When sanitized, Then holes become null as the ADR states."
       ],
       "source": "security",
       "cycle_done": null

@@ -104,4 +104,48 @@ const { value, unresolved } = __internals.resolvePlaceholders(
 Security: resolved values are secrets and exist only in `value`; callers must not log them. The
 shared config can read any env variable and any user-readable file, so it must be PR-gated.
 
-Authoritative contract: `docs/architecture/contracts/plugin-interface.md` (v0.3.1), ADR-0002, ADR-0003 (`docs/architecture/ADR-0003-jsonc-parser.md`) and ADR-0004 (`docs/architecture/ADR-0004-placeholder-resolution.md`).
+## `mergeConfig` (internal)
+
+Reachable only as `__internals.mergeConfig`; it is not a named export and the `config` hook does not
+call it yet. Synchronous, returns `undefined`.
+
+```ts
+mergeConfig(target: unknown, shared: unknown, mode?: unknown): void
+```
+
+Mode: only the exact string `"enforce"` enforces. Anything else (`undefined`, `"ENFORCE"`, `""`,
+`null`, numbers) behaves as `"defaults"`.
+
+Rules:
+- `target` is mutated in place; it is never replaced, and existing nested plain objects keep their
+  identity. `shared` is not mutated. Nothing reachable from `target` afterwards is reachable from `shared`.
+- If `target` or `shared` is not a plain object (prototype `Object.prototype` or `null`), nothing happens and nothing is thrown.
+- Keys absent locally (or `undefined` locally) are added from `shared`, in both modes.
+- Two plain objects are merged recursively, in both modes.
+- Any other pair (arrays, `null`, scalar vs object): `defaults` keeps the local value; `enforce`
+  writes the shared value, unless the local value is an array or plain object containing a key whose
+  lowercase is `apikey` at any depth, in which case the local value is kept.
+- Arrays are replaced as a whole, never concatenated.
+- Keys of `shared` named `apikey` in any case are skipped at any depth; a local `apiKey` is never changed or removed.
+- Top-level `$schema` and `plugin` keys of `shared` are skipped; nested ones are ordinary data.
+- Keys `__proto__`, `constructor` and `prototype` of `shared` are skipped at any depth. `Object.prototype` is never modified.
+- Keys of `target` not present in `shared` are untouched.
+- A `shared` containing a container 64 or more levels deep (also cyclic) throws
+  `Error("Config merge: config nested too deeply")`. The check runs before `target` is touched, so
+  `target` is unchanged on this error.
+
+Example:
+```ts
+const target = { model: "local/m", provider: { a: { options: { apiKey: "K" } } }, list: [1] };
+__internals.mergeConfig(
+  target,
+  { model: "shared/m", $schema: "x", provider: { a: { options: { apiKey: "S", baseURL: "https://gw" } } }, list: [2], extra: true },
+  "enforce",
+);
+// target: { model: "shared/m", provider: { a: { options: { apiKey: "K", baseURL: "https://gw" } } }, list: [2], extra: true }
+```
+
+Security: the shared `apiKey` is never applied, but the shared file can still set `baseURL` or
+`headers` next to a local `apiKey`. The shared repository must be PR-gated.
+
+Authoritative contract: `docs/architecture/contracts/plugin-interface.md` (v0.4.0), ADR-0002, ADR-0003 (`docs/architecture/ADR-0003-jsonc-parser.md`), ADR-0004 (`docs/architecture/ADR-0004-placeholder-resolution.md`) and ADR-0005 (`docs/architecture/ADR-0005-config-merge.md`).

@@ -1,7 +1,8 @@
 # Contract: `azdo-remote-config` plugin interface
 
-- Version: 0.3.1 (F-002 rework 1, cycle-0004: default `{file:}` reader guard and UNC rejection;
-  0.3.0 was F-002, cycle-0004; 0.2.0 was F-001, cycle-0003; 0.1.0 was T-001, cycle-0002)
+- Version: 0.4.0 (F-003, cycle-0005: `__internals.mergeConfig`, section 2c; 0.3.1 was F-002
+  rework 1, cycle-0004: default `{file:}` reader guard and UNC rejection; 0.3.0 was F-002,
+  cycle-0004; 0.2.0 was F-001, cycle-0003; 0.1.0 was T-001, cycle-0002)
 - Owner: Architect. Implemented by: `backend/plugin/azdo-remote-config.ts`.
 - This product has **no HTTP API of its own** and no frontend; this typed contract replaces an
   OpenAPI document. It defines (1) what Kilo passes to the plugin, (2) what the plugin returns,
@@ -47,13 +48,14 @@ export type PluginServer = (input: PluginInput, options?: PluginOptions) => Prom
 | `default` | object | `{ id: "azdo-remote-config", server: PluginServer }` |
 | `PLUGIN_ID` | string const | `"azdo-remote-config"` (also the logger `service` name, FR-9) |
 | `SUPPORTED_KILO_RANGE` | string const | `">=7.2.0 <8.0.0"` |
-| `__internals` | plain object | Test/validator seam. `{ parseJsonc, resolvePlaceholders }` since F-002 (sections 2a, 2b), in that key order; later F-items add further pure helpers. Never has a `server` key; never itself a function. |
+| `__internals` | plain object | Test/validator seam. `{ parseJsonc, resolvePlaceholders, mergeConfig }` since F-003 (sections 2a, 2b, 2c), in that key order; later F-items add further pure helpers. Never has a `server` key; never itself a function. |
 | types | `export type` / `export interface` | as in section 1 |
 
 No other named exports: the runtime named exports are exactly `PLUGIN_ID`, `SUPPORTED_KILO_RANGE`
 and `__internals` (plus `default`). No named export may be a function. Helpers inside
 `__internals` are module-local functions (not exported by name). Their helper types (e.g.
-`PlaceholderDeps`, `PlaceholderResult`) are module-local too and are not exported.
+`PlaceholderDeps`, `PlaceholderResult`) and constants (e.g. `MAX_MERGE_DEPTH`) are module-local too
+and are not exported.
 
 Imports (FR-11, ADR-0001, ADR-0004): the plugin file may import only `node:` built-ins. Since
 F-002 it imports `readFileSync` and `statSync` from `node:fs`, `homedir` from `node:os`, and
@@ -117,6 +119,39 @@ dep uses its default. Synchronous.
 | Depth cap / throws | The root container is level 0. A container at level 64 or deeper (that is, more than 64 nested containers) throws `Error("Placeholder resolution: config nested too deeply")`. A cyclic input throws the same error. This is the **only** error the function may throw. 64 nested arrays resolve; 65 throw. |
 | Wiring | Not called by the `config` hook yet (F-006 wires it, logs `unresolved`, and catches everything). |
 
+## 2c. `__internals.mergeConfig` (F-003, FR-6, AC-6, AC-7, ADR-0005)
+
+```ts
+const MAX_MERGE_DEPTH = 64;                                  // module-local, not exported
+function mergeConfig(target: unknown, shared: unknown, mode?: unknown): void;
+```
+
+Access: `__internals.mergeConfig(kiloConfig, resolvedShared, "defaults" | "enforce")`. Synchronous.
+Returns `undefined`.
+
+| Aspect | Contract |
+|---|---|
+| Effect | Mutates `target` in place. Never replaces `target`, never replaces an existing nested plain object of `target` (references such as `target.provider` stay identical). No I/O, no logging, no global state. |
+| Mode | `mode === "enforce"` (strict, case-sensitive) -> enforce. Any other value (including `undefined`, `"ENFORCE"`, `""`, `null`, numbers) -> defaults. |
+| Plain object | `typeof v === "object" && v !== null && !Array.isArray(v)` and prototype is `Object.prototype` or `null`. Everything else (arrays, `null`, primitives, Date, Map, class instances) is a leaf. |
+| Non-object inputs | `target` or `shared` not a plain object -> return, nothing changed, no throw. |
+| Phase 1 (sanitize) | Deep clone of `shared` into fresh arrays and ordinary objects (`Object.keys`, `Object.defineProperty` writes). Runs completely before `target` is touched. |
+| Skipped keys, any depth | Key with `key.toLowerCase() === "apikey"`; keys `__proto__`, `constructor`, `prototype` (exact). Applies inside objects nested in arrays as well. |
+| Skipped keys, top level only | `$schema`, `plugin` (exact). Nested keys with these names are ordinary data. |
+| Non-JSON values in `shared` | `undefined`, function, symbol, bigint, non-plain object: omitted as an object value; `null` as an array element. |
+| Absent locally | `target` has no own property `k`, or its own value is `undefined` -> the sanitized shared value is written, in both modes. |
+| Both plain objects | Recurse into the existing `target[k]`, in both modes. |
+| Conflict (any other pair, incl. arrays, `null`, object vs scalar) | `defaults`: keep local. `enforce`: write the sanitized shared value, **unless** the local value is an array or plain object containing (any depth, own enumerable keys, through arrays and plain objects) a key whose lowercase is `apikey`; then keep local. The scan treats level >= 64 (deep or cyclic local) as "contains". The scan never throws. |
+| Arrays | Leaves; replaced wholesale, never concatenated or merged by index. |
+| Writes | Only `Object.defineProperty(t, k, { value, enumerable: true, writable: true, configurable: true })`; own-property checks via `Object.prototype.hasOwnProperty.call`. New keys appended in shared key order; existing keys keep position. |
+| Untouched | Keys of `target` not present in the sanitized shared tree are never read, written or deleted. Own keys `__proto__` / `constructor` / `prototype` of `target` are left alone. |
+| apiKey (AC-6) | A local `apiKey` at any depth is never changed or removed in either mode; a shared `apiKey` is never added. |
+| Aliasing | After the call no object or array reachable from `target` is reachable from `shared`; `shared` is not mutated (deep-equal before and after). |
+| Pollution | `Object.prototype` is never modified; the prototype of `target` and of every nested object is never changed. |
+| Depth cap / throws | Phase 1: root container is level 0; a container at level 64 or deeper in `shared` throws `Error("Config merge: config nested too deeply")`. Cyclic `shared` throws the same error. 64 nested containers merge; 65 throw. On this throw `target` is unchanged. This is the only error the function itself throws. |
+| Out of contract | Frozen / sealed / non-configurable `target` properties: `Object.defineProperty` may throw `TypeError`. F-006 catches everything. |
+| Wiring | Not called by the `config` hook yet (F-006). |
+
 ## 3. Behaviour contract
 
 ### `server(input, options)`
@@ -131,7 +166,8 @@ dep uses its default. Synchronous.
 - MUST resolve (never reject) for any argument.
 - **T-001 stub:** a no-op. After the call, `config` is deep-equal to its state before the call
   and is the same object reference (no replacement, no added/removed keys).
-- **Later (F-003):** mutates `config` in place per FR-6; never replaces the object.
+- **Later (F-006):** mutates `config` in place per FR-6 through `mergeConfig` (section 2c); never
+  replaces the object.
 
 ## 4. Plugin options schema (FR-1) - informative, implemented by a later item
 
