@@ -27,6 +27,7 @@ function importSpecifiers(source) {
 }
 
 const HELPER_ALLOWED = [/^node:/, /^\.\/[A-Za-z0-9._-]+\.ts$/, /^\.\.\/plugin\/azdo-remote-config\.ts$/];
+const FORBIDDEN_INSTALLER_TOKENS = ["KILO_TEST_", "NODE_OPTIONS"];
 
 // Rules 5 and 6 (ADR-0010, ADR-0012): <folder>/*.ts may import only node:, sibling .ts files or the plugin file.
 function checkHelperDir(root, folder) {
@@ -41,6 +42,23 @@ function checkHelperDir(root, folder) {
       }
     }
     if (/\brequire\s*\(/.test(source)) errors.push(`require( is not allowed in ${folder}/${file}`);
+  }
+  return errors;
+}
+
+// Rule 7 (ADR-0013): no file directly in installer/ (raw text, comments included) may reference test switches.
+function checkInstallerSwitches(root) {
+  const errors = [];
+  const dir = join(root, "installer");
+  if (!existsSync(dir)) return errors;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const raw = readFileSync(join(dir, entry.name), "utf8");
+    for (const token of FORBIDDEN_INSTALLER_TOKENS) {
+      if (raw.includes(token)) {
+        errors.push(`forbidden test switch "${token}" in installer/${entry.name}`);
+      }
+    }
   }
   return errors;
 }
@@ -71,7 +89,12 @@ function check(root) {
     }
     if (/\brequire\s*\(/.test(source)) errors.push(`require( is not allowed in ${PLUGIN_FILE}`);
   }
-  return [...errors, ...checkHelperDir(root, "validator"), ...checkHelperDir(root, "installer")];
+  return [
+    ...errors,
+    ...checkHelperDir(root, "validator"),
+    ...checkHelperDir(root, "installer"),
+    ...checkInstallerSwitches(root),
+  ];
 }
 
 try {

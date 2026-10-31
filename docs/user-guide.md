@@ -6,7 +6,7 @@ The Kilo azdo-remote-config plugin is active. When Kilo starts it fetches one sh
 Azure DevOps, validates it, caches it, and merges it into your Kilo config. If anything fails, Kilo
 starts normally with your local config; the plugin never crashes Kilo.
 
-Also available: a [validator](#validating-the-shared-config-platform-engineers) for the shared config. Also available: a [personal config template](#personal-config-template-engineers). Also available: the [macOS/Linux installer](#installing-on-macos-and-linux-engineers). Not yet available (planned, see `factory/VISION.md`): the Windows installer (F-011), the post-install smoke test (F-019), key provisioning and the Azure Pipelines PR gate (F-008).
+Also available: a [validator](#validating-the-shared-config-platform-engineers) for the shared config. Also available: a [personal config template](#personal-config-template-engineers). Also available: the [macOS/Linux installer](#installing-on-macos-and-linux-engineers). Not yet available (planned, see `factory/VISION.md`): the Windows installer (F-011), key provisioning and the Azure Pipelines PR gate (F-008).
 
 Supported Kilo version range (pinned): `>=7.2.0 <8.0.0`.
 
@@ -287,8 +287,8 @@ That is expected: the validator is a gate for the shared config, not for persona
 
 ## Installing on macOS and Linux (engineers)
 
-`backend/installer/install.sh` sets up your machine in one command. The Windows installer (F-011) and
-the post-install smoke test (F-019) are still to come.
+`backend/installer/install.sh` sets up your machine in one command and then checks that it works with a smoke test. The Windows installer (F-011) is still to come;
+key provisioning is out of scope.
 
 ### Before you start
 - Node.js 22.18 or newer on your PATH.
@@ -312,6 +312,7 @@ KILO_BIFROST_KEY="sk-bf-..." bash backend/installer/install.sh --org contoso --p
 | `--path` | `KILO_AZDO_PATH` | `/kilo.jsonc` |
 | `--branch` | `KILO_AZDO_BRANCH` | `main` |
 | `--mode` (`defaults` or `enforce`) | `KILO_AZDO_MODE` | `defaults` |
+| `--no-smoke` | none | smoke test runs |
 
 A flag wins over the environment variable. Flags take their value as the next argument (`--org x`, not
 `--org=x`). `--help` prints usage. Your Bifrost virtual key is passed only through `KILO_BIFROST_KEY`;
@@ -339,6 +340,46 @@ Re-running is safe: unchanged files are not rewritten, and no backup is made whe
 | 1 | Prerequisite missing: Node.js (or too old), or no Azure DevOps credentials. Nothing written |
 | 2 | Usage or input error: unknown option, missing org/project/repo, rejected value, bad `KILO_BIFROST_KEY`, relative `XDG_CONFIG_HOME`. Nothing written |
 | 3 | Existing config or file system problem: `kilo.jsonc` is not valid JSONC, has an unexpected shape, or a target is a symlink; I/O error |
+| 4 | Installed, but the smoke test failed. The installation is kept and not changed |
+
+### Smoke test
+After a successful install, the installer runs two checks and prints one line each:
+
+```
+smoke azdo: pass
+smoke bifrost: pass
+```
+
+1. `azdo`: fetches the shared config from Azure DevOps the same way the plugin does (PAT, else `az` token) and parses it.
+2. `bifrost`: calls `GET <baseURL>/models` with your virtual key. The `baseURL` comes from the shared config and must be `https`; redirects are not followed.
+
+Each line is `pass`, `fail <code>` or `skipped <code>`. `skipped` never causes exit 4. Bifrost is skipped
+when `azdo` failed (`azdo-failed`), when your key is still the placeholder (`no-key`; the installer
+prints a hint to set `KILO_BIFROST_KEY` and re-run), or when the key is a `{env:...}` / `{file:...}`
+reference (`key-reference`). Each check waits at most `KILO_AZDO_TIMEOUT_MS` (default 5000 ms), so the
+test takes up to about twice that. The smoke test writes no file, and your key, PAT and tokens are never printed.
+
+Use `--no-smoke` on machines that cannot reach the network (it makes no request). Exit codes 1, 2 and 3 never run the smoke test.
+
+Troubleshooting by code (a `fail` or `skipped` code on the line):
+
+| Code | Check | Meaning and fix |
+|---|---|---|
+| `invalid-settings` | azdo | org, project, repo, path or branch was rejected; check the flags |
+| `auth-unavailable` | azdo | no PAT and no usable `az login`; set `AZDO_PAT` or run `az login` |
+| `timeout` | both | no answer in time; check VPN/network or raise `KILO_AZDO_TIMEOUT_MS` |
+| `http-<status>` | azdo | Azure DevOps answered with that status (401/403 credentials or scope, 404 wrong org/project/repo/path/branch) |
+| `<status>` (e.g. `401`) | bifrost | Bifrost answered with that status; 401 usually means a wrong or revoked virtual key; 3xx means a redirect, which is not followed |
+| `too-large` | both | response over 1 MiB |
+| `bad-response` | both | answer was not the expected JSON object |
+| `network` | both | connection or DNS failure |
+| `invalid-jsonc` | azdo | the shared config is not valid JSONC |
+| `invalid-shape` | azdo | the shared config root is not an object |
+| `no-base-url` | bifrost | shared config has no `provider.bifrost.options.baseURL` string |
+| `invalid-base-url` | bifrost | `baseURL` is not a URL, or has credentials, query or fragment |
+| `insecure-base-url` | bifrost | `baseURL` is not `https`; the key is never sent over plain http |
+| `invalid-key` | bifrost | key is too long or has characters outside printable ASCII |
+| `internal` | both | unexpected error |
 
 ## Example shared config
 

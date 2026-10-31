@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.10.0] - 2026-10-31
+
+### Added
+- F-019: bootstrap installer smoke test for `install.sh`.
+- F-019: documentation for the installer smoke test.
+
 ## [0.9.0] - 2026-10-31
 
 ### Added

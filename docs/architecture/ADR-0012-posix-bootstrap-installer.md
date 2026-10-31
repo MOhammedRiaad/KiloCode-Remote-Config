@@ -2,6 +2,8 @@
 - Status: accepted
 - Date: 2026-10-31
 - Cycle / item: cycle-0011 / F-010
+- Amended by: ADR-0013 (cycle-0013, F-019): smoke phase in the helper, `--no-smoke`, exit code 4,
+  optional `smoke` stdin record, FR-11 lint rule 7.
 
 ## Context
 

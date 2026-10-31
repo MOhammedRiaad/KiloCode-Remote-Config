@@ -70,8 +70,8 @@ the repository. `backend/installer/install.sh` (F-010) copies this file to `~/.c
 ## Installer tests and lint rule 6
 The macOS/Linux installer (`backend/installer/`: `install.sh`, `install-helper.ts`,
 `personal-config-edit.ts`; contract `docs/architecture/contracts/installer-cli.md`, ADR-0012) is tested
-by `backend/test/installer/` (`install-sh.test.ts`, `personal-config-edit.test.ts`, shared
-`helpers.ts`). They run with `npm test`; to run only these:
+by `backend/test/installer/` (`install-sh.test.ts`, `personal-config-edit.test.ts`, `smoke.test.ts`,
+`install-smoke.test.ts`, shared `helpers.ts`). They run with `npm test`; to run only these:
 
 ```bash
 cd backend
@@ -83,6 +83,16 @@ do not touch your real config. Tests that check POSIX file modes or symlinks ski
 Windows (`process.platform === "win32"`); the rest run under Git Bash.
 `npm run lint` has a sixth rule: files in `backend/installer/` may import only `node:` built-ins,
 sibling `.ts` files or the plugin file.
+
+The smoke test (F-019, `backend/installer/smoke.ts`, ADR-0013, contract section 9) is tested without real
+network. `backend/test/installer/fixtures/fake-network.ts` is a test-only Node preload (`--import`) that
+replaces `globalThis.fetch` with a deterministic fake. It reads a JSON scenario file named by
+`KILO_TEST_FAKE_NET` (answers for `azdo` and `bifrost`, plus an optional request `log`); without a
+scenario it denies every call. `smoke.test.ts` covers the smoke module; `install-smoke.test.ts` runs
+`install.sh` end to end (exit codes, output lines, no leaks, installation unchanged on failure). The
+other installer tests pass `--no-smoke`.
+Lint rule 7 (`check-fr11.mjs`, ADR-0013) forbids any file directly in `backend/installer/` from
+mentioning test switches such as the fake-network preload, so product code can never enable it.
 
 ## Layout
 ```

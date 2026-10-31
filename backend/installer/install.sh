@@ -6,14 +6,16 @@ set -euo pipefail
 
 usage() {
   printf '%s\n' \
-    'Usage: install.sh --org <org> --project <project> --repo <repo> [--path <path>] [--branch <branch>] [--mode defaults|enforce]' \
+    'Usage: install.sh --org <org> --project <project> --repo <repo> [--path <path>] [--branch <branch>] [--mode defaults|enforce] [--no-smoke]' \
     '       install.sh --help' \
     '' \
     'Installs the Azure DevOps remote-config plugin and your personal Kilo config.' \
     'Inputs can also come from KILO_AZDO_ORG, KILO_AZDO_PROJECT, KILO_AZDO_REPO,' \
     'KILO_AZDO_PATH, KILO_AZDO_BRANCH and KILO_AZDO_MODE (flags win).' \
     'Your Bifrost virtual key is read from KILO_BIFROST_KEY (there is no flag for it).' \
-    'Requires Node.js 22.18 or later and either `az login` or AZDO_PAT.'
+    'After installing, a smoke test reads the shared config from Azure DevOps and calls Bifrost GET <baseURL>/models; --no-smoke skips it.' \
+    'Requires Node.js 22.18 or later and either `az login` or AZDO_PAT.' \
+    'Exit codes: 0 ok, 1 prerequisite, 2 usage, 3 file system, 4 installed but smoke test failed.'
 }
 
 usage_error() {
@@ -37,6 +39,7 @@ f_repo=''
 f_path=''
 f_branch=''
 f_mode=''
+smoke=on
 while [ "$#" -gt 0 ]; do
   case $1 in
     --org | --project | --repo | --path | --branch | --mode)
@@ -50,6 +53,10 @@ while [ "$#" -gt 0 ]; do
         --mode) f_mode=$2 ;;
       esac
       shift 2
+      ;;
+    --no-smoke)
+      smoke=off
+      shift
       ;;
     *)
       usage_error 'unknown option or argument.'
@@ -131,4 +138,4 @@ case $src in
 esac
 script_dir=$(cd "$script_dir" && pwd)
 
-printf '%s\0' "org=$org" "project=$project" "repo=$repo" "path=$path" "branch=$branch" "mode=$mode" "apiKey=${KILO_BIFROST_KEY:-}" | node "$script_dir/install-helper.ts"
+printf '%s\0' "org=$org" "project=$project" "repo=$repo" "path=$path" "branch=$branch" "mode=$mode" "apiKey=${KILO_BIFROST_KEY:-}" "smoke=$smoke" | node "$script_dir/install-helper.ts"

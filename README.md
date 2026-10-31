@@ -46,7 +46,7 @@ resolves the settings, fetches the shared `kilo.jsonc` from Azure DevOps, valida
 falls back to the cache when the fetch fails, merges it into Kilo's config, and logs fixed
 messages. It never throws: on any failure Kilo continues with your local config. The macOS/Linux
 installer (`backend/installer/install.sh`, F-010) sets up an engineer's machine. Not built yet: the
-Windows installer (F-011), the post-install smoke test (F-019) and key provisioning. On Windows, copy
+Windows installer (F-011) and key provisioning (out of scope for the installer). On Windows, copy
 the personal config template by hand until F-011 exists.
 
 ### Features shipped so far
@@ -61,7 +61,7 @@ the personal config template by hand until F-011 exists.
 - Shared config validator: `node backend/validator/validate-kilo-config.ts [--allowed-hosts <list>] <file>...` checks a `kilo.jsonc` for secrets, `apiKey`, wrong types, unsafe keys and (optionally) allowed gateway hosts. Exit codes 0 (ok), 1 (errors found), 2 (usage/I/O/internal). See the [user guide](docs/user-guide.md#validating-the-shared-config-platform-engineers). The Azure Pipelines PR gate that runs it comes with F-008.
 - Example shared config: `backend/shared-config/kilo.jsonc` (Bifrost provider, no `apiKey`).
 - Personal config template: `backend/personal-config/kilo.jsonc`, the engineer's own config. It has one plugin entry (`org`, `project`, `repo`, `path`, `branch`, `mode`; no `pat`) and a `provider.bifrost.options.apiKey` placeholder (`sk-bf-<your-virtual-key>`). Copy it to `~/.config/kilo/kilo.jsonc` only, never into a project directory. See the [user guide](docs/user-guide.md#personal-config-template-engineers). `install.sh` automates the copy on macOS/Linux (below); the Windows installer (F-011) is not built yet.
-- Bootstrap installer for macOS/Linux: `bash backend/installer/install.sh --org <org> --project <project> --repo <repo>` copies the plugin to `~/.config/kilo/azdo/` and creates or updates `~/.config/kilo/kilo.jsonc` (mode 0600). Idempotent; set `KILO_BIFROST_KEY` to write your virtual key. Exit codes 0/1/2/3. See the [user guide](docs/user-guide.md#installing-on-macos-and-linux-engineers).
+- Bootstrap installer for macOS/Linux: `bash backend/installer/install.sh --org <org> --project <project> --repo <repo>` copies the plugin to `~/.config/kilo/azdo/` and creates or updates `~/.config/kilo/kilo.jsonc` (mode 0600). Idempotent; set `KILO_BIFROST_KEY` to write your virtual key. Exit codes 0/1/2/3/4. After installing it runs a smoke test (Azure DevOps shared-config fetch, then Bifrost `GET <baseURL>/models`); exit 4 means installed but the smoke test failed; `--no-smoke` skips it. See the [user guide](docs/user-guide.md#installing-on-macos-and-linux-engineers).
 - Lint that enforces the FR-11 constraints (single file, zero npm runtime dependencies).
 - Strict TypeScript type-check and a `node:test` test suite.
 - One quality gate, `scripts/ci.sh`, used locally and in GitHub Actions.

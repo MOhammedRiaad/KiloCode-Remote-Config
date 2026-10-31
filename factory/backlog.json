@@ -460,7 +460,7 @@
       "title": "Bootstrap installer smoke test (install.sh)",
       "type": "feature",
       "priority": 2,
-      "status": "todo",
+      "status": "done",
       "scope": {
         "backend": true,
         "frontend": false
@@ -468,14 +468,19 @@
       "depends_on": [
         "F-010"
       ],
-      "description": "FR-22, split out of F-010 in cycle 0011. After installing, install.sh fetches the shared file through the Azure DevOps Git Items API (PAT or az token, same rules as FR-3) and calls Bifrost `/v1/models` with the engineer's key (base URL taken from the fetched shared config), then reports pass or fail per check. A failed smoke test must not undo the installation. Tests use local fake HTTP servers; the key, PAT and token are never printed.",
+      "description": "FR-22 / AC-10 (simulated), split out of F-010 in cycle 0011. After a successful install (exit 0 path of contract installer-cli 1.0.0), install.sh runs a smoke test with two checks: (1) `azdo`: fetch the shared file with the plugin's own `__internals.fetchRemoteConfig` (same URL, PAT/az-token rules and fixed error codes as FR-2/FR-3; no second HTTP/auth implementation) and parse it with `__internals.parseJsonc`; (2) `bifrost`: GET `<provider.bifrost.options.baseURL>/models` (baseURL from the fetched shared config, trailing slash normalised; with the Appendix A value this is `https://bifrost.yourcompany.internal/v1/models`) with `Authorization: Bearer <apiKey>` where apiKey is the value now in the personal config. PO decisions (conservative): the key is never sent over non-https, so a non-https or unparseable baseURL makes the bifrost check fail with a fixed code without any request; when the personal config still holds the template placeholder `sk-bf-<your-virtual-key>` (no key set) the bifrost check reports `skipped` with a message to set KILO_BIFROST_KEY and sends nothing; when the azdo check fails the bifrost check is `skipped`. Each request is bounded by the plugin timeout (settings.timeoutMs, default 5000 ms) and response bodies are capped (1 MiB). Exit codes (contract amendment, Architect records it): 0 = installed and every check passed or was skipped; 4 = installed but at least one smoke check failed; a failed smoke test NEVER undoes or modifies the installation. A `--no-smoke` flag skips the smoke test (for offline machines and for the existing F-010 installer tests, which must not touch the network). Output is one line per check: `smoke <check>: pass|fail|skipped [<fixed code or HTTP status>]`. Test seam (Architect decides; PO suggestion): the smoke logic lives in a pure module under backend/installer/ with injectable fetch/runAz/env, unit-tested with fakes, plus child-process tests of install.sh that replace globalThis.fetch via a test-only preload (e.g. NODE_OPTIONS=--import <fixture>) or local fake HTTP servers; no product-level option may redirect the AzDO host or relax the https rule. Tests never touch the real network, az, Kilo or home directory. The plugin file and its export surface, the validator rules and the personal config template are unchanged. Zero runtime npm deps (FR-11).",
       "acceptance_criteria": [
-        "Given fake AzDO and Bifrost servers that both succeed, When install.sh runs its smoke test, Then it reports pass for both checks and exits 0.",
-        "Given the fake Bifrost returns 401 or the fake AzDO returns 404, When the smoke test runs, Then the failing check is reported as fail with the HTTP status, and installed files are kept.",
-        "Given any smoke test run, When stdout/stderr are captured, Then neither the virtual key, the PAT nor the az token appears."
+        "Given a temp HOME, valid org/project/repo, AZDO_PAT set, KILO_BIFROST_KEY set, a fake AzDO Items API returning the shipped example shared config (backend/shared-config/kilo.jsonc) and a fake Bifrost returning 200 for GET /v1/models, When install.sh runs, Then it exits 0, prints `smoke azdo: pass` and `smoke bifrost: pass`, the AzDO request was made via the plugin's fetchRemoteConfig URL rules (dev.azure.com Items API, api-version=7.1, the configured path/branch), and exactly one Bifrost request was sent to `https://bifrost.yourcompany.internal/v1/models` carrying `Authorization: Bearer <KILO_BIFROST_KEY>`.",
+        "Given the fake Bifrost returns 401 (AC-10, simulated) or the fake AzDO returns 404, When install.sh runs, Then the failing check prints `fail` with the HTTP status (e.g. `smoke bifrost: fail 401`, `smoke azdo: fail http-404`), when azdo fails the bifrost check is reported `skipped` and no Bifrost request is sent, the script exits 4, and the personal config and plugin file are byte-identical to those of a successful run with the same inputs (installation is not undone).",
+        "Given a fetch that never responds, or a fetched shared file that is invalid JSONC, has no string provider.bifrost.options.baseURL, or has an `http://` or unparseable baseURL, When the smoke test runs, Then the relevant check fails with a fixed code (e.g. timeout, invalid-jsonc, no-base-url, insecure-base-url) within a bounded time (timeoutMs), no request carrying the virtual key is sent to a non-https URL, and the script exits 4.",
+        "Given a fresh HOME with KILO_BIFROST_KEY unset (personal config holds the placeholder `sk-bf-<your-virtual-key>`), When install.sh runs with succeeding fakes, Then the bifrost check is reported `skipped` with a message telling the engineer to set KILO_BIFROST_KEY, no Bifrost request is sent, and the script exits 0; and Given an existing personal config with apiKey `sk-bf-existing` and KILO_BIFROST_KEY unset, Then the Bifrost request carries `Bearer sk-bf-existing`.",
+        "Given no PAT from any source and a stub az that returns a token, When the smoke test runs, Then the AzDO request carries `Authorization: Bearer <token>` (same rules as FR-3 through fetchRemoteConfig) and the Bifrost request carries only the virtual key, never the az token or PAT.",
+        "Given smoke test runs on the success, 401, 404, timeout and exception paths with KILO_BIFROST_KEY `sk-bf-AbCdEf1234567890`, AZDO_PAT and an az token set to sentinel values, When the full stdout and stderr are captured, Then none of those values (nor the base64 Basic credential) appears, and no error message text from fetch or the response body is echoed.",
+        "Given `--no-smoke`, When install.sh runs, Then no HTTP request and no az token call for the smoke test is made, no `smoke` line is printed and the exit code follows the F-010 contract; and Given an install that fails before writing (exit 1, 2 or 3), Then the smoke test does not run.",
+        "Given the repository after the change, When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0, runs the new smoke-test tests and the existing F-010 installer tests (which make no real network call), backend/package.json has no runtime `dependencies`, backend/plugin/azdo-remote-config.ts and backend/personal-config/kilo.jsonc are unchanged, and docs/architecture/contracts/installer-cli.md documents the smoke test output, exit code 4 and `--no-smoke`."
       ],
       "source": "po",
-      "cycle_done": null
+      "cycle_done": 13
     },
     {
       "id": "T-002",
@@ -871,6 +876,28 @@
         "Given an sk-bf- prefixed KILO_BIFROST_KEY, When the installer runs, Then the key appears in no stdout/stderr."
       ],
       "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-020",
+      "title": "Smoke test and lint follow-ups",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-019"
+      ],
+      "description": "Cycle 0013 review/security follow-ups: (review low 1) install-smoke.test.ts:282-293 AC-6 leak loop should also assert the exit code, the expected smoke line and assertLoaded(sb) per scenario; (review low 2) remove or test MAX_EMPTY_CHUNKS in installer/smoke.ts (not in the design); (review info 3) add child-process tests for `--org --no-smoke` (flag takes it as value) and repeated --no-smoke; (security/review info) make FR-11 lint rules 5-7 scan subfolders of validator/ and installer/ (also covers T-002); add a global test preload or lint rule that blocks real fetch/child_process execFile in backend/test/**.",
+      "acceptance_criteria": [
+        "Given each AC-6 scenario, When the leak test runs, Then it also asserts the exit code, smoke line and that the fake network loaded.",
+        "Given a file in an installer/ or validator/ subfolder importing a forbidden module, When check-fr11 runs, Then it exits non-zero.",
+        "Given a test that calls real fetch or execFile, When the suite runs, Then it fails."
+      ],
+      "source": "review",
       "cycle_done": null
     }
   ]

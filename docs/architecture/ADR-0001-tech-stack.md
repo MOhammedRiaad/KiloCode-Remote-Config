@@ -66,6 +66,9 @@ This keeps the file self-contained (FR-11) and type-checkable without a Kilo dep
   6. (since F-010, ADR-0012) the same allow-list and `require(` ban for every `.ts` file directly
      in `installer/` (skipped when `installer/` does not exist). `.sh` files are not checked by
      this tool; `install.sh` must use only bash builtins plus `node` and `az` (ADR-0012).
+  7. (since F-019, ADR-0013) no file directly in `installer/` (`.ts` and `.sh`, comments
+     included) contains the text `KILO_TEST_` or `NODE_OPTIONS`: product installer code has no
+     test switch and does not touch the test preload seam (skipped when `installer/` does not exist).
   It exits non-zero with a clear message on any violation.
 - `tsconfig.json` `include` covers `plugin/**/*.ts`, `validator/**/*.ts`, `installer/**/*.ts`
   (since F-010) and `test/**/*.ts`.

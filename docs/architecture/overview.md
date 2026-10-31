@@ -1,11 +1,11 @@
 # Architecture overview - Kilo Shared Config
 
-Last updated: cycle-0011 (F-010). Stack: ADR-0001. Plugin module shape: ADR-0002.
+Last updated: cycle-0013 (F-019). Stack: ADR-0001. Plugin module shape: ADR-0002.
 JSONC parser: ADR-0003. Placeholder resolution: ADR-0004. Config merge: ADR-0005.
 Settings resolution: ADR-0006. Azure DevOps fetch and auth: ADR-0007.
 Hook wiring, cache, logging, never-crash: ADR-0008. Trust boundary: ADR-0009.
 Shared config validator: ADR-0010. Personal config template: ADR-0011.
-POSIX bootstrap installer: ADR-0012.
+POSIX bootstrap installer: ADR-0012. Installer smoke test: ADR-0013.
 Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`,
 `contracts/personal-config-template.md`, `contracts/installer-cli.md`.
 
@@ -17,7 +17,7 @@ Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`,
 | C2 | Remote config plugin (single file, FR-11) | `backend/plugin/azdo-remote-config.ts` | `~/.config/kilo/azdo/azdo-remote-config.ts` | **stub (T-001) + JSONC parser (F-001) + placeholder resolver (F-002) + merge (F-003) + settings resolution (F-004) + AzDO fetch/auth (F-005) + hook wiring, cache, fallback, logging (F-006)** |
 | C3 | Personal config template | `backend/personal-config/kilo.jsonc` | `~/.config/kilo/kilo.jsonc` | **template + tests (F-009)**; copied by installers (F-010/F-011) |
 | C4 | Bifrost gateway | external, not in repo | - | external |
-| C5 | Bootstrap installer | `backend/installer/` (`install.sh` + `install-helper.ts` + `personal-config-edit.ts`; `install.ps1` later) | engineer runs it from a checkout that keeps `installer/`, `plugin/`, `personal-config/` side by side | **install.sh (F-010, ADR-0012)**; smoke test F-019; Windows F-011 |
+| C5 | Bootstrap installer | `backend/installer/` (`install.sh` + `install-helper.ts` + `personal-config-edit.ts` + `smoke.ts`; `install.ps1` later) | engineer runs it from a checkout that keeps `installer/`, `plugin/`, `personal-config/` side by side | **install.sh (F-010, ADR-0012) + smoke test (F-019, ADR-0013)**; Windows F-011 |
 | C6 | Key provisioning | `backend/provisioning/` | platform-team tooling | planned |
 
 There is no frontend and no server process. `frontend/` is intentionally absent.
@@ -57,11 +57,11 @@ Every step of C2 is wrapped so no failure can stop Kilo (FR-10).
 ## Data flow (bootstrap install, C5; ADR-0012, `contracts/installer-cli.md`)
 
 ```
-bash installer/install.sh --org O --project P --repo R [--path --branch --mode]   (KILO_BIFROST_KEY env)
+bash installer/install.sh --org O --project P --repo R [--path --branch --mode] [--no-smoke]   (KILO_BIFROST_KEY env)
   install.sh (bash builtins + node + az only, writes nothing):
     parse flags > KILO_AZDO_* env > defaults; missing org/project/repo -> exit 2
     prereqs: node >= 22.18; AZDO_PAT|AZURE_DEVOPS_EXT_PAT|KILO_AZDO_PAT set, else az account show -> exit 1
-    printf "%s\0" org=.. project=.. repo=.. path=.. branch=.. mode=.. apiKey=.. | node installer/install-helper.ts
+    printf "%s\0" org=.. project=.. repo=.. path=.. branch=.. mode=.. apiKey=.. smoke=on|off | node installer/install-helper.ts
   install-helper.ts (Node, imports plugin __internals.parseJsonc / resolveSettings):
     read-only phase: validate records + values, configDir = $XDG_CONFIG_HOME/kilo | homedir/.config/kilo,
       lstat targets, read plugin + template + existing kilo.jsonc (<= 1 MiB, parseJsonc, root object),
@@ -69,6 +69,12 @@ bash installer/install.sh --org O --project P --repo R [--path --branch --mode] 
     write phase: mkdir 0700, copy plugin -> configDir/azdo/azdo-remote-config.ts (only if bytes differ),
       backup kilo.jsonc.bak-<UTC ts> (wx, 0600, byte-identical), write kilo.jsonc (tmp wx 0600 + rename)
     never writes configDir/plugin(s)/ (AC-12); never prints key / PAT / file content
+    smoke phase (smoke=on, after a successful write; installer/smoke.ts; ADR-0013):
+      azdo:    __internals.resolveSettings(values, {env: PAT vars + KILO_AZDO_TIMEOUT_MS only})
+               -> __internals.fetchRemoteConfig (fixed host, PAT|az token, deadline, 1 MiB) -> parseJsonc
+      bifrost: shared provider.bifrost.options.baseURL, https only -> GET <baseURL>/models,
+               Bearer <effective apiKey>, redirect manual, timeoutMs, 1 MiB, JSON object body
+      prints "smoke azdo|bifrost: pass|fail <code>|skipped <code>"; any fail -> exit 4 (install kept)
 ```
 
 ## Data flow (PR gate, shared config repo C1; ADR-0010, `contracts/validator-cli.md`)
@@ -116,14 +122,18 @@ backend/                     # the only package (ADR-0001 section 7)
   personal-config/kilo.jsonc  # C3 template, copied to ~/.config/kilo/kilo.jsonc (F-009, ADR-0011)
   validator/                  # F-007: validate-kilo-config.ts (CLI), kilo-config-rules.ts (lib),
                               #        kilo-schema-subset.json (vendored, pinned to SUPPORTED_KILO_RANGE)
-  tools/check-fr11.mjs        # FR-11 guard + validator import guard (rule 5)
+  tools/check-fr11.mjs        # FR-11 guard + import guards (rules 5, 6) + no test switches in installer/ (rule 7)
   test/plugin/*.test.ts       # jsonc, placeholders, merge, settings, fetch, hook, smoke
   test/validator/*.test.ts    # rules (lib), cli (child process), schema subset, example config
   test/personal-config/*.test.ts  # template checks via plugin __internals + validator library (F-009)
   test/tools/check-fr11.test.ts
   installer/                  # F-010: install.sh (bash front end), install-helper.ts (Node I/O CLI),
                               #        personal-config-edit.ts (pure edit rules) - ADR-0012
+                              # F-019: smoke.ts (azdo + bifrost checks, injectable deps) - ADR-0013
   test/installer/*.test.ts    # edit rules (unit) + install.sh in child bash with temp HOME, stub az (F-010)
+                              # + smoke unit tests and install.sh smoke tests (F-019)
+  test/installer/fixtures/fake-network.ts  # TEST ONLY: --import preload replacing globalThis.fetch
+                              # (loaded via NODE_OPTIONS by tests; never imported by product code)
   provisioning/               # created by a later item
 docs/architecture/           # this folder: overview, ADRs, contracts
 factory/                     # backlog, state, run reports

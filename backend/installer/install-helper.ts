@@ -25,10 +25,12 @@ import {
   validateInputs,
 } from "./personal-config-edit.ts";
 import type { UpdateErrorCode, Values } from "./personal-config-edit.ts";
+import { formatSmoke, pickSmokeEnv, runSmoke, smokeFailed } from "./smoke.ts";
 
 const MAX_STDIN = 64 * 1024;
 const MAX_CONFIG = 1024 * 1024;
 const RECORD_NAMES = ["org", "project", "repo", "path", "branch", "mode", "apiKey"];
+const OPTIONAL_RECORDS = ["smoke"];
 const OTHER_CONFIGS = ["kilo.json", "opencode.json", "opencode.jsonc", "config.json"];
 const IS_WINDOWS = process.platform === "win32";
 
@@ -76,10 +78,15 @@ function parseRecords(text: string): Record<string, string> {
     const eq = record.indexOf("=");
     if (eq === -1) throw badHelperInput();
     const name = record.slice(0, eq);
-    if (!RECORD_NAMES.includes(name) || Object.hasOwn(records, name)) throw badHelperInput();
+    if ((!RECORD_NAMES.includes(name) && !OPTIONAL_RECORDS.includes(name)) || Object.hasOwn(records, name)) {
+      throw badHelperInput();
+    }
     records[name] = record.slice(eq + 1);
   }
   if (!RECORD_NAMES.every((name) => Object.hasOwn(records, name))) throw badHelperInput();
+  if (Object.hasOwn(records, "smoke") && records["smoke"] !== "on" && records["smoke"] !== "off") {
+    throw badHelperInput();
+  }
   return records;
 }
 
@@ -168,6 +175,7 @@ interface Plan {
   configExistingMode: number;
   configText: string | null;
   isFreshConfig: boolean;
+  effectiveApiKey: unknown;
   droppedOptions: string[];
   needsKeyHint: boolean;
   warnings: string[];
@@ -243,8 +251,10 @@ function planConfig(plan: Plan, values: Values, apiKey: string | undefined): voi
     } catch {
       throw failure("internal error (personal config template does not match the installer).");
     }
+    const effectiveKey = apiKey ?? PLACEHOLDER_KEY;
     plan.isFreshConfig = true;
-    plan.needsKeyHint = (apiKey ?? PLACEHOLDER_KEY) === PLACEHOLDER_KEY;
+    plan.effectiveApiKey = effectiveKey;
+    plan.needsKeyHint = effectiveKey === PLACEHOLDER_KEY;
     return;
   }
   plan.configExisting = readBounded(plan.configPath, existingStat);
@@ -252,8 +262,10 @@ function planConfig(plan: Plan, values: Values, apiKey: string | undefined): voi
   const existing = parseExisting(plan.configPath, plan.configExisting);
   const update = planUpdate(existing, values, apiKey);
   if (!update.ok) throw failure(`${plan.configPath}: ${UPDATE_MESSAGES[update.error]}`);
+  const effectiveKey = storedApiKey(update.result);
   plan.droppedOptions = update.droppedOptions;
-  plan.needsKeyHint = storedApiKey(update.result) === PLACEHOLDER_KEY;
+  plan.effectiveApiKey = effectiveKey;
+  plan.needsKeyHint = effectiveKey === PLACEHOLDER_KEY;
   plan.configText = update.changed ? renderUpdated(update.result) : null;
 }
 
@@ -271,6 +283,7 @@ function buildPlan(values: Values, apiKey: string | undefined): Plan {
     configExistingMode: 0o600,
     configText: null,
     isFreshConfig: false,
+    effectiveApiKey: PLACEHOLDER_KEY,
     droppedOptions: [],
     needsKeyHint: false,
     warnings: [],
@@ -345,6 +358,22 @@ async function run(): Promise<void> {
     console.log(
       `Set your Bifrost virtual key: re-run with KILO_BIFROST_KEY set, or edit provider.bifrost.options.apiKey in ${plan.configPath}.`,
     );
+  }
+  if (records["smoke"] === "on") {
+    let failed = true;
+    try {
+      const report = await runSmoke(validated.values, plan.effectiveApiKey, { env: pickSmokeEnv(process.env) });
+      for (const line of formatSmoke(report)) console.log(line);
+      failed = smokeFailed(report);
+    } catch {
+      failed = true;
+    }
+    console.log("Done.");
+    if (failed) {
+      console.error("install.sh: error: smoke test failed; the installation was kept.");
+      process.exitCode = 4;
+    }
+    return;
   }
   console.log("Done.");
 }

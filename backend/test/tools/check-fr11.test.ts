@@ -13,7 +13,14 @@ function run(args: string[] = []) {
   return spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
 }
 
-function fixture(opts: { deps?: Record<string, string>; plugin?: string; extra?: string; validator?: string; installer?: string }) {
+function fixture(opts: {
+  deps?: Record<string, string>;
+  plugin?: string;
+  extra?: string;
+  validator?: string;
+  installer?: string;
+  installerFiles?: Record<string, string>;
+}) {
   const root = mkdtempSync(join(tmpdir(), "fr11-"));
   mkdirSync(join(root, "plugin"));
   writeFileSync(join(root, "package.json"), JSON.stringify({ dependencies: opts.deps ?? {} }));
@@ -24,8 +31,14 @@ function fixture(opts: { deps?: Record<string, string>; plugin?: string; extra?:
     writeFileSync(join(root, "validator", "x.ts"), opts.validator);
   }
   if (opts.installer !== undefined) {
-    mkdirSync(join(root, "installer"));
+    mkdirSync(join(root, "installer"), { recursive: true });
     writeFileSync(join(root, "installer", "x.ts"), opts.installer);
+  }
+  if (opts.installerFiles !== undefined) {
+    mkdirSync(join(root, "installer"), { recursive: true });
+    for (const [name, content] of Object.entries(opts.installerFiles)) {
+      writeFileSync(join(root, "installer", name), content);
+    }
   }
   return root;
 }
@@ -134,4 +147,16 @@ test("installer: require fails", () => {
 test("installer: missing folder passes", () => {
   const r = runOn({});
   assert.equal(r.status, 0, r.stderr);
+});
+
+test("installer: rule 7 rejects KILO_TEST_ in installer/x.ts (including comments)", () => {
+  const r = runOn({ installerFiles: { "x.ts": "// KILO_TEST_URL\nexport {};\n" } });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /forbidden test switch "KILO_TEST_" in installer\/x\.ts/);
+});
+
+test("installer: rule 7 rejects NODE_OPTIONS in installer/x.sh (including comments)", () => {
+  const r = runOn({ installerFiles: { "x.sh": "#!/bin/sh\n# NODE_OPTIONS seam\n" } });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /forbidden test switch "NODE_OPTIONS" in installer\/x\.sh/);
 });
