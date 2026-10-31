@@ -429,7 +429,7 @@
       "title": "Per-team config files support",
       "type": "feature",
       "priority": 4,
-      "status": "todo",
+      "status": "blocked",
       "scope": {
         "backend": true,
         "frontend": false
@@ -445,7 +445,8 @@
         "Given a team file with an apiKey, When the pipeline validator runs over teams/*, Then it fails."
       ],
       "source": "vision",
-      "cycle_done": null
+      "cycle_done": null,
+      "notes": "SKIPPED by user instruction (cycle 0017): do not select. Per-team config files are out of scope for now. Reinstate by setting status back to todo. Architect draft (if any) is in git stash 'F-015 architect draft'."
     },
     {
       "id": "F-016",
@@ -460,7 +461,7 @@
       "depends_on": [
         "F-010"
       ],
-      "description": "Engineer setup guide, platform-team runbook (config change, key provisioning, offboarding), KILO_PURE caveat, supported Kilo version range, Phase 0 assumptions A1-A3 checklist. User decision (cycle 0012): F-012/F-013 are skipped, so treat the F-013 dependency as waived and omit key-provisioning/offboarding runbook content. Cycle 0013 architect follow-up: document installer exit code 4, --no-smoke (and the Windows equivalent once F-011 ships) and each smoke fixed code with what to do. Cycle 0014: also document install.ps1 ExecutionPolicy/Unblock-File guidance (already in the user guide), the 'Rewritten by install.sh' header note, and Windows ACL residual risk. Cycle 0015: the platform runbook should cover setting up the C1 repo, the PR pipeline and the branch-policy script from F-008 (if shipped by then). Cycle 0015 security: runbook should tell platform engineers to restrict the 'Bypass policies' and 'Edit policies' permissions on the shared config repo (a PR can alter its own gate). Cycle 0016: fold the manual Phase 0 checklist from docs/development.md ('What stays manual (Phase 0)': real Kilo CLI /models and VS Code model list against real AzDO + Bifrost, Kilo's own loading of the .ts plugin and path resolution, disabled key rejected at request time) into the platform runbook. Also note the repo now has a GitHub origin; document the PR/branch flow if the factory moves to remote mode.",
+      "description": "Engineer setup guide, platform-team runbook (config change, key provisioning, offboarding), KILO_PURE caveat, supported Kilo version range, Phase 0 assumptions A1-A3 checklist. User decision (cycle 0012): F-012/F-013 are skipped, so treat the F-013 dependency as waived and omit key-provisioning/offboarding runbook content. Cycle 0013 architect follow-up: document installer exit code 4, --no-smoke (and the Windows equivalent once F-011 ships) and each smoke fixed code with what to do. Cycle 0014: also document install.ps1 ExecutionPolicy/Unblock-File guidance (already in the user guide), the 'Rewritten by install.sh' header note, and Windows ACL residual risk. Cycle 0015: the platform runbook should cover setting up the C1 repo, the PR pipeline and the branch-policy script from F-008 (if shipped by then). Cycle 0015 security: runbook should tell platform engineers to restrict the 'Bypass policies' and 'Edit policies' permissions on the shared config repo (a PR can alter its own gate). Cycle 0016: fold the manual Phase 0 checklist from docs/development.md ('What stays manual (Phase 0)': real Kilo CLI /models and VS Code model list against real AzDO + Bifrost, Kilo's own loading of the .ts plugin and path resolution, disabled key rejected at request time) into the platform runbook. Also note the repo now has a GitHub origin; document the PR/branch flow if the factory moves to remote mode. User decision (cycle 0017): F-015 (per-team files) is SKIPPED too - do not document per-team files as a feature; the generic `path` option may be mentioned only as the existing plugin/installer setting.",
       "acceptance_criteria": [
         "Given docs/, When an automated check runs, Then engineer setup, platform runbook and troubleshooting pages exist and link to each other.",
         "Given the troubleshooting page, When checked, Then it mentions KILO_PURE=1, az login and the cache location.",

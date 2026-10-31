@@ -1,6 +1,6 @@
 {
   "status": "running",
-  "cycle": 16,
+  "cycle": 17,
   "max_cycles": 50,
   "phase": "idle",
   "current_item": null,
@@ -115,6 +115,13 @@
       "result": "released",
       "version": "v0.13.0",
       "rework": 0
+    },
+    {
+      "cycle": 17,
+      "item": "F-015",
+      "result": "abandoned",
+      "phase": "architect",
+      "note": "skipped by user request"
     }
   ]
 }
