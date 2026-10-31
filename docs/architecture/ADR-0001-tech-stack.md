@@ -63,7 +63,12 @@ This keeps the file self-contained (FR-11) and type-checkable without a Kilo dep
   5. (since F-007, ADR-0010) every `.ts` file directly in `validator/` imports only `node:`
      built-ins, `./<name>.ts` siblings or exactly `../plugin/azdo-remote-config.ts`, and does
      not contain `require(` (skipped when `validator/` does not exist).
+  6. (since F-010, ADR-0012) the same allow-list and `require(` ban for every `.ts` file directly
+     in `installer/` (skipped when `installer/` does not exist). `.sh` files are not checked by
+     this tool; `install.sh` must use only bash builtins plus `node` and `az` (ADR-0012).
   It exits non-zero with a clear message on any violation.
+- `tsconfig.json` `include` covers `plugin/**/*.ts`, `validator/**/*.ts`, `installer/**/*.ts`
+  (since F-010) and `test/**/*.ts`.
 
 ### 4. Dev dependencies (the only npm packages allowed in `backend/`)
 
@@ -113,7 +118,7 @@ backend/
     azdo-remote-config.ts # C2 - THE single shipped plugin file (FR-11)
   validator/              # C1 PR-gate tooling (later items: F-0xx validator)
   templates/              # C3 personal config template (later items)
-  installer/              # C5 install.ps1 / install.sh (later items)
+  installer/              # C5 install.sh + install-helper.ts + personal-config-edit.ts (F-010, ADR-0012); install.ps1 (F-011)
   provisioning/           # C6 Bifrost key provisioning (later items)
   tools/
     check-fr11.mjs        # lint: FR-11 guard rails

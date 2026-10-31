@@ -44,8 +44,10 @@ The full vision is in [`factory/VISION.md`](factory/VISION.md); the stack is rec
 The plugin is wired and active. At startup Kilo calls its `config` hook (`runConfigHook`), which
 resolves the settings, fetches the shared `kilo.jsonc` from Azure DevOps, validates it, caches it,
 falls back to the cache when the fetch fails, merges it into Kilo's config, and logs fixed
-messages. It never throws: on any failure Kilo continues with your local config. Not built yet:
-installers (F-010, F-011) and key provisioning; until the installers exist, you copy the personal config template by hand.
+messages. It never throws: on any failure Kilo continues with your local config. The macOS/Linux
+installer (`backend/installer/install.sh`, F-010) sets up an engineer's machine. Not built yet: the
+Windows installer (F-011), the post-install smoke test (F-019) and key provisioning. On Windows, copy
+the personal config template by hand until F-011 exists.
 
 ### Features shipped so far
 - `backend/plugin/azdo-remote-config.ts`: the plugin (Kilo v1 module shape, supported Kilo range `>=7.2.0 <8.0.0`). Its `config` hook loads and merges the shared config; `server` itself does no I/O.
@@ -58,7 +60,8 @@ installers (F-010, F-011) and key provisioning; until the installers exist, you 
 - Internal helpers (`parseJsonc`, `resolvePlaceholders`, `mergeConfig`, `resolveSettings`, `fetchRemoteConfig`, `runConfigHook`) are reachable via `__internals` for tests. See [API](docs/api.md).
 - Shared config validator: `node backend/validator/validate-kilo-config.ts [--allowed-hosts <list>] <file>...` checks a `kilo.jsonc` for secrets, `apiKey`, wrong types, unsafe keys and (optionally) allowed gateway hosts. Exit codes 0 (ok), 1 (errors found), 2 (usage/I/O/internal). See the [user guide](docs/user-guide.md#validating-the-shared-config-platform-engineers). The Azure Pipelines PR gate that runs it comes with F-008.
 - Example shared config: `backend/shared-config/kilo.jsonc` (Bifrost provider, no `apiKey`).
-- Personal config template: `backend/personal-config/kilo.jsonc`, the engineer's own config. It has one plugin entry (`org`, `project`, `repo`, `path`, `branch`, `mode`; no `pat`) and a `provider.bifrost.options.apiKey` placeholder (`sk-bf-<your-virtual-key>`). Copy it to `~/.config/kilo/kilo.jsonc` only, never into a project directory. See the [user guide](docs/user-guide.md#personal-config-template-engineers). The installers (F-010, F-011) that will automate the copy are not built yet.
+- Personal config template: `backend/personal-config/kilo.jsonc`, the engineer's own config. It has one plugin entry (`org`, `project`, `repo`, `path`, `branch`, `mode`; no `pat`) and a `provider.bifrost.options.apiKey` placeholder (`sk-bf-<your-virtual-key>`). Copy it to `~/.config/kilo/kilo.jsonc` only, never into a project directory. See the [user guide](docs/user-guide.md#personal-config-template-engineers). `install.sh` automates the copy on macOS/Linux (below); the Windows installer (F-011) is not built yet.
+- Bootstrap installer for macOS/Linux: `bash backend/installer/install.sh --org <org> --project <project> --repo <repo>` copies the plugin to `~/.config/kilo/azdo/` and creates or updates `~/.config/kilo/kilo.jsonc` (mode 0600). Idempotent; set `KILO_BIFROST_KEY` to write your virtual key. Exit codes 0/1/2/3. See the [user guide](docs/user-guide.md#installing-on-macos-and-linux-engineers).
 - Lint that enforces the FR-11 constraints (single file, zero npm runtime dependencies).
 - Strict TypeScript type-check and a `node:test` test suite.
 - One quality gate, `scripts/ci.sh`, used locally and in GitHub Actions.

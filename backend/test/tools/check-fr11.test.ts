@@ -13,7 +13,7 @@ function run(args: string[] = []) {
   return spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
 }
 
-function fixture(opts: { deps?: Record<string, string>; plugin?: string; extra?: string; validator?: string }) {
+function fixture(opts: { deps?: Record<string, string>; plugin?: string; extra?: string; validator?: string; installer?: string }) {
   const root = mkdtempSync(join(tmpdir(), "fr11-"));
   mkdirSync(join(root, "plugin"));
   writeFileSync(join(root, "package.json"), JSON.stringify({ dependencies: opts.deps ?? {} }));
@@ -22,6 +22,10 @@ function fixture(opts: { deps?: Record<string, string>; plugin?: string; extra?:
   if (opts.validator !== undefined) {
     mkdirSync(join(root, "validator"));
     writeFileSync(join(root, "validator", "x.ts"), opts.validator);
+  }
+  if (opts.installer !== undefined) {
+    mkdirSync(join(root, "installer"));
+    writeFileSync(join(root, "installer", "x.ts"), opts.installer);
   }
   return root;
 }
@@ -99,4 +103,35 @@ test("validator: require fails", () => {
   const r = runOn({ validator: 'const x = require("node:fs");\nexport default x;\n' });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /require/);
+});
+
+test("installer: node:, sibling and plugin imports pass", () => {
+  const src = [
+    'import { a } from "node:fs";',
+    'import { b } from "./y.ts";',
+    'import { c } from "../plugin/azdo-remote-config.ts";',
+    "export { a, b, c };",
+    "",
+  ].join("\n");
+  const r = runOn({ installer: src });
+  assert.equal(r.status, 0, r.stderr);
+});
+
+for (const spec of ["lodash", "../validator/x.ts", "../plugin/other.ts"]) {
+  test(`installer: import "${spec}" fails`, () => {
+    const r = runOn({ installer: `import x from "${spec}";\nexport default x;\n` });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /installer\/x\.ts/);
+  });
+}
+
+test("installer: require fails", () => {
+  const r = runOn({ installer: 'const x = require("node:fs");\nexport default x;\n' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /require.*installer\/x\.ts/);
+});
+
+test("installer: missing folder passes", () => {
+  const r = runOn({});
+  assert.equal(r.status, 0, r.stderr);
 });

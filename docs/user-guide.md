@@ -6,7 +6,7 @@ The Kilo azdo-remote-config plugin is active. When Kilo starts it fetches one sh
 Azure DevOps, validates it, caches it, and merges it into your Kilo config. If anything fails, Kilo
 starts normally with your local config; the plugin never crashes Kilo.
 
-Also available: a [validator](#validating-the-shared-config-platform-engineers) for the shared config. Also available: a [personal config template](#personal-config-template-engineers). Not yet available (planned, see `factory/VISION.md`): the bootstrap installers (F-010, F-011), key provisioning and the Azure Pipelines PR gate (F-008).
+Also available: a [validator](#validating-the-shared-config-platform-engineers) for the shared config. Also available: a [personal config template](#personal-config-template-engineers). Also available: the [macOS/Linux installer](#installing-on-macos-and-linux-engineers). Not yet available (planned, see `factory/VISION.md`): the Windows installer (F-011), the post-install smoke test (F-019), key provisioning and the Azure Pipelines PR gate (F-008).
 
 Supported Kilo version range (pinned): `>=7.2.0 <8.0.0`.
 
@@ -262,10 +262,11 @@ config, and your own Bifrost virtual key.
 ### Where it goes
 Copy it to `~/.config/kilo/kilo.jsonc` (the global Kilo config directory) and nowhere else. Never put it
 in a project directory and never commit it to a repository, because it holds your virtual key. A
-project-level config cannot choose where the shared config comes from (see "Trust boundary"). The
-installers (F-010, F-011) will automate this copy; they are not built yet, so copy it by hand for now.
+project-level config cannot choose where the shared config comes from (see "Trust boundary"). On
+macOS and Linux, [`install.sh`](#installing-on-macos-and-linux-engineers) does this copy for you. The
+Windows installer (F-011) is not built yet, so on Windows copy it by hand.
 The plugin path `./azdo/azdo-remote-config.ts` is relative to the Kilo config directory, so the plugin
-file must be at `~/.config/kilo/azdo/azdo-remote-config.ts`, which the installers will also set up.
+file must be at `~/.config/kilo/azdo/azdo-remote-config.ts`, which `install.sh` also sets up.
 
 ### What to fill in
 1. `org`, `project`, `repo`: the Azure DevOps organization, project and repository that hold the shared
@@ -283,6 +284,61 @@ The shared `baseURL` and models are added around your key.
 
 The validator reports this file's placeholder as an `api-key` error and a `plugin-ignored` warning.
 That is expected: the validator is a gate for the shared config, not for personal files.
+
+## Installing on macOS and Linux (engineers)
+
+`backend/installer/install.sh` sets up your machine in one command. The Windows installer (F-011) and
+the post-install smoke test (F-019) are still to come.
+
+### Before you start
+- Node.js 22.18 or newer on your PATH.
+- Azure DevOps credentials: either run `az login` (Azure CLI installed), or set `AZDO_PAT` (also
+  accepted: `AZURE_DEVOPS_EXT_PAT`, `KILO_AZDO_PAT`) to a PAT with Code (Read) scope. If a PAT variable
+  is set, `az` is not checked. The installer never prints or stores the PAT.
+- A checkout of this repository. Run the script from the checkout; it finds the plugin and template
+  relative to its own location.
+
+### Run it
+```bash
+bash backend/installer/install.sh --org contoso --project platform --repo kilo-config
+KILO_BIFROST_KEY="sk-bf-..." bash backend/installer/install.sh --org contoso --project platform --repo kilo-config
+```
+
+| Flag | Env fallback | Default |
+|---|---|---|
+| `--org` | `KILO_AZDO_ORG` | required |
+| `--project` | `KILO_AZDO_PROJECT` | required |
+| `--repo` | `KILO_AZDO_REPO` | required |
+| `--path` | `KILO_AZDO_PATH` | `/kilo.jsonc` |
+| `--branch` | `KILO_AZDO_BRANCH` | `main` |
+| `--mode` (`defaults` or `enforce`) | `KILO_AZDO_MODE` | `defaults` |
+
+A flag wins over the environment variable. Flags take their value as the next argument (`--org x`, not
+`--org=x`). `--help` prints usage. Your Bifrost virtual key is passed only through `KILO_BIFROST_KEY`;
+there is deliberately no flag for it, so it stays out of your process list. Without the variable, an
+existing key is kept, or the placeholder `sk-bf-<your-virtual-key>` is written and the installer tells
+you to set it (re-run with the variable, or edit the file).
+
+### What it writes
+- `~/.config/kilo/azdo/azdo-remote-config.ts`: a copy of the plugin (mode 0644).
+- `~/.config/kilo/kilo.jsonc`: your personal config, mode 0600. Created from the template, or updated:
+  the azdo plugin entry is replaced (other plugins and settings are kept) and your `apiKey` is kept
+  unless `KILO_BIFROST_KEY` is set. Comments in an existing file are lost on update.
+- Before changing an existing `kilo.jsonc`, a backup `~/.config/kilo/kilo.jsonc.bak-<timestamp>` (mode
+  0600). Backups contain your old keys. Delete old backups once you have checked the result.
+- If `XDG_CONFIG_HOME` is set (absolute path), `$XDG_CONFIG_HOME/kilo` is used instead of `~/.config/kilo`.
+- Nothing is written to `~/.config/kilo/plugin/`: Kilo auto-loads that folder and would load the plugin
+  twice. If it already holds an `azdo-remote-config` file, the installer warns you to remove it.
+
+Re-running is safe: unchanged files are not rewritten, and no backup is made when nothing changes.
+
+### Exit codes
+| Code | Meaning |
+|---|---|
+| 0 | Installed, updated, or already up to date |
+| 1 | Prerequisite missing: Node.js (or too old), or no Azure DevOps credentials. Nothing written |
+| 2 | Usage or input error: unknown option, missing org/project/repo, rejected value, bad `KILO_BIFROST_KEY`, relative `XDG_CONFIG_HOME`. Nothing written |
+| 3 | Existing config or file system problem: `kilo.jsonc` is not valid JSONC, has an unexpected shape, or a target is a symlink; I/O error |
 
 ## Example shared config
 

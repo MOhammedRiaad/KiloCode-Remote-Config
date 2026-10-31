@@ -286,10 +286,10 @@
     },
     {
       "id": "F-010",
-      "title": "Bootstrap installer for macOS/Linux (install.sh)",
+      "title": "Bootstrap installer for macOS/Linux (install.sh): plugin copy, personal config, prerequisite check",
       "type": "feature",
-      "priority": 3,
-      "status": "todo",
+      "priority": 2,
+      "status": "done",
       "scope": {
         "backend": true,
         "frontend": false
@@ -298,17 +298,19 @@
         "F-006",
         "F-009"
       ],
-      "description": "FR-18..FR-23 / AC-12 / AC-14 for POSIX. Tests run with a temp HOME and faked az/curl. The installer must write org, project and repo explicitly into the plugin options (repo has no default since contract 0.5.0). Cycle 0010 security/docs: copy the personal config template with user-only file permissions (users will put a real virtual key in it), never overwrite an existing personal config without a backup, and confirm the plugin path ./azdo/azdo-remote-config.ts resolves relative to the Kilo config dir (~/.config/kilo/azdo/). Template: backend/personal-config/kilo.jsonc.",
+      "description": "FR-18 (install.sh half) / FR-19 / FR-20 / FR-21 / FR-23 / AC-12 / AC-14 for POSIX (macOS, Linux; also runnable under Git Bash for CI). Cycle 0011 PO split: the FR-22 smoke test (fetch shared file + Bifrost /v1/models) moved to F-019 so this slice stays small. Location: backend/installer/install.sh (ADR-0001 layout); the Architect records in an ADR how the installer locates the plugin source (e.g. relative to the script, ../plugin/azdo-remote-config.ts, or an explicit source option) and the personal config template (backend/personal-config/kilo.jsonc). Inputs (PO decision): org, project and repo are REQUIRED (repo has no default since contract 0.5.0) and are given as flags (e.g. --org/--project/--repo) or KILO_AZDO_ORG/PROJECT/REPO env vars; optional path/branch/mode with the plugin defaults. The engineer's virtual key is supplied ONLY via the env var KILO_BIFROST_KEY (never a CLI argument, so it never appears in argv / process listings); when absent, an existing apiKey is kept, or the template placeholder is written for a new config and a message tells the engineer to set it. Editing an existing JSONC personal config (FR-20): the Architect may delegate parsing/editing to a zero-dependency Node helper reusing the plugin's parseJsonc (Kilo CLI ships on npm, so Node is assumed present; the installer checks for it and prints a fix if missing) or another approach; comments in an existing personal config need not be preserved, but a byte-identical timestamped backup is written before any modification. Cycle 0010 security/architect/docs follow-ups: the personal config is written with user-only permissions (0600; ~/.config/kilo/azdo/ not group/world-writable), an existing personal config is never overwritten without a backup, and the plugin entry path ./azdo/azdo-remote-config.ts resolves relative to the Kilo global config dir (~/.config/kilo/, honouring XDG_CONFIG_HOME if the Architect confirms Kilo does). Prerequisites are checked BEFORE anything is written. Tests run install.sh in a child bash process with a temp HOME and a fake PATH containing stub az/node as needed; they never touch the real home directory, network, az or Kilo. The plugin file, its export surface and the validator rules are unchanged. Zero runtime npm deps (FR-11).",
       "acceptance_criteria": [
-        "Given a temp HOME with no Kilo config, When install.sh runs, Then the plugin is at `~/.config/kilo/azdo/azdo-remote-config.ts` and the personal config is created from the template.",
-        "Given an existing personal config with other keys, When install.sh runs, Then only the plugin entry and apiKey are added/updated and other keys are preserved.",
-        "Given install.sh, When it runs, Then nothing is written to `~/.config/kilo/plugin/` (plugin loads exactly once, AC-12).",
-        "Given az missing and no PAT, When install.sh runs, Then it prints a clear fix and exits non-zero.",
-        "Given install.sh is run twice, When the config directory is diffed, Then the second run changed nothing except the plugin file (AC-14).",
-        "Given faked AzDO and Bifrost endpoints, When the smoke test step runs, Then it reports pass or fail for both checks without printing the key."
+        "Given a temp HOME with no ~/.config/kilo/, org/project/repo supplied, KILO_BIFROST_KEY set and a stub `az` on PATH that reports a logged-in account, When install.sh runs, Then it exits 0, `~/.config/kilo/azdo/azdo-remote-config.ts` is byte-identical to backend/plugin/azdo-remote-config.ts, and `~/.config/kilo/kilo.jsonc` parses with the plugin's `__internals.parseJsonc` to an object with exactly one plugin entry `[\"./azdo/azdo-remote-config.ts\", {...}]` whose org/project/repo equal the supplied values and whose path/branch/mode are `/kilo.jsonc`/`main`/`defaults`, and provider.bifrost.options.apiKey equals KILO_BIFROST_KEY; and on POSIX the personal config's mode is 0600.",
+        "Given any run with KILO_BIFROST_KEY set to `sk-bf-AbCdEf1234567890` and AZDO_PAT set to a sentinel value, When the full stdout and stderr of install.sh are captured, Then neither value appears in the output; and Given a fresh HOME and KILO_BIFROST_KEY unset, When install.sh runs, Then apiKey equals the template placeholder `sk-bf-<your-virtual-key>` and the output tells the engineer to set their virtual key.",
+        "Given an existing ~/.config/kilo/kilo.jsonc (with comments) containing `model`, `provider.other`, `provider.bifrost.options.headers`, `provider.bifrost.options.apiKey: 'sk-bf-existing'`, another plugin entry `my-other-plugin` and an outdated azdo-remote-config entry, When install.sh runs with KILO_BIFROST_KEY unset, Then every other key deep-equals its previous value, `my-other-plugin` is still present, there is exactly one azdo-remote-config entry carrying the supplied options, apiKey is still `sk-bf-existing`, and a backup file byte-identical to the original exists next to it; and When run with KILO_BIFROST_KEY set, Then apiKey is updated to that value.",
+        "Given any install.sh run (fresh or update), When the temp HOME is inspected afterwards, Then nothing exists under `~/.config/kilo/plugin/` that was created by the installer and the personal config references azdo-remote-config.ts exactly once (plugin loads exactly once, AC-12, FR-19).",
+        "Given a PATH without `az` and no AZDO_PAT / AZURE_DEVOPS_EXT_PAT / KILO_AZDO_PAT, or a stub `az` whose `account show` exits non-zero, When install.sh runs, Then it exits non-zero, stderr names the fix (install the Azure CLI and run `az login`, or set AZDO_PAT), and no file or directory is created under the temp HOME; and Given no az but AZDO_PAT set, Then the prerequisite check passes (FR-21).",
+        "Given install.sh has run successfully once, When it is run a second time with the same inputs, Then it exits 0, and a recursive byte comparison of ~/.config/kilo/ before and after shows no change except (at most) the plugin file, and no additional backup file is created (AC-14, FR-23).",
+        "Given missing org, project or repo (no flag and no env var), an unknown flag, or an existing personal config that is not valid JSONC or whose root is not an object, When install.sh runs, Then it exits non-zero with a usage or fixed error message (no stack trace, no file contents echoed) and every pre-existing file under the temp HOME is byte-identical afterwards.",
+        "Given the repository after the change, When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0 and runs the installer tests (or skips POSIX-permission assertions on Windows with a clear message), backend/package.json has no runtime `dependencies`, and backend/plugin/azdo-remote-config.ts and backend/personal-config/kilo.jsonc are unchanged."
       ],
       "source": "vision",
-      "cycle_done": null
+      "cycle_done": 11
     },
     {
       "id": "F-011",
@@ -321,9 +323,10 @@
         "frontend": false
       },
       "depends_on": [
-        "F-010"
+        "F-010",
+        "F-019"
       ],
-      "description": "FR-18..FR-23 / AC-12 / AC-14 for Windows, behaviour parity with install.sh. Tests via Pester or pwsh where available; skipped with a clear message otherwise. Cycle 0010 security/docs: copy the personal config template with user-only file permissions (users will put a real virtual key in it), never overwrite an existing personal config without a backup, and confirm the plugin path ./azdo/azdo-remote-config.ts resolves relative to the Kilo config dir (~/.config/kilo/azdo/). Template: backend/personal-config/kilo.jsonc.",
+      "description": "FR-18..FR-23 / AC-12 / AC-14 for Windows, behaviour parity with install.sh (F-010) and its smoke test (F-019); same input contract (KILO_BIFROST_KEY env var for the key, never a parameter). Tests via Pester or pwsh where available; skipped with a clear message otherwise. Cycle 0010 security/docs: copy the personal config template with user-only file permissions (users will put a real virtual key in it), never overwrite an existing personal config without a backup, and confirm the plugin path ./azdo/azdo-remote-config.ts resolves relative to the Kilo config dir (~/.config/kilo/azdo/). Template: backend/personal-config/kilo.jsonc.",
       "acceptance_criteria": [
         "Given a temp USERPROFILE with no Kilo config, When install.ps1 runs, Then the plugin and personal config are created as with install.sh.",
         "Given an existing personal config with other keys, When install.ps1 runs, Then other keys are preserved.",
@@ -393,7 +396,8 @@
       },
       "depends_on": [
         "F-006",
-        "F-007"
+        "F-007",
+        "F-019"
       ],
       "description": "AC-1 / AC-2 / AC-10 simulated: local fake AzDO + fake Bifrost servers exercise the whole plugin flow.",
       "acceptance_criteria": [
@@ -448,6 +452,28 @@
         "Given all docs, When scanned for `sk-bf-` followed by real-looking key material, Then none is found."
       ],
       "source": "vision",
+      "cycle_done": null
+    },
+    {
+      "id": "F-019",
+      "title": "Bootstrap installer smoke test (install.sh)",
+      "type": "feature",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-010"
+      ],
+      "description": "FR-22, split out of F-010 in cycle 0011. After installing, install.sh fetches the shared file through the Azure DevOps Git Items API (PAT or az token, same rules as FR-3) and calls Bifrost `/v1/models` with the engineer's key (base URL taken from the fetched shared config), then reports pass or fail per check. A failed smoke test must not undo the installation. Tests use local fake HTTP servers; the key, PAT and token are never printed.",
+      "acceptance_criteria": [
+        "Given fake AzDO and Bifrost servers that both succeed, When install.sh runs its smoke test, Then it reports pass for both checks and exits 0.",
+        "Given the fake Bifrost returns 401 or the fake AzDO returns 404, When the smoke test runs, Then the failing check is reported as fail with the HTTP status, and installed files are kept.",
+        "Given any smoke test run, When stdout/stderr are captured, Then neither the virtual key, the PAT nor the az token appears."
+      ],
+      "source": "po",
       "cycle_done": null
     },
     {
@@ -821,6 +847,29 @@
         "Given the validator and personal-config test suites, When they run, Then both import shared helpers from backend/test/helpers.ts and all tests still pass."
       ],
       "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-019",
+      "title": "Installer hardening and test fixes",
+      "type": "tech-debt",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-010"
+      ],
+      "description": "Cycle 0011 security+review follow-ups for backend/installer: (sec low 1) re-lstat after mkdirSync and before the no-change chmod to close the symlink TOCTOU on the config dir; (sec low 2 / review low 2) install.sh: script_dir=$(CDPATH= cd -- \"$script_dir\" && pwd) and check install-helper.ts exists before handing off, else fixed error and exit 3; (sec info 3) print only safe characters for file names found in plugin/ and plugins/; (sec info 4) docs note on deleting old backups (they hold old keys); (review low 1) the 'Node 22.18 and newer pass' test uses --help which exits before the version check: run it with required args plus AZDO_PAT and add a 22.17.x case expecting exit 1; (review info 3) run the leak test also with an sk-bf- prefixed key; (review info 4) add provider.other and provider.bifrost.options.headers to the end-to-end AC-3 fixture. Also optional: shellcheck in scripts/ci.sh when present, check-lf over backend/installer/*.sh.",
+      "acceptance_criteria": [
+        "Given a config dir replaced by a symlink between check and write, When the installer runs, Then it refuses without following it.",
+        "Given CDPATH set and a relative script path, When install.sh runs, Then it still finds its helper; and Given a missing helper, Then it exits 3 with a fixed message and no stack trace.",
+        "Given Node 22.17.x, When install.sh runs with valid args, Then it exits 1; given 22.18+, Then it passes the version check.",
+        "Given an sk-bf- prefixed KILO_BIFROST_KEY, When the installer runs, Then the key appears in no stdout/stderr."
+      ],
+      "source": "security",
       "cycle_done": null
     }
   ]

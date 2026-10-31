@@ -8,7 +8,8 @@ Owned by the **architect** agent.
 - `contracts/`: interface contracts. This product has no HTTP API. The contracts are the typed
   plugin interface in `contracts/plugin-interface.md` and the shared config validator CLI in
   `contracts/validator-cli.md` (since F-007) and the personal config template in
-  `contracts/personal-config-template.md` (since F-009).
+  `contracts/personal-config-template.md` (since F-009) and the bootstrap installer in
+  `contracts/installer-cli.md` (since F-010).
 
 ADR template:
 

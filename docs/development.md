@@ -65,7 +65,24 @@ The tests parse the file with the plugin's `parseJsonc`, check the plugin option
 `resolveSettings`, check the placeholder against the validator's secret pattern, and merge it with
 `backend/shared-config/kilo.jsonc` to confirm the local `apiKey` survives in both modes. They accept
 both LF and CRLF line endings. `.gitattributes` has `*.jsonc text eol=lf`, so `.jsonc` files are LF in
-the repository. Installers (F-010, F-011) will copy this file to `~/.config/kilo/kilo.jsonc`.
+the repository. `backend/installer/install.sh` (F-010) copies this file to `~/.config/kilo/kilo.jsonc`; the Windows installer (F-011) is not built yet.
+
+## Installer tests and lint rule 6
+The macOS/Linux installer (`backend/installer/`: `install.sh`, `install-helper.ts`,
+`personal-config-edit.ts`; contract `docs/architecture/contracts/installer-cli.md`, ADR-0012) is tested
+by `backend/test/installer/` (`install-sh.test.ts`, `personal-config-edit.test.ts`, shared
+`helpers.ts`). They run with `npm test`; to run only these:
+
+```bash
+cd backend
+node --test "test/installer/*.test.ts"
+```
+
+The script tests run the real `install.sh` with `bash` against a temporary config directory, so they
+do not touch your real config. Tests that check POSIX file modes or symlinks skip themselves on
+Windows (`process.platform === "win32"`); the rest run under Git Bash.
+`npm run lint` has a sixth rule: files in `backend/installer/` may import only `node:` built-ins,
+sibling `.ts` files or the plugin file.
 
 ## Layout
 ```
@@ -73,7 +90,8 @@ backend/plugin/azdo-remote-config.ts   the plugin
 backend/validator/                     shared-config validator (CLI, rules library, schema subset)
 backend/shared-config/kilo.jsonc       example shared config
 backend/personal-config/kilo.jsonc     personal config template (copied to ~/.config/kilo/)
+backend/installer/                     macOS/Linux bootstrap installer (install.sh + Node helper)
 backend/tools/check-fr11.mjs           lint
 backend/test/                          tests
 ```
-Further folders (templates, installer, provisioning) arrive with later items.
+Further folders (templates, Windows installer, provisioning) arrive with later items.

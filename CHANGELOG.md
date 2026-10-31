@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.9.0] - 2026-10-31
+
+### Added
+- F-010: bootstrap installer for macOS/Linux (`install.sh`).
+- F-010: documentation for the bootstrap installer.
+
 ## [0.8.0] - 2026-10-31
 
 ### Added
