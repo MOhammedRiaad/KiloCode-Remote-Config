@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.0] - 2026-10-31
+
+### Added
+- F-016: engineer setup guide (`docs/engineer-setup.md`), platform-team runbook (`docs/platform-runbook.md`), and troubleshooting guide (`docs/troubleshooting.md`).
+- F-016: automated documentation check (`backend/tools/check-docs.mjs`) and hermetic test suite (`backend/test/tools/check-docs.test.ts`), wired into `scripts/ci.sh` (ADR-0017, `contracts/docs-check.md`).
+
+### Changed
+- F-016: updated `README.md`, `docs/user-guide.md`, and `docs/development.md` with cross-links to the new guides and runbook.
+
+### Fixed
+- F-016: fixed the Windows installer exit-codes anchor link (`#exit-codes-1`) and stale PR-gate availability note in `docs/user-guide.md`.
+
 ## [0.13.0] - 2026-10-31
 
 ### Added

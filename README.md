@@ -70,7 +70,7 @@ scope for the installers.
 - End-to-end startup test (F-014, test only): `cd backend && node --test test/e2e/startup.test.ts` installs into a temp HOME and simulates Kilo's startup against a fake network. It needs bash. It does not test real Kilo, Azure DevOps or Bifrost.
 
 ### Still manual (Phase 0)
-The simulated startup test does not prove vision AC-1. These checks stay manual: Kilo CLI `/models` and the VS Code model list against real Azure DevOps and Bifrost; Kilo's own loading of the `.ts` plugin and path resolution; a disabled key rejected at request time. See [development](docs/development.md#what-stays-manual-phase-0).
+The simulated startup test does not prove vision AC-1. These checks stay manual: Kilo CLI `/models` and the VS Code model list against real Azure DevOps and Bifrost; Kilo's own loading of the `.ts` plugin and path resolution; a disabled key rejected at request time. See the [platform runbook](docs/platform-runbook.md#phase-0-verification-checklist) and [development](docs/development.md#what-stays-manual-phase-0).
 
 
 ### Quick start
@@ -85,7 +85,7 @@ npm test            # node --test (includes validator tests)
 cd .. && bash scripts/ci.sh   # the full gate, as CI runs it
 ```
 
-More: [user guide](docs/user-guide.md), [API](docs/api.md), [development](docs/development.md).
+More: [engineer setup](docs/engineer-setup.md), [platform runbook](docs/platform-runbook.md), [troubleshooting](docs/troubleshooting.md), [user guide](docs/user-guide.md), [API](docs/api.md), [development](docs/development.md).
 
 ## Factory quick start (local)
 

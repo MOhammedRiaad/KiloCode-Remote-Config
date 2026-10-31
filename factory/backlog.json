@@ -453,22 +453,29 @@
       "title": "User and operator documentation",
       "type": "feature",
       "priority": 3,
-      "status": "todo",
+      "status": "done",
       "scope": {
         "backend": false,
         "frontend": false
       },
       "depends_on": [
-        "F-010"
+        "F-010",
+        "F-011",
+        "F-008",
+        "F-014"
       ],
       "description": "Engineer setup guide, platform-team runbook (config change, key provisioning, offboarding), KILO_PURE caveat, supported Kilo version range, Phase 0 assumptions A1-A3 checklist. User decision (cycle 0012): F-012/F-013 are skipped, so treat the F-013 dependency as waived and omit key-provisioning/offboarding runbook content. Cycle 0013 architect follow-up: document installer exit code 4, --no-smoke (and the Windows equivalent once F-011 ships) and each smoke fixed code with what to do. Cycle 0014: also document install.ps1 ExecutionPolicy/Unblock-File guidance (already in the user guide), the 'Rewritten by install.sh' header note, and Windows ACL residual risk. Cycle 0015: the platform runbook should cover setting up the C1 repo, the PR pipeline and the branch-policy script from F-008 (if shipped by then). Cycle 0015 security: runbook should tell platform engineers to restrict the 'Bypass policies' and 'Edit policies' permissions on the shared config repo (a PR can alter its own gate). Cycle 0016: fold the manual Phase 0 checklist from docs/development.md ('What stays manual (Phase 0)': real Kilo CLI /models and VS Code model list against real AzDO + Bifrost, Kilo's own loading of the .ts plugin and path resolution, disabled key rejected at request time) into the platform runbook. Also note the repo now has a GitHub origin; document the PR/branch flow if the factory moves to remote mode. User decision (cycle 0017): F-015 (per-team files) is SKIPPED too - do not document per-team files as a feature; the generic `path` option may be mentioned only as the existing plugin/installer setting.",
       "acceptance_criteria": [
-        "Given docs/, When an automated check runs, Then engineer setup, platform runbook and troubleshooting pages exist and link to each other.",
-        "Given the troubleshooting page, When checked, Then it mentions KILO_PURE=1, az login and the cache location.",
-        "Given all docs, When scanned for `sk-bf-` followed by real-looking key material, Then none is found."
+        "Given the repository, When the automated docs check (wired into `bash scripts/ci.sh`) runs, Then docs/engineer-setup.md, docs/platform-runbook.md and docs/troubleshooting.md exist, each links to the other two via relative links that resolve to existing files, and README.md links to all three; and Given any of these pages or links is removed (fixture/negative control), Then the check exits non-zero naming the missing item.",
+        "Given docs/troubleshooting.md, When the check scans it, Then it mentions `KILO_PURE=1` (with the note that CI jobs needing the shared config must not set it), `az login`, the cache path `~/.cache/kilo-azdo/remote-config.json`, and installer exit code 4 together with `--no-smoke` and its Windows equivalent.",
+        "Given docs/engineer-setup.md, When the check scans it, Then it contains the supported Kilo range read at check time from `SUPPORTED_KILO_RANGE` in backend/plugin/azdo-remote-config.ts (not hard-coded in the check), and it covers both install.sh and install.ps1 including the ExecutionPolicy/Unblock-File guidance.",
+        "Given docs/platform-runbook.md, When the check scans it, Then it contains a Phase 0 checklist naming assumptions A1, A2 and A3 and the manual checks from docs/development.md (real Kilo CLI `/models` and VS Code model list, Kilo loading the .ts plugin and its path resolution, disabled key rejected by Bifrost at request time), plus sections on setting up the shared config repo, the PR pipeline and the branch-policy script, and on restricting the 'Bypass policies' and 'Edit policies' permissions.",
+        "Given all Markdown files under docs/ plus README.md, When scanned for `sk-bf-` followed by real-looking key material (16 or more consecutive alphanumeric characters; `<placeholder>` and `...` forms allowed), Then none is found; and Given a temporary fixture containing such a key (built at test time, never committed), Then the scan fails (negative control).",
+        "Given the skipped scope (F-012, F-013, F-015), When the check scans docs/engineer-setup.md and docs/platform-runbook.md, Then they contain no key-provisioning or offboarding procedure and no per-team config file (`teams/`) instructions, and the runbook states that Bifrost virtual keys are issued and disabled manually by the platform team outside this project."
       ],
       "source": "vision",
-      "cycle_done": null
+      "cycle_done": 18,
+      "notes": "Selected in cycle 0018 (last remaining vision feature). F-013 dependency waived by user decision; depends_on now lists the shipped features whose behaviour is documented. Docs-only (scope.backend/frontend false): the only code is the automated docs check; the Architect decides where it lives (recommended: a dependency-free Node script under scripts/ called from scripts/ci.sh, with fixture-based negative controls). Must omit key provisioning, offboarding and per-team files (SKIPPED by user instruction)."
     },
     {
       "id": "F-019",
@@ -1038,6 +1045,47 @@
         "Given no bash on PATH, When the e2e suite runs, Then the simulator guard test still runs."
       ],
       "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-027",
+      "title": "Sync docs-check contract with rework 1 and extend docs check rules",
+      "type": "chore",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-016"
+      ],
+      "description": "Cycle 0018 architect/security/review follow-ups for check-docs: (review info 1) sync docs/architecture/contracts/docs-check.md with rework 1 additions (`line-too-long` rule for lines over 10,000 characters, `realpathSync` target containment, and finding-message redaction); (architect) optionally check that every `>=X.Y.Z <A.B.C` range in README.md and docs/*.md equals `SUPPORTED_KILO_RANGE`; (security info 4) consider adding PAT/bearer pattern coverage or gitleaks to the docs gate.",
+      "acceptance_criteria": [
+        "Given docs/architecture/contracts/docs-check.md, When read, Then it documents the `line-too-long` rule, `realpathSync` link target containment, and finding-message redaction.",
+        "Given any `>=X.Y.Z <A.B.C` version range in README.md or docs/*.md that differs from `SUPPORTED_KILO_RANGE`, When check-docs runs, Then it exits 1."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-028",
+      "title": "Deduplicate platform sections in user-guide.md and optional .gitattributes LF rule for Markdown",
+      "type": "chore",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": false,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-016"
+      ],
+      "description": "Cycle 0018 architect follow-ups: consider moving the platform sections of `docs/user-guide.md` (validator usage, shared config repo setup) into `docs/platform-runbook.md` with redirect stubs so existing anchors keep working; optionally add `*.md text eol=lf` to `.gitattributes` to stop CRLF warnings on Windows checkouts.",
+      "acceptance_criteria": [
+        "Given docs/user-guide.md and docs/platform-runbook.md, When check-docs runs after deduplicating the platform sections with redirect anchors, Then all cross-links and anchors still pass with exit 0."
+      ],
+      "source": "architect",
       "cycle_done": null
     }
   ]

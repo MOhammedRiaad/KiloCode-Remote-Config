@@ -6,7 +6,7 @@ The Kilo azdo-remote-config plugin is active. When Kilo starts it fetches one sh
 Azure DevOps, validates it, caches it, and merges it into your Kilo config. If anything fails, Kilo
 starts normally with your local config; the plugin never crashes Kilo.
 
-Also available: a [validator](#validating-the-shared-config-platform-engineers) for the shared config. Also available: a [personal config template](#personal-config-template-engineers). Also available: the [macOS/Linux installer](#installing-on-macos-and-linux-engineers) and the [Windows installer](#installing-on-windows-engineers). Not yet available (planned, see `factory/VISION.md`): key provisioning and the Azure Pipelines PR gate (F-008).
+Also available: a [validator](#validating-the-shared-config-platform-engineers) for the shared config, a [shared config repo template and PR gate](#setting-up-the-shared-config-repo-platform-engineers), a [personal config template](#personal-config-template-engineers), and the [macOS/Linux installer](#installing-on-macos-and-linux-engineers) and [Windows installer](#installing-on-windows-engineers). Key provisioning is not part of this project; Bifrost virtual keys are issued and disabled manually by the platform team. Task guides: [Engineer setup guide](engineer-setup.md) · [Platform team runbook](platform-runbook.md) · [Troubleshooting](troubleshooting.md).
 
 Verification status: an automated end-to-end test simulates a fresh install and first start against a fake network. Checking against the real Kilo CLI, VS Code extension, Azure DevOps and Bifrost (vision AC-1) is still a manual Phase 0 step; see [development](development.md#what-stays-manual-phase-0).
 
@@ -347,7 +347,7 @@ idempotent handling is planned (T-023). The script never prints `az` output or e
 ### Security caveat: a PR can change its own gate
 The pipeline file and the validator live in the same repo as the config they check. A pull request
 can therefore change `azure-pipelines.yml` or the validator in the same change that it is validated
-with. Mitigate this:
+with. Mitigate this (see [Restrict repository permissions in the platform runbook](platform-runbook.md#restrict-repository-permissions)):
 
 - Restrict the "Bypass policies when completing pull requests" and "Edit policies" permissions to a
   small trusted group.
@@ -537,7 +537,7 @@ writes (its update header still says "Rewritten by install.sh"). The installer s
 `XDG_CONFIG_HOME` is set, the installer prints a warning (it does not move the target).
 
 ### Exit codes and smoke test
-Exit codes 0 to 4 and the smoke test lines are the same as for [macOS and Linux](#exit-codes);
+Exit codes 0 to 4 and the smoke test lines are the same as for [macOS and Linux](#exit-codes-1);
 `-NoSmoke` skips the smoke test.
 
 ### Troubleshooting

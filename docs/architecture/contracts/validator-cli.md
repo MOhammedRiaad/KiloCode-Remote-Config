@@ -104,8 +104,9 @@ decoded text. A root-shape or depth failure skips the tree rules and the schema 
 | `plugin-ignored` | warning | `plugin` | The root has an own key `plugin`. | `top-level plugin is ignored by the merge` |
 
 Secret pattern: `/sk-bf-[a-z0-9]/i`. Rule names, keys and messages never contain the matched
-text. For example, `sk-bf-...` and `sk-bf-<your-key>` do **not** match, and `sk-bf-AbCdEf1234567890`
-does.
+text. For example, `sk-bf-...` and `sk-bf-<your-key>` do **not** match, and `sk-bf-AbCd1234`
+does. (The example was shortened in F-016 so that docs never contain 16+ key-like characters
+after `sk-bf-`; see `docs-check.md`.)
 
 Walking: key values are read with `Object.getOwnPropertyDescriptor(obj, key)?.value`. The walk
 writes to nothing, and `Object.prototype` is never modified.

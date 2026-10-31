@@ -1,6 +1,6 @@
 # Architecture overview - Kilo Shared Config
 
-Last updated: cycle-0016 (F-014). Stack: ADR-0001. Plugin module shape: ADR-0002.
+Last updated: cycle-0018 (F-016). Stack: ADR-0001. Plugin module shape: ADR-0002.
 JSONC parser: ADR-0003. Placeholder resolution: ADR-0004. Config merge: ADR-0005.
 Settings resolution: ADR-0006. Azure DevOps fetch and auth: ADR-0007.
 Hook wiring, cache, logging, never-crash: ADR-0008. Trust boundary: ADR-0009.
@@ -9,9 +9,11 @@ POSIX bootstrap installer: ADR-0012. Installer smoke test: ADR-0013.
 Windows bootstrap installer (install.ps1): ADR-0014.
 Shared config repo template, PR pipeline and branch-policy script: ADR-0015.
 End-to-end simulated startup harness (test only): ADR-0016.
+User/operator docs structure and the automated docs check: ADR-0017.
 Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`,
 `contracts/personal-config-template.md`, `contracts/installer-cli.md`,
-`contracts/shared-config-repo.md`, `contracts/e2e-harness.md` (test only).
+`contracts/shared-config-repo.md`, `contracts/e2e-harness.md` (test only),
+`contracts/docs-check.md` (repo docs gate, F-016).
 
 ## Components
 
@@ -22,7 +24,7 @@ Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`,
 | C3 | Personal config template | `backend/personal-config/kilo.jsonc` | `~/.config/kilo/kilo.jsonc` | **template + tests (F-009)**; copied by installers (F-010/F-011) |
 | C4 | Bifrost gateway | external, not in repo | - | external |
 | C5 | Bootstrap installer | `backend/installer/` (`install.sh` + `install.ps1` front ends; `install-helper.ts` + `personal-config-edit.ts` + `smoke.ts`) | engineer runs it from a checkout that keeps `installer/`, `plugin/`, `personal-config/` side by side | **install.sh (F-010, ADR-0012) + smoke test (F-019, ADR-0013) + install.ps1 (F-011, ADR-0014)** |
-| C6 | Key provisioning | `backend/provisioning/` | platform-team tooling | planned |
+| C6 | Key provisioning | `backend/provisioning/` | platform-team tooling | **skipped by user decision** (F-012/F-013): virtual keys are issued and disabled by hand by the platform team |
 
 There is no frontend and no server process. `frontend/` is intentionally absent.
 
@@ -195,6 +197,9 @@ backend/                     # the only package (ADR-0001 section 7)
   test/validator/*.test.ts    # rules (lib), cli (child process), schema subset, example config
   test/personal-config/*.test.ts  # template checks via plugin __internals + validator library (F-009)
   test/tools/check-fr11.test.ts
+  tools/check-docs.mjs        # F-016: docs gate (pages, links/anchors, required text, Kilo range, sk-bf- scan,
+                              #   forbidden scope) - ADR-0017, contracts/docs-check.md; run by scripts/ci.sh
+  test/tools/check-docs.test.ts  # F-016: hermetic temp-dir fixtures, negative controls
   installer/                  # F-010: install.sh (bash front end), install-helper.ts (Node I/O CLI),
                               # F-011: install.ps1 (PowerShell front end, ASCII, LF) - ADR-0014
                               #        personal-config-edit.ts (pure edit rules) - ADR-0012
@@ -210,6 +215,10 @@ backend/                     # the only package (ADR-0001 section 7)
   test/e2e/fixtures/kilo-start-simulator.ts  # TEST ONLY: child Node stand-in for Kilo start
   provisioning/               # created by a later item
 docs/architecture/           # this folder: overview, ADRs, contracts
+docs/engineer-setup.md        # F-016: engineer task guide (links to user-guide reference)
+docs/platform-runbook.md      # F-016: platform team procedures, Phase 0 checklist
+docs/troubleshooting.md       # F-016: symptom -> fix
+docs/user-guide.md, docs/development.md, docs/api.md  # reference, contributor notes, internals
 factory/                     # backlog, state, run reports
 scripts/ci.sh                # quality gate (CI and local)
 .github/workflows/ci.yml     # runs scripts/ci.sh on push / PR to main
@@ -219,4 +228,6 @@ scripts/ci.sh                # quality gate (CI and local)
 
 `bash scripts/ci.sh` -> in `backend/`: `npm ci`, `npm run lint` (FR-11 guard),
 `npm run typecheck` (`tsc --noEmit`, includes `validator/**/*.ts` since F-007 and `installer/**/*.ts` since F-010), `npm test`
-(`node --test`, includes `test/validator/` and, since F-014, `test/e2e/`), plus factory JSON checks.
+(`node --test`, includes `test/validator/` and, since F-014, `test/e2e/`), plus factory JSON checks,
+`scripts/check-lf.sh` and, since F-016, `node backend/tools/check-docs.mjs` run against the real
+repository from the root (ADR-0017). `npm test` covers the docs check only with fixtures.

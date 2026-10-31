@@ -44,6 +44,8 @@ node -e 'for (const f of ["factory/state.json","factory/backlog.json"]) JSON.par
 
 bash scripts/check-lf.sh
 
+node backend/tools/check-docs.mjs
+
 grep -q 'scripts/ci.sh' .github/workflows/ci.yml || { echo "ci: ci.yml must call scripts/ci.sh" >&2; exit 1; }
 
 if [ "$ran" -eq 0 ]; then

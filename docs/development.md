@@ -152,7 +152,7 @@ To add a scenario: add a `test(...)` with `OPTS` in `startup.test.ts`, build the
 
 ### What stays manual (Phase 0)
 These tests simulate startup; they do not prove vision AC-1. Still to be checked by hand against the
-real systems in Phase 0 (for F-016 to fold into the runbook):
+real systems in Phase 0 (see the [Phase 0 verification checklist in the platform runbook](platform-runbook.md#phase-0-verification-checklist)):
 - Kilo CLI `/models` and the VS Code extension model list show the Bifrost models, with real Azure DevOps and real Bifrost.
 - Kilo's own loading of the `.ts` plugin and its path resolution (the simulator imitates it from the contract, not from Kilo).
 - A disabled virtual key is rejected by Bifrost at request time (AC-11); the tests only check that the key is sent.

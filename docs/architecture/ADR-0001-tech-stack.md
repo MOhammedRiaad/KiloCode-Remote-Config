@@ -80,6 +80,11 @@ This keeps the file self-contained (FR-11) and type-checkable without a Kilo dep
      not exist; `.mjs` files are not checked). `.sh` files in `shared-config/` follow the
      `install.sh` rule: bash builtins plus `az` only (ADR-0015), checked by tests.
   It exits non-zero with a clear message on any violation.
+- (since F-016, ADR-0017) `backend/tools/check-docs.mjs` (plain Node, zero deps, `node:` imports only)
+  checks the user/operator docs: the required pages, relative links and anchors, required content,
+  the Kilo range read from `SUPPORTED_KILO_RANGE`, a `sk-bf-` key scan and the skipped-scope terms.
+  It is **not** part of `npm run lint`. `scripts/ci.sh` runs it once from the repo root
+  (`node backend/tools/check-docs.mjs`). Contract: `contracts/docs-check.md`.
 - `tsconfig.json` `include` covers `plugin/**/*.ts`, `validator/**/*.ts`, `installer/**/*.ts`
   (since F-010), `tools/**/*.ts` (since F-008) and `test/**/*.ts`.
 
@@ -137,6 +142,7 @@ backend/
                           # package.json, .gitattributes (F-007, F-008; ADR-0015)
   tools/
     check-fr11.mjs        # lint: FR-11 guard rails
+    check-docs.mjs        # docs gate, run by scripts/ci.sh (F-016, ADR-0017)
     assemble-shared-repo.ts  # writes the complete C1 repo tree (F-008, ADR-0015)
   test/
     plugin/               # tests for C2 (*.test.ts)
@@ -157,6 +163,7 @@ All commands run from `backend/`. `frontend/` does not exist and is not planned 
 | Type-check | `tsc --noEmit -p tsconfig.json` | `npm run typecheck` |
 | Test | `node --test "test/**/*.test.ts"` | `npm test` |
 | Build | none - the plugin ships as source; no `build` script is defined | - |
+| Docs check (repo root, since F-016) | `node backend/tools/check-docs.mjs` | - (called by `scripts/ci.sh`) |
 
 `scripts/ci.sh` already runs `lint`, `typecheck`, `test`, `build` via `npm run --if-present`,
 so these scripts plug in without changes to its Node path.

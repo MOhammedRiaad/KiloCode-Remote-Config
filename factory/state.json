@@ -1,6 +1,6 @@
 {
   "status": "running",
-  "cycle": 17,
+  "cycle": 18,
   "max_cycles": 50,
   "phase": "idle",
   "current_item": null,
@@ -9,7 +9,7 @@
   "max_rework": 3,
   "consecutive_blocked": 0,
   "max_consecutive_blocked": 3,
-  "last_release": "v0.13.0",
+  "last_release": "v0.14.0",
   "history": [
     {
       "cycle": 3,
@@ -120,8 +120,15 @@
       "cycle": 17,
       "item": "F-015",
       "result": "abandoned",
-      "phase": "architect",
+      "phase": "security",
       "note": "skipped by user request"
+    },
+    {
+      "cycle": 18,
+      "item": "F-016",
+      "result": "released",
+      "version": "v0.14.0",
+      "rework": 1
     }
   ]
 }
