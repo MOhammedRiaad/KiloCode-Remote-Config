@@ -26,11 +26,14 @@ import {
 } from "./personal-config-edit.ts";
 import type { UpdateErrorCode, Values } from "./personal-config-edit.ts";
 import { formatSmoke, pickSmokeEnv, runSmoke, smokeFailed } from "./smoke.ts";
+import type { FrontEnd } from "./smoke.ts";
 
 const MAX_STDIN = 64 * 1024;
 const MAX_CONFIG = 1024 * 1024;
 const RECORD_NAMES = ["org", "project", "repo", "path", "branch", "mode", "apiKey"];
-const OPTIONAL_RECORDS = ["smoke"];
+const OPTIONAL_RECORDS = ["smoke", "frontend"];
+const FRONT_ENDS: readonly FrontEnd[] = ["install.sh", "install.ps1"];
+let frontEnd = "install.sh" as FrontEnd;
 const OTHER_CONFIGS = ["kilo.json", "opencode.json", "opencode.jsonc", "config.json"];
 const IS_WINDOWS = process.platform === "win32";
 
@@ -85,6 +88,9 @@ function parseRecords(text: string): Record<string, string> {
   }
   if (!RECORD_NAMES.every((name) => Object.hasOwn(records, name))) throw badHelperInput();
   if (Object.hasOwn(records, "smoke") && records["smoke"] !== "on" && records["smoke"] !== "off") {
+    throw badHelperInput();
+  }
+  if (Object.hasOwn(records, "frontend") && !FRONT_ENDS.includes(records["frontend"] as FrontEnd)) {
     throw badHelperInput();
   }
   return records;
@@ -338,18 +344,23 @@ function toMessage(err: unknown): { exitCode: number; message: string } {
   return { exitCode: 3, message: `file system or internal error${suffix}.` };
 }
 
+function optionLabel(name: string): string {
+  return frontEnd === "install.ps1" ? `-${name.charAt(0).toUpperCase()}${name.slice(1)}` : `--${name}`;
+}
+
 async function run(): Promise<void> {
   const records = parseRecords(await readStdin());
+  frontEnd = (records["frontend"] as FrontEnd | undefined) ?? "install.sh";
   const validated = validateInputs(records);
   if (!validated.ok) {
-    const subject = validated.name === "KILO_BIFROST_KEY" ? validated.name : `invalid value for --${validated.name}:`;
+    const subject = validated.name === "KILO_BIFROST_KEY" ? validated.name : `invalid value for ${optionLabel(validated.name)}:`;
     throw usageError(`${subject} ${validated.reason}`);
   }
   const plan = buildPlan(validated.values, validated.apiKey);
   const warnings = [...plan.warnings];
   if (validated.apiKeyLooksUnusual) warnings.push("the Bifrost virtual key does not start with sk-bf-; check it.");
   const lines = applyPlan(plan);
-  for (const warning of warnings) console.error(`install.sh: warning: ${warning}`);
+  for (const warning of warnings) console.error(`${frontEnd}: warning: ${warning}`);
   for (const line of lines) console.log(line);
   if (plan.droppedOptions.length > 0) {
     console.log(`Note: dropped plugin options from the previous entry: ${plan.droppedOptions.join(", ")}`);
@@ -363,14 +374,14 @@ async function run(): Promise<void> {
     let failed = true;
     try {
       const report = await runSmoke(validated.values, plan.effectiveApiKey, { env: pickSmokeEnv(process.env) });
-      for (const line of formatSmoke(report)) console.log(line);
+      for (const line of formatSmoke(report, frontEnd)) console.log(line);
       failed = smokeFailed(report);
     } catch {
       failed = true;
     }
     console.log("Done.");
     if (failed) {
-      console.error("install.sh: error: smoke test failed; the installation was kept.");
+      console.error(`${frontEnd}: error: smoke test failed; the installation was kept.`);
       process.exitCode = 4;
     }
     return;
@@ -382,7 +393,7 @@ try {
   await run();
 } catch (err) {
   const { exitCode, message } = toMessage(err);
-  console.error(`install.sh: error: ${message}`);
-  if (exitCode === 2) console.error("Run install.sh --help for usage.");
+  console.error(`${frontEnd}: error: ${message}`);
+  if (exitCode === 2) console.error(frontEnd === "install.ps1" ? "Run install.ps1 -Help for usage." : "Run install.sh --help for usage.");
   process.exitCode = exitCode;
 }

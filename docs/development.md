@@ -65,7 +65,7 @@ The tests parse the file with the plugin's `parseJsonc`, check the plugin option
 `resolveSettings`, check the placeholder against the validator's secret pattern, and merge it with
 `backend/shared-config/kilo.jsonc` to confirm the local `apiKey` survives in both modes. They accept
 both LF and CRLF line endings. `.gitattributes` has `*.jsonc text eol=lf`, so `.jsonc` files are LF in
-the repository. `backend/installer/install.sh` (F-010) copies this file to `~/.config/kilo/kilo.jsonc`; the Windows installer (F-011) is not built yet.
+the repository. `backend/installer/install.sh` (F-010) copies this file to `~/.config/kilo/kilo.jsonc`; `backend/installer/install.ps1` (F-011) does the same on Windows.
 
 ## Installer tests and lint rule 6
 The macOS/Linux installer (`backend/installer/`: `install.sh`, `install-helper.ts`,
@@ -94,14 +94,22 @@ other installer tests pass `--no-smoke`.
 Lint rule 7 (`check-fr11.mjs`, ADR-0013) forbids any file directly in `backend/installer/` from
 mentioning test switches such as the fake-network preload, so product code can never enable it.
 
+### Windows installer tests (F-011)
+`install.ps1` (contract section 10, ADR-0014) is tested by `ps-helpers.ts` (shared helpers),
+`install-ps1.test.ts`, `install-ps1-static.test.ts`, `install-ps1-smoke.test.ts` and
+`install-helper-frontend.test.ts` (helper `frontend` record), all in `backend/test/installer/`. They run
+with `npm test`, and the script tests run on both `pwsh` (PowerShell 7+) and `powershell.exe`
+(Windows PowerShell 5.1). A host that is not installed is skipped with a clear message, so the suite
+also passes on machines with only one of them.
+
 ## Layout
 ```
 backend/plugin/azdo-remote-config.ts   the plugin
 backend/validator/                     shared-config validator (CLI, rules library, schema subset)
 backend/shared-config/kilo.jsonc       example shared config
 backend/personal-config/kilo.jsonc     personal config template (copied to ~/.config/kilo/)
-backend/installer/                     macOS/Linux bootstrap installer (install.sh + Node helper)
+backend/installer/                     bootstrap installer (install.sh, install.ps1 + Node helper)
 backend/tools/check-fr11.mjs           lint
 backend/test/                          tests
 ```
-Further folders (templates, Windows installer, provisioning) arrive with later items.
+Further folders (templates, provisioning) arrive with later items.

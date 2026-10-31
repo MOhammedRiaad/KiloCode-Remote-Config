@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.11.0] - 2026-10-31
+
+### Added
+- F-011: Windows bootstrap installer (`install.ps1`).
+- F-011: helper `frontend` record for the installer.
+- F-011: documentation for the Windows installer.
+
+### Changed
+- F-011: `*.ps1` files are now enforced with LF line endings (LF rule).
+
 ## [0.10.0] - 2026-10-31
 
 ### Added

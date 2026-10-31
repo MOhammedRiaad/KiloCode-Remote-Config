@@ -9,7 +9,7 @@ Owned by the **architect** agent.
   plugin interface in `contracts/plugin-interface.md` and the shared config validator CLI in
   `contracts/validator-cli.md` (since F-007) and the personal config template in
   `contracts/personal-config-template.md` (since F-009) and the bootstrap installer in
-  `contracts/installer-cli.md` (since F-010).
+  `contracts/installer-cli.md` (since F-010; `install.ps1` since F-011, section 10).
 
 ADR template:
 

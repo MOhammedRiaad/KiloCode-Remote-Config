@@ -465,3 +465,15 @@ test("runSmoke reads globalThis.fetch at call time, ignores __proto__ baseURL an
   }
 });
 
+
+test("formatSmoke names the front end in the no-key hint", () => {
+  const noKeyReport: SmokeReport = { azdo: { status: "pass" }, bifrost: { status: "skipped", code: "no-key" } };
+  assert.equal(
+    formatSmoke(noKeyReport, "install.ps1")[2],
+    "Smoke test: set KILO_BIFROST_KEY and re-run install.ps1 to check your Bifrost virtual key.",
+  );
+  assert.equal(
+    formatSmoke(noKeyReport, "install.sh")[2],
+    "Smoke test: set KILO_BIFROST_KEY and re-run install.sh to check your Bifrost virtual key.",
+  );
+});

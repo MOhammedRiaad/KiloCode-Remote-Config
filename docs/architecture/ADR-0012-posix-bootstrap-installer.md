@@ -4,6 +4,8 @@
 - Cycle / item: cycle-0011 / F-010
 - Amended by: ADR-0013 (cycle-0013, F-019): smoke phase in the helper, `--no-smoke`, exit code 4,
   optional `smoke` stdin record, FR-11 lint rule 7.
+- Amended by: ADR-0014 (cycle-0014, F-011): `install.ps1` front end, optional `frontend` stdin
+  record (message prefix only), Windows ACL behaviour documented.
 
 ## Context
 

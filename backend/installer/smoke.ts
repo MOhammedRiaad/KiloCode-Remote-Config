@@ -33,7 +33,7 @@ const MAX_KEY_CHARS = 4096;
 const MAX_RESPONSE_BYTES = 1048576;
 const MAX_EMPTY_CHUNKS = 1024;
 const FORWARDED_DEP_KEYS = ["fetch", "runAz", "setTimeout", "clearTimeout"] as const;
-const NO_KEY_HINT = "Smoke test: set KILO_BIFROST_KEY and re-run install.sh to check your Bifrost virtual key.";
+export type FrontEnd = "install.sh" | "install.ps1";
 
 type BifrostFetchCode = "timeout" | "too-large" | "bad-response" | "network";
 type Outcome = { state: "value"; value: unknown } | { state: "failed" } | { state: "deadline" };
@@ -385,10 +385,10 @@ function formatLine(check: "azdo" | "bifrost", outcome: SmokeOutcome): string {
 }
 
 /** Formats the stdout lines of a smoke report, including the no-key hint when applicable. */
-export function formatSmoke(report: SmokeReport): string[] {
+export function formatSmoke(report: SmokeReport, frontEnd: FrontEnd = "install.sh"): string[] {
   const lines = [formatLine("azdo", report.azdo), formatLine("bifrost", report.bifrost)];
   if (report.bifrost.status === "skipped" && report.bifrost.code === "no-key") {
-    lines.push(NO_KEY_HINT);
+    lines.push(`Smoke test: set KILO_BIFROST_KEY and re-run ${frontEnd} to check your Bifrost virtual key.`);
   }
   return lines;
 }

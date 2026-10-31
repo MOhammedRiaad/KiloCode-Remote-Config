@@ -316,8 +316,8 @@
       "id": "F-011",
       "title": "Bootstrap installer for Windows (install.ps1)",
       "type": "feature",
-      "priority": 3,
-      "status": "todo",
+      "priority": 2,
+      "status": "done",
       "scope": {
         "backend": true,
         "frontend": false
@@ -326,16 +326,19 @@
         "F-010",
         "F-019"
       ],
-      "description": "FR-18..FR-23 / AC-12 / AC-14 for Windows, behaviour parity with install.sh (F-010) and its smoke test (F-019); same input contract (KILO_BIFROST_KEY env var for the key, never a parameter). Tests via Pester or pwsh where available; skipped with a clear message otherwise. Cycle 0010 security/docs: copy the personal config template with user-only file permissions (users will put a real virtual key in it), never overwrite an existing personal config without a backup, and confirm the plugin path ./azdo/azdo-remote-config.ts resolves relative to the Kilo config dir (~/.config/kilo/azdo/). Template: backend/personal-config/kilo.jsonc.",
+      "description": "FR-18 (install.ps1 half) / FR-19..FR-23 / AC-10 (simulated) / AC-12 / AC-14 for Windows, behaviour parity with install.sh (F-010) and its smoke test (F-019). PO decision (cycle 0014): backend/installer/install.ps1 is a THIN front end like install.sh: it parses parameters, applies env/defaults, checks prerequisites, then pipes the NUL-terminated stdin records of contract installer-cli section 4 (org, project, repo, path, branch, mode, apiKey, smoke) to the existing `node install-helper.ts`, whose exit code it returns. All file work, personal-config editing, backups, permissions and the smoke test stay in the shared helper (no second implementation in PowerShell). Parameters: -Org, -Project, -Repo, -Path, -Branch, -Mode, -NoSmoke, -Help (Architect fixes exact names and records them as a contract amendment, e.g. installer-cli 1.2.0); env fallbacks KILO_AZDO_ORG/PROJECT/REPO/PATH/BRANCH/MODE; the virtual key comes ONLY from env KILO_BIFROST_KEY (no parameter, never in argv) and secrets travel on stdin only. Same exit codes 0-4 and same fixed messages as install.sh (script name may read install.ps1). Must run under Windows PowerShell 5.1 and PowerShell 7+ (pwsh), with no module installs (no Pester requirement). Prerequisites (FR-21): node >= 22.18 on PATH; one of AZDO_PAT / AZURE_DEVOPS_EXT_PAT / KILO_AZDO_PAT non-empty, else `az` on PATH and `az account show` succeeding; all checked before anything is written. Plugin path: <config dir>\\azdo\\azdo-remote-config.ts with config dir from the helper (XDG_CONFIG_HOME or <USERPROFILE>\\.config\\kilo), referenced as ./azdo/azdo-remote-config.ts. Cycle 0010 security: personal config written user-only (the helper's Windows behaviour is documented by the Architect; no new ACL code required unless the Architect decides otherwise), never overwritten without a backup. Tests: node:test suites under backend/test/installer/ spawn `pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File install.ps1` (or powershell.exe when pwsh is absent) with a temp USERPROFILE/HOME, an allow-listed env and stub az/node shims, reusing the F-019 fake-network preload (test/installer/fixtures/fake-network.ts) for smoke cases; when no PowerShell is available the suite skips with a clear message. Tests never touch the real home directory, network, az or Kilo. The plugin file, its export surface, the validator rules, the personal config template and install.sh behaviour are unchanged. Zero runtime npm deps (FR-11).",
       "acceptance_criteria": [
-        "Given a temp USERPROFILE with no Kilo config, When install.ps1 runs, Then the plugin and personal config are created as with install.sh.",
-        "Given an existing personal config with other keys, When install.ps1 runs, Then other keys are preserved.",
-        "Given install.ps1, When it runs, Then nothing is written to the auto-loaded plugin directory.",
-        "Given az missing and no PAT, When install.ps1 runs, Then it prints a clear fix and exits non-zero.",
-        "Given install.ps1 is run twice, Then the second run changes nothing except the plugin file."
+        "Given a temp USERPROFILE (and HOME) with no Kilo config, -Org/-Project/-Repo supplied, KILO_BIFROST_KEY set, AZDO_PAT set and -NoSmoke, When install.ps1 runs under PowerShell, Then it exits 0, `<profile>/.config/kilo/azdo/azdo-remote-config.ts` is byte-identical to backend/plugin/azdo-remote-config.ts, and `<profile>/.config/kilo/kilo.jsonc` is byte-identical to the file install.sh produces for the same inputs in another temp home (one plugin entry `[\"./azdo/azdo-remote-config.ts\", {org, project, repo, path:'/kilo.jsonc', branch:'main', mode:'defaults'}]`, apiKey equal to KILO_BIFROST_KEY).",
+        "Given org/project/repo/path/branch/mode supplied only through KILO_AZDO_* env vars, and separately both a parameter and an env var for the same setting, When install.ps1 runs, Then env values are used when parameters are absent and the parameter wins when both are set; and Given a missing org, project or repo, an unknown parameter (e.g. -ApiKey or -Key), or a positional argument, When it runs, Then it exits 2 with a usage message that does not echo the offending argument text and nothing is created under the temp profile.",
+        "Given an existing personal config (with comments) containing `model`, `provider.other`, `provider.bifrost.options.headers`, apiKey `sk-bf-existing`, a `my-other-plugin` entry and an outdated azdo-remote-config entry, When install.ps1 runs with KILO_BIFROST_KEY unset, Then every other key deep-equals its previous value, `my-other-plugin` is still present, exactly one azdo-remote-config entry carries the supplied options, apiKey is still `sk-bf-existing`, and a backup byte-identical to the original exists next to it (FR-20).",
+        "Given any install.ps1 run (fresh or update), When the temp profile is inspected, Then nothing exists under `.config/kilo/plugin/` or `.config/kilo/plugins/` that was created by the installer and the personal config references azdo-remote-config.ts exactly once (FR-19, AC-12); and Given install.ps1 has run successfully once, When it runs a second time with the same inputs, Then it exits 0, a recursive byte comparison of the config dir shows no change except (at most) the plugin file, and no additional backup is created (FR-23, AC-14).",
+        "Given a PATH without `az` and no AZDO_PAT / AZURE_DEVOPS_EXT_PAT / KILO_AZDO_PAT, or a stub az whose `account show` exits non-zero, or no node / a node reporting version 22.17.0 on PATH, When install.ps1 runs, Then it exits 1, stderr names the fix (install the Azure CLI and run `az login`, or set AZDO_PAT; install Node.js 22.18 or later), and nothing is created under the temp profile; and Given no az but AZDO_PAT set, Then the prerequisite check passes (FR-21).",
+        "Given the F-019 fake network (AzDO Items API serving backend/shared-config/kilo.jsonc, Bifrost GET /v1/models) and smoke enabled, When install.ps1 runs, Then with succeeding fakes it exits 0 and prints `smoke azdo: pass` and `smoke bifrost: pass` with exactly one Bifrost request carrying `Authorization: Bearer <KILO_BIFROST_KEY>`; with Bifrost returning 401 it prints `smoke bifrost: fail 401` and exits 4 leaving the installed files byte-identical to the success run (AC-10 simulated); and with -NoSmoke no smoke request is sent and no `smoke` line is printed.",
+        "Given runs on the success, usage-error, prerequisite-failure and smoke-failure paths with KILO_BIFROST_KEY `sk-bf-AbCdEf1234567890` and AZDO_PAT set to a sentinel value, When the full stdout and stderr are captured and the command line of every process spawned by install.ps1 is checked (e.g. via the stub node/az shims recording their argv), Then neither value appears in any output or argv, and install.ps1 has no parameter that accepts a key or PAT.",
+        "Given the repository after the change, When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0 and runs the install.ps1 tests (or skips them with a clear message when no PowerShell is installed), the existing install.sh, smoke and helper tests still pass, backend/package.json has no runtime `dependencies`, backend/plugin/azdo-remote-config.ts, backend/personal-config/kilo.jsonc and backend/installer/install.sh are unchanged, and docs/architecture/contracts/installer-cli.md documents install.ps1's parameters, env inputs and exit codes."
       ],
       "source": "vision",
-      "cycle_done": null
+      "cycle_done": 14
     },
     {
       "id": "F-012",
@@ -401,7 +404,7 @@
         "F-007",
         "F-019"
       ],
-      "description": "AC-1 / AC-2 / AC-10 simulated: local fake AzDO + fake Bifrost servers exercise the whole plugin flow.",
+      "description": "AC-1 / AC-2 / AC-10 simulated: local fake AzDO + fake Bifrost servers exercise the whole plugin flow. Cycle 0013 architect follow-up: reuse the F-019 fake-network preload (backend/test/installer/fixtures/fake-network.ts) and its scenario format.",
       "acceptance_criteria": [
         "Given a fake AzDO server serving a shared kilo.jsonc, When the plugin config hook runs, Then the resulting config lists the Bifrost models (AC-1, simulated).",
         "Given the shared file changes on the fake server, When the hook runs again, Then the new value is in effect with no other change (AC-2).",
@@ -446,7 +449,7 @@
       "depends_on": [
         "F-010"
       ],
-      "description": "Engineer setup guide, platform-team runbook (config change, key provisioning, offboarding), KILO_PURE caveat, supported Kilo version range, Phase 0 assumptions A1-A3 checklist. User decision (cycle 0012): F-012/F-013 are skipped, so treat the F-013 dependency as waived and omit key-provisioning/offboarding runbook content.",
+      "description": "Engineer setup guide, platform-team runbook (config change, key provisioning, offboarding), KILO_PURE caveat, supported Kilo version range, Phase 0 assumptions A1-A3 checklist. User decision (cycle 0012): F-012/F-013 are skipped, so treat the F-013 dependency as waived and omit key-provisioning/offboarding runbook content. Cycle 0013 architect follow-up: document installer exit code 4, --no-smoke (and the Windows equivalent once F-011 ships) and each smoke fixed code with what to do. Cycle 0014: also document install.ps1 ExecutionPolicy/Unblock-File guidance (already in the user guide), the 'Rewritten by install.sh' header note, and Windows ACL residual risk.",
       "acceptance_criteria": [
         "Given docs/, When an automated check runs, Then engineer setup, platform runbook and troubleshooting pages exist and link to each other.",
         "Given the troubleshooting page, When checked, Then it mentions KILO_PURE=1, az login and the cache location.",
@@ -898,6 +901,48 @@
         "Given a test that calls real fetch or execFile, When the suite runs, Then it fails."
       ],
       "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-021",
+      "title": "Fix installer contract 10.1 wording and overview.md NUL bytes",
+      "type": "chore",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-011"
+      ],
+      "description": "Cycle 0014 review (architect-owned docs): contract installer-cli.md 10.1 says `-Name:value` is a usage error, but under `-File` PowerShell splits it into two tokens first, so limit that rule to in-process calls; docs/architecture/overview.md line ~90 contains literal NUL bytes (git treats the file as binary) and lost the backslash in `$PSScriptRoot\\install-helper.ts`: write the text `\u0000` and restore the backslash.",
+      "acceptance_criteria": [
+        "Given overview.md, When git diff is run, Then it is treated as text and contains no NUL bytes.",
+        "Given contract 10.1, When read, Then the colon-form rule applies only to in-process calls."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-022",
+      "title": "install.ps1 hardening and Windows installer follow-ups",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-011"
+      ],
+      "description": "Cycle 0014 security/review follow-ups: (sec low L-1) when node is a .cmd shim, cmd.exe expands %VAR% in the helper path: reject % in the helper path with the existing exit-3 message or prefer node.exe over a .cmd shim; (review low 3) node .cmd shim in a path with spaces plus a helper path with spaces breaks the command line: resolve real node.exe first or document; (review info 4) install-helper-frontend.test.ts:36 \"C:\\Windows\" should be \"C:\\Windows\"; (review info 5) add the no-secrets check to the AC-7 node-version prerequisite test; (sec info I-1) optionally remove KILO_BIFROST_KEY from the child env of node/az checks; explicit Windows ACL hardening of the config dir/file; a Windows CI job that runs the install.ps1 tests.",
+      "acceptance_criteria": [
+        "Given a helper path containing %, When install.ps1 runs with a node .cmd shim, Then it exits 3 with a fixed message and no stack trace.",
+        "Given the AC-7 node-version prerequisite failure, When it runs, Then the output is checked for the key and PAT sentinels."
+      ],
+      "source": "security",
       "cycle_done": null
     }
   ]

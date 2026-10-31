@@ -45,6 +45,9 @@ This keeps the file self-contained (FR-11) and type-checkable without a Kilo dep
 - **`node:test` + `node:assert/strict`** (built into Node; no test-framework dependency).
 - Tests are `.ts` files under `backend/test/**`, named `*.test.ts`, run with
   `node --test "test/**/*.test.ts"`.
+- (since F-011, ADR-0014) PowerShell (`pwsh` 7+ or Windows PowerShell 5.1) is an **optional
+  test-time tool**: the `install.ps1` tests spawn it when found and skip with a clear message
+  otherwise. No PowerShell modules (no Pester). GitHub `ubuntu-latest` ships `pwsh`.
 - Fakes, not network: tests inject a fake Kilo context (`client.app.log` spy), fake `fetch`,
   fake home/cache directories (temp dirs) and fake `az` runners. No test may reach the network.
 
@@ -69,6 +72,9 @@ This keeps the file self-contained (FR-11) and type-checkable without a Kilo dep
   7. (since F-019, ADR-0013) no file directly in `installer/` (`.ts` and `.sh`, comments
      included) contains the text `KILO_TEST_` or `NODE_OPTIONS`: product installer code has no
      test switch and does not touch the test preload seam (skipped when `installer/` does not exist).
+     Since F-011 (ADR-0014) this also covers `install.ps1`. `.ps1` format rules (ASCII, no BOM, LF,
+     no `param()` block, banned cmdlets) are enforced by `test/installer/install-ps1-static.test.ts`,
+     not by this tool. PSScriptAnalyzer is optional and not part of the gate.
   It exits non-zero with a clear message on any violation.
 - `tsconfig.json` `include` covers `plugin/**/*.ts`, `validator/**/*.ts`, `installer/**/*.ts`
   (since F-010) and `test/**/*.ts`.
@@ -121,7 +127,7 @@ backend/
     azdo-remote-config.ts # C2 - THE single shipped plugin file (FR-11)
   validator/              # C1 PR-gate tooling (later items: F-0xx validator)
   templates/              # C3 personal config template (later items)
-  installer/              # C5 install.sh + install-helper.ts + personal-config-edit.ts (F-010, ADR-0012); install.ps1 (F-011)
+  installer/              # C5 install.sh + install-helper.ts + personal-config-edit.ts (F-010, ADR-0012); install.ps1 (F-011, ADR-0014)
   provisioning/           # C6 Bifrost key provisioning (later items)
   tools/
     check-fr11.mjs        # lint: FR-11 guard rails

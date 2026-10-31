@@ -6,7 +6,7 @@ The Kilo azdo-remote-config plugin is active. When Kilo starts it fetches one sh
 Azure DevOps, validates it, caches it, and merges it into your Kilo config. If anything fails, Kilo
 starts normally with your local config; the plugin never crashes Kilo.
 
-Also available: a [validator](#validating-the-shared-config-platform-engineers) for the shared config. Also available: a [personal config template](#personal-config-template-engineers). Also available: the [macOS/Linux installer](#installing-on-macos-and-linux-engineers). Not yet available (planned, see `factory/VISION.md`): the Windows installer (F-011), key provisioning and the Azure Pipelines PR gate (F-008).
+Also available: a [validator](#validating-the-shared-config-platform-engineers) for the shared config. Also available: a [personal config template](#personal-config-template-engineers). Also available: the [macOS/Linux installer](#installing-on-macos-and-linux-engineers) and the [Windows installer](#installing-on-windows-engineers). Not yet available (planned, see `factory/VISION.md`): key provisioning and the Azure Pipelines PR gate (F-008).
 
 Supported Kilo version range (pinned): `>=7.2.0 <8.0.0`.
 
@@ -264,7 +264,7 @@ Copy it to `~/.config/kilo/kilo.jsonc` (the global Kilo config directory) and no
 in a project directory and never commit it to a repository, because it holds your virtual key. A
 project-level config cannot choose where the shared config comes from (see "Trust boundary"). On
 macOS and Linux, [`install.sh`](#installing-on-macos-and-linux-engineers) does this copy for you. The
-Windows installer (F-011) is not built yet, so on Windows copy it by hand.
+Windows, [`install.ps1`](#installing-on-windows-engineers) does it.
 The plugin path `./azdo/azdo-remote-config.ts` is relative to the Kilo config directory, so the plugin
 file must be at `~/.config/kilo/azdo/azdo-remote-config.ts`, which `install.sh` also sets up.
 
@@ -287,7 +287,7 @@ That is expected: the validator is a gate for the shared config, not for persona
 
 ## Installing on macOS and Linux (engineers)
 
-`backend/installer/install.sh` sets up your machine in one command and then checks that it works with a smoke test. The Windows installer (F-011) is still to come;
+`backend/installer/install.sh` sets up your machine in one command and then checks that it works with a smoke test. For Windows see [below](#installing-on-windows-engineers);
 key provisioning is out of scope.
 
 ### Before you start
@@ -380,6 +380,60 @@ Troubleshooting by code (a `fail` or `skipped` code on the line):
 | `insecure-base-url` | bifrost | `baseURL` is not `https`; the key is never sent over plain http |
 | `invalid-key` | bifrost | key is too long or has characters outside printable ASCII |
 | `internal` | both | unexpected error |
+
+## Installing on Windows (engineers)
+
+`backend/installer/install.ps1` is the Windows counterpart of `install.sh`. It is a thin front end:
+it checks your inputs and prerequisites, then runs the same Node helper (`install-helper.ts`), so the
+result, exit codes and smoke test are the same. It works on Windows PowerShell 5.1 and PowerShell 7+.
+
+### Before you start
+- Node.js 22.18 or newer on your PATH (use a normal `node.exe` install).
+- Azure DevOps credentials: `az login`, or `AZDO_PAT` (also `AZURE_DEVOPS_EXT_PAT`, `KILO_AZDO_PAT`).
+- A checkout of this repository. The script finds the helper at `$PSScriptRoot\install-helper.ts`, so
+  it must run from the checkout. Piping it (`irm ... | iex`) is not supported.
+
+### Run it
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File backend\installer\install.ps1 -Org contoso -Project platform -Repo kilo-config
+$env:KILO_BIFROST_KEY = "sk-bf-..."; powershell -File backend\installer\install.ps1 -Org contoso -Project platform -Repo kilo-config
+```
+
+| Parameter | Env fallback | Default |
+|---|---|---|
+| `-Org` | `KILO_AZDO_ORG` | required |
+| `-Project` | `KILO_AZDO_PROJECT` | required |
+| `-Repo` | `KILO_AZDO_REPO` | required |
+| `-Path` | `KILO_AZDO_PATH` | `/kilo.jsonc` |
+| `-Branch` | `KILO_AZDO_BRANCH` | `main` |
+| `-Mode` (`defaults` or `enforce`) | `KILO_AZDO_MODE` | `defaults` |
+| `-NoSmoke` | none | smoke test runs |
+| `-Help` | none | prints usage |
+
+Parameter names are case-insensitive but must be exact. An unknown or positional argument exits 2. A
+parameter wins over its environment variable. There is no parameter for the key or a PAT: the virtual
+key is read only from `KILO_BIFROST_KEY`.
+
+### What it writes
+Files go to `%USERPROFILE%\.config\kilo` (`azdo\azdo-remote-config.ts` and `kilo.jsonc`), with the same
+content, backups and idempotence as `install.sh`. `kilo.jsonc` is byte-identical to what `install.sh`
+writes (its update header still says "Rewritten by install.sh"). The installer sets no file permissions
+(no chmod or ACL changes); protection relies on the ACLs your profile folder already inherits. If
+`XDG_CONFIG_HOME` is set, the installer prints a warning (it does not move the target).
+
+### Exit codes and smoke test
+Exit codes 0 to 4 and the smoke test lines are the same as for [macOS and Linux](#exit-codes);
+`-NoSmoke` skips the smoke test.
+
+### Troubleshooting
+- "running scripts is disabled" or a similar execution policy error: start it with
+  `powershell -NoProfile -ExecutionPolicy Bypass -File ...`. If the file came from a download or zip,
+  run `Unblock-File backend\installer\install.ps1` once.
+- Exit 1: Node.js missing or older than 22.18, or no `az login` and no PAT variable.
+- Exit 2: a typo in a parameter name, a missing `-Org`/`-Project`/`-Repo`, or a positional argument.
+- Runs fail in odd ways when `node` is a `.cmd` shim (for example from some version managers): a `%`
+  in the checkout path, or spaces in both the shim path and the helper path, can break the run. Use a
+  normal `node.exe` install or move the checkout to a path without `%` or spaces.
 
 ## Example shared config
 

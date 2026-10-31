@@ -1,16 +1,22 @@
-# Contract: bootstrap installer (`install.sh`) and install helper
+# Contract: bootstrap installers (`install.sh`, `install.ps1`) and install helper
 
-- Version: 1.1.0 (cycle-0013, F-019: smoke test, `--no-smoke`, exit code 4, optional `smoke`
-  stdin record). 1.0.0: cycle-0011, F-010. Decision records: ADR-0012, ADR-0013.
-- Files: `backend/installer/install.sh` (bash front end), `backend/installer/install-helper.ts`
+- Version: 1.2.0 (cycle-0014, F-011: `install.ps1` front end (section 10), optional `frontend`
+  stdin record, front-end-specific message prefix). 1.1.0: cycle-0013, F-019 (smoke test,
+  `--no-smoke`, exit code 4, optional `smoke` stdin record). 1.0.0: cycle-0011, F-010.
+  Decision records: ADR-0012, ADR-0013, ADR-0014.
+- Files: `backend/installer/install.sh` (bash front end), `backend/installer/install.ps1`
+  (PowerShell front end; since 1.2.0), `backend/installer/install-helper.ts`
   (Node CLI, all file I/O), `backend/installer/personal-config-edit.ts` (pure library),
   `backend/installer/smoke.ts` (smoke checks, injectable deps; since 1.1.0).
 - Inputs read from the repo tree (relative to the helper): `../plugin/azdo-remote-config.ts`,
   `../personal-config/kilo.jsonc`. Neither file is modified.
-- Consumers: engineers (macOS, Linux), tests (Linux CI, Windows Git Bash), F-011 `install.ps1`
-  (reuses the helper via section 4), F-019 smoke test (runs after a successful install).
+- Consumers: engineers (macOS, Linux: `install.sh`; Windows: `install.ps1`), tests (Linux CI,
+  Windows Git Bash / PowerShell), F-019 smoke test (runs after a successful install).
+- Sections 1-9 describe `install.sh` and the helper; section 10 lists what differs for
+  `install.ps1`. Everything not listed there (env inputs, processing order, exit codes, helper
+  behaviour, files, output) is identical, with `install.ps1` in place of `install.sh` in messages.
 
-## 1. Command line
+## 1. Command line (`install.sh`; `install.ps1`: section 10.1)
 
 ```
 bash install.sh --org <org> --project <project> --repo <repo>
@@ -76,9 +82,24 @@ There is deliberately **no flag for the virtual key** and no flag for a PAT.
   applies defaults before sending).
 - (1.1.0) Optional record `smoke`, at most once, value exactly `on` or `off`. Absent = `off`
   (a 1.0.0 front end gets no smoke test). `install.sh` always sends it (`on` unless `--no-smoke`).
+- (1.2.0) Optional record `frontend`, at most once, value exactly `install.sh` or `install.ps1`.
+  Absent = `install.sh`. `install.sh` does **not** send it (its output is unchanged);
+  `install.ps1` always sends `frontend=install.ps1`. Effect, for `install.ps1`, on **messages
+  only** (never on file contents, never on exit codes):
+
+  | Message part | `install.sh` (absent) | `install.ps1` |
+  |---|---|---|
+  | stderr prefix | `install.sh: error:` / `install.sh: warning:` | `install.ps1: error:` / `install.ps1: warning:` |
+  | usage hint after exit 2 | `Run install.sh --help for usage.` | `Run install.ps1 -Help for usage.` |
+  | setting label in `invalid value for <label>: <reason>` | `--org` `--project` `--repo` `--path` `--branch` `--mode` | `-Org` `-Project` `-Repo` `-Path` `-Branch` `-Mode` |
+  | no-key smoke hint | `... and re-run install.sh to check ...` | `... and re-run install.ps1 to check ...` |
+
+  The update header comment (section 5 step 5) keeps the text `Rewritten by install.sh` for both
+  front ends, so personal configs are byte-identical across front ends.
 - Missing, duplicate or unknown names, a record without `=`, a `smoke` value other than `on` /
-  `off`, data after the last NUL, or more than 64 KiB -> exit 3 with
-  `install.sh: error: internal error (bad helper input)`.
+  `off`, a `frontend` value other than `install.sh` / `install.ps1`, data after the last NUL, or
+  more than 64 KiB -> exit 3 with `install.sh: error: internal error (bad helper input)` (always
+  the `install.sh` prefix: the front end is not known yet).
 - The helper reads no other input from the environment except `XDG_CONFIG_HOME`, what
   `os.homedir()` uses and, in the smoke phase only, `AZDO_PAT`, `AZURE_DEVOPS_EXT_PAT`,
   `KILO_AZDO_PAT`, `KILO_AZDO_TIMEOUT_MS` (plus `PATH` / `ComSpec` through the plugin's az runner).
@@ -139,7 +160,10 @@ The resulting file always contains exactly one entry that refers to azdo-remote-
 - `lstat`: existing `kilo.jsonc` or plugin destination must be a regular file, existing `azdo/` and
   `<configDir>` must be directories (not symlinks) -> else exit 3,
   `install.sh: error: <path> is not a regular file or directory (symlinks are not followed); update it manually.`
-- On Windows (`process.platform === "win32"`) no `chmod` is performed.
+- On Windows (`process.platform === "win32"`) no `chmod` is performed and no ACL is set (by the
+  helper or `install.ps1`): new directories and files inherit the ACL of their parent. Under the
+  default `%USERPROFILE%\.config\kilo` that grants access to the user, `SYSTEM` and
+  `Administrators` only. When `XDG_CONFIG_HOME` is set, `install.ps1` warns (section 10.4).
 
 ## 7. Output
 
@@ -179,7 +203,8 @@ traces. All errors are caught at the top of the helper and mapped to a fixed mes
 
 ## 8. Not part of the contract
 
-- Windows ACLs (F-011).
+- Explicit Windows ACL hardening (inherited ACLs are documented in section 6; ADR-0014 section 8).
+- Running `install.ps1` from a pipe (`irm ... | iex`) or from PowerShell ISE.
 - Comment preservation on update.
 - Resolving `{env:}` / `{file:}` placeholders in the shared `baseURL` or the personal `apiKey`
   during the smoke test.
@@ -244,3 +269,88 @@ az token is never sent to Bifrost.
 - Otherwise exit 0. `skipped` never fails the run.
 - Time bound: at most about `2 x timeoutMs` (plus process overhead).
 - The smoke phase writes no file (no cache, no log) and never alters the installed files.
+
+## 10. `install.ps1` (1.2.0, F-011; ADR-0014)
+
+Windows front end with the same behaviour as `install.sh`. Hosts: Windows PowerShell 5.1 and
+PowerShell 7+ (`pwsh`). No modules. Also runs under `pwsh` on Linux / macOS (used by CI tests).
+
+### 10.1 Command line
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Org <org> -Project <project> -Repo <repo>
+           [-Path <path>] [-Branch <branch>] [-Mode defaults|enforce] [-NoSmoke]
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Help
+```
+(`pwsh` in place of `powershell` works the same; `& .\install.ps1 ...` from a console session too.)
+
+| Argument | Contract |
+|---|---|
+| `-Org`, `-Project`, `-Repo`, `-Path`, `-Branch`, `-Mode` | Names match **case-insensitively and exactly** (no abbreviation such as `-Or`). Take the **next** argument as value, even if it looks like a parameter. Last occurrence wins. Value-taking name as the last argument -> usage error. An empty value counts as absent (env / default apply). |
+| `-NoSmoke` | No value. Same meaning as `--no-smoke`. Repeatable. |
+| `-Help`, `-h`, `-?`, `--help` (any case) | Print the usage text (10.3) to stdout, exit 0. No checks, no writes, `node` / `az` not run. Scanned first, wins wherever it appears. |
+| Anything else | Usage error, exit 2, argument text never echoed: unknown names (`-ApiKey`, `-Key`, `-Pat`, `-BifrostKey`, GNU-style `--org`), `-Name:value` forms, positional arguments, and (in-process `&` calls only) an array value or a non-string, non-numeric object value. Numbers are converted with the invariant culture. |
+
+There is no parameter for the virtual key and none for a PAT.
+
+### 10.2 Inputs, order, exit codes
+
+- Environment: exactly section 2 (`KILO_AZDO_*` fallbacks and defaults `/kilo.jsonc`, `main`,
+  `defaults`; key only from `KILO_BIFROST_KEY`; PAT variables only tested for non-emptiness).
+  On Windows `PATHEXT` is used by command lookup.
+- Order: section 3 steps 1-4 with these PowerShell specifics:
+  1. help scan; 2. parse (`unknown option or argument.` -> exit 2); 3. merge, missing inputs ->
+  `install.ps1: error: missing required input -Org (or KILO_AZDO_ORG).` (one line per missing
+  input, then `Run install.ps1 -Help for usage.`, exit 2); a value or the key containing a NUL
+  character -> `install.ps1: error: an input contains a NUL character.`, exit 2;
+  4. prerequisites (all reported, then exit 1), same fixed texts as section 7 with the
+  `install.ps1: error:` prefix:
+     - command lookup = first `Get-Command -CommandType Application` result in PATH order; on
+       Windows only `.exe`, `.cmd`, `.bat`, `.com` results count (an extensionless file is ignored);
+     - Node version from `<node> -p process.versions.node`, >= 22.18; the `found <version>` text is
+       the trimmed first line if it matches `^[0-9A-Za-z.+-]{1,32}$`, else `unknown`;
+     - credentials: PAT variable non-empty, else `<az> account show --output none` exits 0
+       (output discarded; `az` is `az.cmd` on Windows);
+  5. helper lookup: `<directory of install.ps1>/install-helper.ts` must be an existing file, else
+     `install.ps1: error: installer sources are missing (expected install-helper.ts next to install.ps1).`,
+     exit 3, nothing written;
+  6. (Windows only) `XDG_CONFIG_HOME` non-empty -> warning (10.4), continue;
+  7. records `org, project, repo, path, branch, mode, apiKey, smoke, frontend=install.ps1`
+     encoded as UTF-8 **without BOM** (text that is not valid Unicode ->
+     `install.ps1: error: an input is not valid Unicode text.`, exit 2), written to the stdin of
+     `<node> "<helper>"` started with `System.Diagnostics.Process` (stdout / stderr inherited,
+     not captured); stdin closed after the bytes; the helper's exit code is returned unchanged.
+- Exit codes: section 3 table (0-4), unchanged. Any unexpected PowerShell exception ->
+  `install.ps1: error: internal error.`, exit 3 (no exception text, no stack trace).
+- No value of `KILO_BIFROST_KEY` or a PAT appears in any argv: `node` gets only `-p
+  process.versions.node` or the helper path; `az` gets only `account show --output none`.
+
+### 10.3 Usage text (stdout, exit 0)
+
+```
+Usage: install.ps1 -Org <org> -Project <project> -Repo <repo> [-Path <path>] [-Branch <branch>] [-Mode defaults|enforce] [-NoSmoke]
+       install.ps1 -Help
+
+Installs the Azure DevOps remote-config plugin and your personal Kilo config.
+Inputs can also come from KILO_AZDO_ORG, KILO_AZDO_PROJECT, KILO_AZDO_REPO,
+KILO_AZDO_PATH, KILO_AZDO_BRANCH and KILO_AZDO_MODE (parameters win).
+Your Bifrost virtual key is read from KILO_BIFROST_KEY (there is no parameter for it).
+After installing, a smoke test reads the shared config from Azure DevOps and calls Bifrost GET <baseURL>/models; -NoSmoke skips it.
+Requires Node.js 22.18 or later and either `az login` or AZDO_PAT.
+Exit codes: 0 ok, 1 prerequisite, 2 usage, 3 file system, 4 installed but smoke test failed.
+Run it with: powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 ...
+```
+
+### 10.4 Output
+
+- All front-end text is fixed ASCII written with `[Console]::Out` / `[Console]::Error`, line
+  ending of the platform (CRLF on Windows). Helper lines (section 7, with the `install.ps1`
+  variants of section 4) are LF and pass through unmodified.
+- Windows-only warning when `XDG_CONFIG_HOME` is non-empty (stderr, before the helper runs):
+  `install.ps1: warning: XDG_CONFIG_HOME is set: make sure only your account can read that folder, because kilo.jsonc holds your Bifrost virtual key.`
+- Never printed: same list as section 7.
+
+### 10.5 File format
+
+`install.ps1` is ASCII-only (bytes 0x20-0x7E plus LF), no BOM, LF line endings
+(`.gitattributes`: `*.ps1 text eol=lf`), no `param()` block. It writes no file itself.
