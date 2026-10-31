@@ -35,10 +35,28 @@ At runtime the plugin writes only `~/.cache/kilo-azdo/remote-config.json` (see [
 
 The plugin now imports `node:fs`, `node:os`, `node:path` and `node:child_process` (the last only to run `az` for the Entra-token fallback; allowed by FR-11; still `node:` only).
 
+## Validator tests and lint rule 5
+The validator (`backend/validator/`, contract `docs/architecture/contracts/validator-cli.md`, ADR-0010)
+is tested by `backend/test/validator/` (`rules.test.ts`, `cli.test.ts`, `schema-subset.test.ts`,
+`example-config.test.ts`, shared `helpers.ts`). They run with `npm test`; to run only these:
+
+```bash
+cd backend
+node --test "test/validator/*.test.ts"
+```
+
+The CLI tests run the real CLI against temp files. `kiloVersionRange` in
+`kilo-schema-subset.json` must equal the plugin's `SUPPORTED_KILO_RANGE` (a test enforces it).
+`npm run lint` has a fifth rule: files in `backend/validator/` may import only `node:` built-ins,
+sibling `.ts` files or the plugin file. The validator reuses the plugin's `parseJsonc` and
+`resolvePlaceholders` through `__internals`. Usage and rules: [user guide](user-guide.md).
+
 ## Layout
 ```
 backend/plugin/azdo-remote-config.ts   the plugin
+backend/validator/                     shared-config validator (CLI, rules library, schema subset)
+backend/shared-config/kilo.jsonc       example shared config
 backend/tools/check-fr11.mjs           lint
 backend/test/                          tests
 ```
-Further folders (validator, templates, installer, provisioning) arrive with later items.
+Further folders (templates, installer, provisioning) arrive with later items.

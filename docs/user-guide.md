@@ -6,7 +6,7 @@ The Kilo azdo-remote-config plugin is active. When Kilo starts it fetches one sh
 Azure DevOps, validates it, caches it, and merges it into your Kilo config. If anything fails, Kilo
 starts normally with your local config; the plugin never crashes Kilo.
 
-Not yet available (planned, see `factory/VISION.md`): the bootstrap installers and key provisioning.
+Also available: a [validator](#validating-the-shared-config-platform-engineers) for the shared config. Not yet available (planned, see `factory/VISION.md`): the bootstrap installers, key provisioning and the Azure Pipelines PR gate (F-008).
 
 Supported Kilo version range (pinned): `>=7.2.0 <8.0.0`.
 
@@ -171,3 +171,85 @@ Limits: the whole operation (az, request and reading the body) must finish withi
 Failures are reported as one fixed code, never with values, URLs or secrets: `invalid-settings`,
 `auth-unavailable`, `timeout`, `too-large`, `bad-response`, `network`, or `http-<status>` (for
 example `http-401`). See [API](api.md) for details.
+
+## Validating the shared config (platform engineers)
+
+Before you merge a change to the shared `kilo.jsonc`, check it with the validator. It is a
+command-line tool in this repository; it reads the files and reports problems. It does not fetch
+anything and does not need a PAT. Running it automatically on every pull request in the Azure DevOps
+repo comes with F-008; until then, run it by hand.
+
+### Run it
+From the repository root (Node.js 22.18 or newer):
+
+```bash
+node backend/validator/validate-kilo-config.ts path/to/kilo.jsonc
+node backend/validator/validate-kilo-config.ts --allowed-hosts bifrost.yourcompany.internal path/to/kilo.jsonc
+node backend/validator/validate-kilo-config.ts --help
+```
+
+| Argument | Meaning |
+|---|---|
+| `<file>...` | One or more JSONC files (at least one). Processed in order. |
+| `--allowed-hosts <list>` | Comma-separated host names. Turns on the `base-url-host` check: every `provider.<id>.options.baseURL` must be an `https` URL, with no user name or password, on one of these hosts. The flag may be repeated. An empty or invalid list is a usage error. |
+| `--` | Everything after it is a file name, even if it starts with `-`. |
+| `--help`, `-h` | Print usage and exit 0. |
+
+Reading from stdin (`-`) is not supported.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | All files were read and none has errors. Warnings are allowed. |
+| 1 | All files were read and at least one has an error. |
+| 2 | Usage error, a file could not be read, or an internal error. Takes precedence over 1. |
+
+### Output
+One line per finding, then one verdict line per file, then a summary:
+
+```
+kilo.jsonc: error api-key at provider.bifrost.options.apiKey: apiKey must never be in the shared config
+kilo.jsonc: invalid (1 errors, 0 warnings)
+validate-kilo-config: 1 files checked: 0 valid, 1 invalid, 0 unreadable.
+```
+
+Unreadable files are reported on stderr as `<file>: io-error: ...`; usage errors also go to stderr.
+At most 200 findings are printed per file. The validator never prints a value from the file (no
+string values, URLs or secrets), only rule ids, locations such as `provider.bifrost.options.baseURL`
+or `line 12`, and fixed messages.
+
+### Rules
+Errors (exit 1):
+
+| Rule | Fires when |
+|---|---|
+| `file-too-large` | The file is larger than 1 MiB (the plugin's fetch limit). |
+| `invalid-encoding` | The file is not valid UTF-8. |
+| `invalid-jsonc` | The file does not parse as JSONC. |
+| `root-not-object` | The top level is not a JSON object. |
+| `too-deep` | Nesting reaches 64 levels. |
+| `prototype-key` | A key is `__proto__`, `constructor` or `prototype` (the plugin drops these). |
+| `api-key` | Any key named `apiKey` (any case), at any depth. |
+| `secret-pattern` | A key, a string value or any line of the text (comments included) contains `sk-bf-` followed by a letter or digit. |
+| `schema-type` | A known Kilo setting has the wrong type (for example `provider` is not an object). Unknown keys are never errors. |
+| `base-url-host` | Only with `--allowed-hosts`: a `baseURL` is not an https URL on an allowed host. |
+
+Warnings (exit stays 0):
+
+| Rule | Fires when |
+|---|---|
+| `prototype-member-name` | A key shadows an `Object.prototype` member such as `toString` or `valueOf`. |
+| `file-placeholder-unresolvable` | A `{file:PATH}` placeholder can never resolve; use `~/...` or an absolute path. |
+| `plugin-ignored` | The file has a top-level `plugin` key, which the merge ignores. |
+
+The type checks use a vendored subset of Kilo's schema (`backend/validator/kilo-schema-subset.json`)
+pinned to the supported Kilo range `>=7.2.0 <8.0.0`.
+
+## Example shared config
+
+`backend/shared-config/kilo.jsonc` is a commented starting point. It defines one provider, `bifrost`
+(`@ai-sdk/openai-compatible`), with `baseURL` `https://bifrost.yourcompany.internal/v1` (replace the
+host with your own gateway) and the models `azure/gpt-5` and `azure/gpt-5-mini`. It contains no
+`apiKey`: each developer keeps their own virtual key in a personal config. It validates with exit 0
+and no warnings, with or without `--allowed-hosts bifrost.yourcompany.internal`.

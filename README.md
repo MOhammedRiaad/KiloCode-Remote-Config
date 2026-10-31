@@ -56,6 +56,8 @@ installers and key provisioning.
 - Merge: `defaults` or `enforce` mode, never overwriting a local `apiKey` and never applying a shared one; transactional, so Kilo's config is either unchanged or fully merged.
 - Logging: fixed messages with service `azdo-remote-config` via Kilo's logger; never values, URLs or secrets. See the [user guide](docs/user-guide.md#troubleshooting-log-messages).
 - Internal helpers (`parseJsonc`, `resolvePlaceholders`, `mergeConfig`, `resolveSettings`, `fetchRemoteConfig`, `runConfigHook`) are reachable via `__internals` for tests. See [API](docs/api.md).
+- Shared config validator: `node backend/validator/validate-kilo-config.ts [--allowed-hosts <list>] <file>...` checks a `kilo.jsonc` for secrets, `apiKey`, wrong types, unsafe keys and (optionally) allowed gateway hosts. Exit codes 0 (ok), 1 (errors found), 2 (usage/I/O/internal). See the [user guide](docs/user-guide.md#validating-the-shared-config-platform-engineers). The Azure Pipelines PR gate that runs it comes with F-008.
+- Example shared config: `backend/shared-config/kilo.jsonc` (Bifrost provider, no `apiKey`).
 - Lint that enforces the FR-11 constraints (single file, zero npm runtime dependencies).
 - Strict TypeScript type-check and a `node:test` test suite.
 - One quality gate, `scripts/ci.sh`, used locally and in GitHub Actions.
@@ -68,7 +70,7 @@ cd backend
 npm ci              # install dev dependencies (typescript, @types/node)
 npm run lint        # FR-11 guard rails
 npm run typecheck   # tsc --noEmit
-npm test            # node --test
+npm test            # node --test (includes validator tests)
 cd .. && bash scripts/ci.sh   # the full gate, as CI runs it
 ```
 

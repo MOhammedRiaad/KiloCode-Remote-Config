@@ -1,16 +1,17 @@
 # Architecture overview - Kilo Shared Config
 
-Last updated: cycle-0008 (F-006). Stack: ADR-0001. Plugin module shape: ADR-0002.
+Last updated: cycle-0009 (F-007). Stack: ADR-0001. Plugin module shape: ADR-0002.
 JSONC parser: ADR-0003. Placeholder resolution: ADR-0004. Config merge: ADR-0005.
 Settings resolution: ADR-0006. Azure DevOps fetch and auth: ADR-0007.
 Hook wiring, cache, logging, never-crash: ADR-0008. Trust boundary: ADR-0009.
-Contract: `contracts/plugin-interface.md`.
+Shared config validator: ADR-0010.
+Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`.
 
 ## Components
 
 | ID | Component | Source in this repo | Deployed to | Status |
 |---|---|---|---|---|
-| C1 | Shared config repo validation (PR gate) | `backend/validator/` | Azure DevOps `kilo-config` pipeline | planned |
+| C1 | Shared config repo: example config + validation (PR gate) | `backend/shared-config/kilo.jsonc`, `backend/validator/` | Azure DevOps `kilo-config` repo and pipeline | **example config + validator CLI (F-007)**; pipeline and branch policy planned (F-008) |
 | C2 | Remote config plugin (single file, FR-11) | `backend/plugin/azdo-remote-config.ts` | `~/.config/kilo/azdo/azdo-remote-config.ts` | **stub (T-001) + JSONC parser (F-001) + placeholder resolver (F-002) + merge (F-003) + settings resolution (F-004) + AzDO fetch/auth (F-005) + hook wiring, cache, fallback, logging (F-006)** |
 | C3 | Personal config template | `backend/templates/` | `~/.config/kilo/kilo.jsonc` | planned |
 | C4 | Bifrost gateway | external, not in repo | - | external |
@@ -51,6 +52,23 @@ Kilo start
 
 Every step of C2 is wrapped so no failure can stop Kilo (FR-10).
 
+## Data flow (PR gate, shared config repo C1; ADR-0010, `contracts/validator-cli.md`)
+
+```
+PR to main in kilo-config (F-008 wires this into Azure Pipelines)
+  -> node validator/validate-kilo-config.ts [--allowed-hosts <bifrost host>] kilo.jsonc teams/*/kilo.jsonc
+       per file: stat (I/O error -> exit 2) -> size <= 1 MiB -> UTF-8 -> __internals.parseJsonc
+       -> root plain object -> depth < 64 -> tree rules (apiKey, sk-bf- in keys/values,
+          prototype keys, prototype member names, {file:} probe via __internals.resolvePlaceholders
+          with fakes, top-level plugin, baseURL host allowlist) -> vendored schema subset
+       -> raw-text sk-bf- line scan (catches comments)
+       output: "<file>: <severity> <rule> at <path|line N>: <fixed message>", never values
+  -> exit 0 valid (warnings ok) | 1 errors | 2 usage / I/O / internal
+```
+
+The validator imports the plugin file by relative path and does not modify it. The plugin's
+export surface is unchanged.
+
 ## Internal structure of C2 (single file, sections in this order)
 
 0. `node:` imports only (since F-002: `node:fs`, `node:os`, `node:path`; since F-005: `node:child_process`; F-006 adds more `node:fs` functions)
@@ -75,9 +93,14 @@ Every step of C2 is wrapped so no failure can stop Kilo (FR-10).
 ```
 backend/                     # the only package (ADR-0001 section 7)
   plugin/azdo-remote-config.ts
-  tools/check-fr11.mjs
+  shared-config/kilo.jsonc    # example C1 /kilo.jsonc (F-007)
+  validator/                  # F-007: validate-kilo-config.ts (CLI), kilo-config-rules.ts (lib),
+                              #        kilo-schema-subset.json (vendored, pinned to SUPPORTED_KILO_RANGE)
+  tools/check-fr11.mjs        # FR-11 guard + validator import guard (rule 5)
   test/plugin/*.test.ts       # jsonc, placeholders, merge, settings, fetch, hook, smoke
-  validator/ templates/ installer/ provisioning/   # created by later items
+  test/validator/*.test.ts    # rules (lib), cli (child process), schema subset, example config
+  test/tools/check-fr11.test.ts
+  templates/ installer/ provisioning/   # created by later items
 docs/architecture/           # this folder: overview, ADRs, contracts
 factory/                     # backlog, state, run reports
 scripts/ci.sh                # quality gate (CI and local)
@@ -87,4 +110,5 @@ scripts/ci.sh                # quality gate (CI and local)
 ## Quality gate
 
 `bash scripts/ci.sh` -> in `backend/`: `npm ci`, `npm run lint` (FR-11 guard),
-`npm run typecheck` (`tsc --noEmit`), `npm test` (`node --test`), plus factory JSON checks.
+`npm run typecheck` (`tsc --noEmit`, includes `validator/**/*.ts` since F-007), `npm test`
+(`node --test`, includes `test/validator/`), plus factory JSON checks.

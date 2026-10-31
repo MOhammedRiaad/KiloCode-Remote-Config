@@ -212,8 +212,8 @@
       "id": "F-007",
       "title": "Shared config repo: example kilo.jsonc and validation script",
       "type": "feature",
-      "priority": 2,
-      "status": "todo",
+      "priority": 1,
+      "status": "done",
       "scope": {
         "backend": true,
         "frontend": false
@@ -221,18 +221,19 @@
       "depends_on": [
         "F-001"
       ],
-      "description": "FR-12 / FR-13 / AC-13. Template content for C1 plus a zero-dependency validator CLI used by the PR pipeline.",
+      "description": "FR-12 / FR-13 / AC-13, plus cycle 0005 security follow-ups. Two deliverables for C1 (shared config repo): (a) an example shared config, e.g. backend/shared-config/kilo.jsonc, based on VISION Appendix A (Bifrost provider with baseURL and models, no apiKey, no secrets); (b) a zero-runtime-dependency validator CLI under backend/validator/ (ADR-0001 layout, Node >=22.18 built-ins only, run e.g. as `node backend/validator/validate-kilo-config.ts <file>...`), used later by the Azure Pipelines PR gate (F-008) and the template check (F-009). The validator must reuse the plugin's JSONC parser (`__internals.parseJsonc` or an Architect-approved import) rather than a second copy, and must NOT change the plugin's export surface. Rules: parse JSONC; root must be a plain object; check a vendored Kilo config schema subset (Architect defines it, pinned to SUPPORTED_KILO_RANGE, stored under backend/validator/); reject any `apiKey` key at any depth (key name compared case-insensitively); reject `sk-bf-` secret patterns in string values and comments without echoing the secret; reject own keys `__proto__`/`constructor`/`prototype`; warn on other Object.prototype member names (e.g. hasOwnProperty, toString), on `{file:}` paths that never resolve (relative, bare `~`, `~user`, UNC / `//host`), and on top-level `plugin` (ignored by the merge); optional `--allowed-hosts h1,h2` flag rejects provider `options.baseURL` values that are not https or whose host is not in the set. Exit codes (PO decision): 0 = valid (warnings allowed), 1 = validation errors in any file, 2 = usage or I/O error. Output names files, JSON paths and rule ids, never secret values. Tests live in backend/test/validator/ and are run by `bash scripts/ci.sh`.",
       "acceptance_criteria": [
-        "Given the shipped example /kilo.jsonc, When validated, Then the validator exits 0.",
-        "Given a file containing an `apiKey` field at any depth, When validated, Then the validator exits non-zero and names the JSON path.",
-        "Given a file containing a string matching `sk-bf-`, When validated, Then the validator exits non-zero without printing the full secret.",
-        "Given a file with invalid JSONC, When validated, Then the validator exits non-zero with a parse error.",
-        "Given a file whose structure violates the vendored Kilo config schema subset (e.g. `provider` not an object), When validated, Then the validator exits non-zero.",
-        "Given a shared config containing a relative {file:} path, bare ~, ~user or UNC-style path, When validated, Then the validator warns that it will never resolve.",
-        "Given a shared config whose baseURL host is outside an expected set, or containing keys named like Object.prototype members (hasOwnProperty, toString), When validated, Then the validator warns/fails accordingly (security findings from cycle 0005)."
+        "Given the shipped example shared config (e.g. backend/shared-config/kilo.jsonc, Appendix A content with comments and an https baseURL), When the validator CLI runs on it in a child process, Then it exits 0, reports the file as valid, and the parsed example has provider.bifrost.options.baseURL as a string and provider.bifrost.models keys `azure/gpt-5` and `azure/gpt-5-mini` and no `apiKey` anywhere.",
+        "Given files containing an `apiKey` key at top level, at `provider.bifrost.options.apiKey`, inside an array element, and spelled `APIKEY`, When validated, Then each run exits 1 and the output names the JSON path of the offending key (e.g. `provider.bifrost.options.apiKey`) and does not contain the key's value.",
+        "Given a file with the string `sk-bf-AbCdEf1234567890` as a nested value, inside a longer string, inside an array, or in a `//` or `/* */` comment, When validated, Then the run exits 1, the output names the JSON path (or the line number for a comment), and the output never contains `AbCdEf1234567890`.",
+        "Given invalid JSONC (unterminated string, unterminated block comment, malformed JSON) or a root that is an array, string, number or null, When validated, Then the validator exits 1 with a parse/shape error naming the file and no stack trace; and Given no file argument or a path that does not exist, When run, Then it exits 2 with a usage or I/O message.",
+        "Given files violating the vendored Kilo schema subset (`provider` not an object, `provider.bifrost` not an object, `provider.bifrost.options` or `provider.bifrost.models` not an object, `model` not a string), When validated, Then each exits 1 naming the JSON path; and an automated check confirms the vendored subset file exists under backend/validator/ and records the Kilo version range it was taken from.",
+        "Given a shared config whose `{file:}` placeholders use a relative path, bare `~`, `~user/x`, or a UNC / `//host/share` path, When validated, Then the run exits 0 (no other errors) and prints one warning per placeholder naming the JSON path and stating it will never resolve; and `{file:~/x}`, absolute paths and `{env:VAR}` produce no such warning.",
+        "Given own keys `__proto__`, `constructor` or `prototype` at any depth, When validated, Then the run exits 1 naming the path and Object.prototype is not polluted; Given keys `hasOwnProperty` or `toString`, Then a warning names the path; and Given `--allowed-hosts bifrost.yourcompany.internal`, When a provider `options.baseURL` is non-https, unparseable, or has another host, Then the run exits 1 naming the path, while without the flag no host error is raised.",
+        "Given two files where one is valid and one has an error, When the validator runs on both in one call, Then it exits 1 and reports a result for each file; and When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0, runs the validator tests under backend/test/validator/, backend/package.json has no runtime `dependencies`, and the plugin's export surface is unchanged."
       ],
       "source": "vision",
-      "cycle_done": null
+      "cycle_done": 9
     },
     {
       "id": "F-008",
@@ -247,7 +248,7 @@
       "depends_on": [
         "F-007"
       ],
-      "description": "FR-13 / FR-14. azure-pipelines.yml running the validator on PRs, and a script (az repos policy) that applies the main branch policy.",
+      "description": "FR-13 / FR-14. azure-pipelines.yml running the validator on PRs, and a script (az repos policy) that applies the main branch policy. Cycle 0009: the pipeline must pass --allowed-hosts to the validator (host check is opt-in and ignores ports); when copying the validator into the shared config repo also copy plugin/azdo-remote-config.ts with the same relative layout plus a package.json with \"type\": \"module\".",
       "acceptance_criteria": [
         "Given azure-pipelines.yml, When parsed by a test, Then it triggers on PRs to main and runs the validator against kilo.jsonc and teams/*/kilo.jsonc.",
         "Given the branch-policy script run in dry-run mode, When executed, Then it prints `az repos policy` commands for: minimum 1 reviewer, required platform-team reviewer group, and build validation on the pipeline.",
@@ -267,9 +268,10 @@
         "frontend": false
       },
       "depends_on": [
-        "F-001"
+        "F-001",
+        "F-007"
       ],
-      "description": "FR-16 / FR-17. Template matching Appendix B. Cycle 0006 architect follow-up: the template must write `org`, `project` and `repo` explicitly (repo has no default since contract 0.5.0).",
+      "description": "FR-16 / FR-17. Template matching Appendix B. Cycle 0006 architect follow-up: the template must write `org`, `project` and `repo` explicitly (repo has no default since contract 0.5.0). Cycle 0009: the template legitimately contains apiKey, so its check should filter the validator library's findings to secret-pattern only; use a placeholder like sk-bf-<your-virtual-key>.",
       "acceptance_criteria": [
         "Given the template, When parsed, Then its top-level keys are only `$schema`, `plugin` and `provider`.",
         "Given the template, When inspected, Then `plugin` has exactly one entry pointing at `./azdo/azdo-remote-config.ts` with options org, project, repo, path, branch, mode.",
@@ -458,7 +460,7 @@
       "depends_on": [
         "T-001"
       ],
-      "description": "Security/review: backend/tools/check-fr11.mjs regexes can be bypassed (template-literal or variable import(), createRequire, a \"/*\" string literal). Use ts.preProcessFile/AST, reject non-literal import() and createRequire, and add fixtures for these plus untested branches (export-from, bare import, missing/invalid package.json, missing plugin/, --root without value).",
+      "description": "Security/review: backend/tools/check-fr11.mjs regexes can be bypassed (template-literal or variable import(), createRequire, a \"/*\" string literal). Use ts.preProcessFile/AST, reject non-literal import() and createRequire, and add fixtures for these plus untested branches (export-from, bare import, missing/invalid package.json, missing plugin/, --root without value). Cycle 0009 security low 2: rule 5 (validator imports) scans only .ts files directly in validator/, not subdirectories; scan recursively or fail when subdirectories exist.",
       "acceptance_criteria": [
         "Given a plugin file using import(`lodash`), import(variable), createRequire, or a \"/*\" string hiding an import, When check-fr11 runs, Then it exits 1.",
         "Given fixtures for export-from, bare import, missing/invalid package.json, missing plugin/ and --root without a value, When tests run, Then each is covered and behaves as specified."
@@ -663,7 +665,7 @@
       "depends_on": [
         "F-005"
       ],
-      "description": "Cycle 0007 review info 3: the 1024 consecutive empty-chunk limit in fetchRemoteConfig is not in the contract; Architect to add it (plugin-interface.md / ADR-0007).",
+      "description": "Cycle 0007 review info 3: the 1024 consecutive empty-chunk limit in fetchRemoteConfig is not in the contract; Architect to add it (plugin-interface.md / ADR-0007). Also list fileTooLargeFinding() in validator-cli.md section 8 (cycle 0009 review info 4).",
       "acceptance_criteria": [
         "Given the plugin contract, When read, Then it states the consecutive empty-chunk limit and the resulting error code."
       ],
@@ -725,7 +727,7 @@
       "depends_on": [
         "F-006"
       ],
-      "description": "Cycle 0008 security/review info: cleanName should also map U+2028, U+2029 and bidi controls to '?'; remove stale *.tmp files after a successful cache write; read the cache through one fd or check length after reading (2 MiB cap TOCTOU); document cache dir permission behaviour on Windows.",
+      "description": "Cycle 0008 security/review info: cleanName should also map U+2028, U+2029 and bidi controls to '?'; remove stale *.tmp files after a successful cache write; read the cache through one fd or check length after reading (2 MiB cap TOCTOU); document cache dir permission behaviour on Windows. Also (cycle 0008 security info 4): document that an existing ~/.cache/kilo-azdo keeps its mode and that file mode is ignored on Windows.",
       "acceptance_criteria": [
         "Given a placeholder name containing U+2028 or a bidi override, When logged, Then those characters are replaced.",
         "Given an orphan cache temp file, When a write succeeds, Then it is removed.",
@@ -747,10 +749,53 @@
       "depends_on": [
         "F-006"
       ],
-      "description": "Cycle 0008 security/review info: hook.test.ts never removes its temp home dirs (use t.after); child-process tests should pass an allow-listed env, and the KILO_AZDO_* filter must be case-insensitive on Windows; fix formatting nits (hook.test.ts:19 'OPTIONS ={', mis-indented logsAfterServer in the smoke test).",
+      "description": "Cycle 0008 security/review info: hook.test.ts never removes its temp home dirs (use t.after); child-process tests should pass an allow-listed env, and the KILO_AZDO_* filter must be case-insensitive on Windows; fix formatting nits (hook.test.ts:19 'OPTIONS ={', mis-indented logsAfterServer in the smoke test). Cycle 0008 review info 3-5 (added cycle 0009 PO): the 'failing collaborators' loop should also assert cfg is unchanged or fully merged; the deep-nesting test should assert the exact error code instead of `invalid-(jsonc|shape)`; add a smoke test that `server()` makes no logger calls (contract 3).",
       "acceptance_criteria": [
         "Given the hook tests, When they finish, Then no temp home directories remain.",
-        "Given lowercase kilo_azdo_project in the parent env on Windows, When the hostile-deps child runs, Then it is not passed through."
+        "Given lowercase kilo_azdo_project in the parent env on Windows, When the hostile-deps child runs, Then it is not passed through.",
+        "Given the 'failing collaborators' cases, When each runs, Then the test asserts cfg deep-equals either the original or the fully merged value, and the smoke test asserts server() makes no logger calls."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-016",
+      "title": "Validator output sanitiser: Unicode format chars, shared helper, safer file read",
+      "type": "security",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-007"
+      ],
+      "description": "Cycle 0009 security low 1 / info 3 and review info 3: sanitising in validator output covers C0/DEL/C1 only; also replace \\p{Cf}, \\p{Zl}, \\p{Zp} with '?'. cleanName in validate-kilo-config.ts duplicates sanitize in kilo-config-rules.ts: share one helper. Optionally read files via bounded open+fstat and reject symlinks.",
+      "acceptance_criteria": [
+        "Given a key or file name containing U+202E, U+2028 or a zero-width character, When a finding is printed, Then those characters appear as '?'.",
+        "Given the CLI and library, When output is sanitised, Then both use the same helper."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-017",
+      "title": "Validator test nits",
+      "type": "tech-debt",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-007"
+      ],
+      "description": "Cycle 0009 review low 1+2: schema-subset.test.ts:43 path.replace(/\\./g, \"\\.\") is a no-op (use \"\\.\"); cli.test.ts:84 !r.all.includes(\"host\") scans the temp path and fails when it contains 'host' (check host/share or \\host only). Info 5: document or fix --help with an unknown option giving exit 2.",
+      "acceptance_criteria": [
+        "Given the CLI path check in schema-subset.test.ts, When run, Then dots are matched literally.",
+        "Given a temp path containing 'host', When the UNC test runs, Then it still passes."
       ],
       "source": "review",
       "cycle_done": null

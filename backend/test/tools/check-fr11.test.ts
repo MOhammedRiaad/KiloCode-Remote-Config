@@ -13,12 +13,16 @@ function run(args: string[] = []) {
   return spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
 }
 
-function fixture(opts: { deps?: Record<string, string>; plugin?: string; extra?: string }) {
+function fixture(opts: { deps?: Record<string, string>; plugin?: string; extra?: string; validator?: string }) {
   const root = mkdtempSync(join(tmpdir(), "fr11-"));
   mkdirSync(join(root, "plugin"));
   writeFileSync(join(root, "package.json"), JSON.stringify({ dependencies: opts.deps ?? {} }));
   writeFileSync(join(root, "plugin", "azdo-remote-config.ts"), opts.plugin ?? "export default {};\n");
   if (opts.extra) writeFileSync(join(root, "plugin", opts.extra), "export {};\n");
+  if (opts.validator !== undefined) {
+    mkdirSync(join(root, "validator"));
+    writeFileSync(join(root, "validator", "x.ts"), opts.validator);
+  }
   return root;
 }
 
@@ -69,4 +73,30 @@ test("extra file in plugin/ fails", () => {
   const r = runOn({ extra: "helper.ts" });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /plugin\//);
+});
+
+test("validator: node: and sibling imports pass", () => {
+  const src = [
+    'import { a } from "node:fs";',
+    'import { b } from "./y.ts";',
+    'import { c } from "../plugin/azdo-remote-config.ts";',
+    "export { a, b, c };",
+    "",
+  ].join("\n");
+  const r = runOn({ validator: src });
+  assert.equal(r.status, 0, r.stderr);
+});
+
+for (const spec of ["lodash", "../plugin/other.ts", "../../x.ts", "./y"]) {
+  test(`validator: import "${spec}" fails`, () => {
+    const r = runOn({ validator: `import x from "${spec}";\nexport default x;\n` });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /validator\/x\.ts/);
+  });
+}
+
+test("validator: require fails", () => {
+  const r = runOn({ validator: 'const x = require("node:fs");\nexport default x;\n' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /require/);
 });

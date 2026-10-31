@@ -1,0 +1,25 @@
+{
+  "$comment": "Type-only subset of Kilo's config schema used by the F-007 validator. See ADR-0010.",
+  "kiloVersionRange": ">=7.2.0 <8.0.0",
+  "source": "https://app.kilo.ai/config.json",
+  "rules": [
+    { "path": "$schema", "type": "string" },
+    { "path": "model", "type": "string" },
+    { "path": "small_model", "type": "string" },
+    { "path": "provider", "type": "object" },
+    { "path": "provider.*", "type": "object" },
+    { "path": "provider.*.npm", "type": "string" },
+    { "path": "provider.*.name", "type": "string" },
+    { "path": "provider.*.options", "type": "object" },
+    { "path": "provider.*.options.baseURL", "type": "string" },
+    { "path": "provider.*.models", "type": "object" },
+    { "path": "provider.*.models.*", "type": "object" },
+    { "path": "agent", "type": "object" },
+    { "path": "agent.*", "type": "object" },
+    { "path": "mcp", "type": "object" },
+    { "path": "mcp.*", "type": "object" },
+    { "path": "instructions", "type": "array" },
+    { "path": "disabled_providers", "type": "array" },
+    { "path": "enabled_providers", "type": "array" }
+  ]
+}

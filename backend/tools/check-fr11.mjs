@@ -26,6 +26,25 @@ function importSpecifiers(source) {
   return patterns.flatMap((re) => [...source.matchAll(re)].map((m) => m[1]));
 }
 
+const VALIDATOR_ALLOWED = [/^node:/, /^\.\/[A-Za-z0-9._-]+\.ts$/, /^\.\.\/plugin\/azdo-remote-config\.ts$/];
+
+// Rule 5 (ADR-0010): validator/*.ts may import only node:, sibling .ts files or the plugin file.
+function checkValidator(root) {
+  const errors = [];
+  const dir = join(root, "validator");
+  if (!existsSync(dir)) return errors;
+  for (const file of readdirSync(dir).filter((f) => f.endsWith(".ts"))) {
+    const source = stripComments(readFileSync(join(dir, file), "utf8"));
+    for (const spec of importSpecifiers(source)) {
+      if (!VALIDATOR_ALLOWED.some((re) => re.test(spec))) {
+        errors.push(`disallowed import "${spec}" in validator/${file}`);
+      }
+    }
+    if (/\brequire\s*\(/.test(source)) errors.push(`require( is not allowed in validator/${file}`);
+  }
+  return errors;
+}
+
 function check(root) {
   const errors = [];
   const pkgPath = join(root, "package.json");
@@ -52,7 +71,7 @@ function check(root) {
     }
     if (/\brequire\s*\(/.test(source)) errors.push(`require( is not allowed in ${PLUGIN_FILE}`);
   }
-  return errors;
+  return [...errors, ...checkValidator(root)];
 }
 
 try {

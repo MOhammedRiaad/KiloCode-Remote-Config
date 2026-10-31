@@ -1,6 +1,6 @@
 {
   "status": "running",
-  "cycle": 8,
+  "cycle": 9,
   "max_cycles": 50,
   "phase": "idle",
   "current_item": null,
@@ -9,7 +9,7 @@
   "max_rework": 3,
   "consecutive_blocked": 0,
   "max_consecutive_blocked": 3,
-  "last_release": "v0.6.0",
+  "last_release": "v0.7.0",
   "history": [
     {
       "cycle": 3,
@@ -59,6 +59,13 @@
       "result": "released",
       "version": "v0.6.0",
       "rework": 1
+    },
+    {
+      "cycle": 9,
+      "item": "F-007",
+      "result": "released",
+      "version": "v0.7.0",
+      "rework": 0
     }
   ]
 }

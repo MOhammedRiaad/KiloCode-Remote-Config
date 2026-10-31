@@ -1,0 +1,20 @@
+// Shared Kilo configuration, distributed by the azdo-remote-config plugin.
+// It carries the company Bifrost gateway provider. Never put an apiKey here:
+// every developer keeps their own virtual key in a personal config.
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "provider": {
+    "bifrost": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Bifrost",
+      "options": {
+        /* Company gateway endpoint (replace the host with your own). */
+        "baseURL": "https://bifrost.yourcompany.internal/v1"
+      },
+      "models": {
+        "azure/gpt-5": {},
+        "azure/gpt-5-mini": {}, // trailing commas are accepted
+      }
+    }
+  }
+}

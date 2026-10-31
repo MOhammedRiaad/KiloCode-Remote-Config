@@ -60,6 +60,9 @@ This keeps the file self-contained (FR-11) and type-checkable without a Kilo dep
   3. every `import`/`export ... from` specifier in that file starts with `node:`
      (no bare npm packages, no relative imports - the plugin must be a single file);
   4. the file does not contain `require(`.
+  5. (since F-007, ADR-0010) every `.ts` file directly in `validator/` imports only `node:`
+     built-ins, `./<name>.ts` siblings or exactly `../plugin/azdo-remote-config.ts`, and does
+     not contain `require(` (skipped when `validator/` does not exist).
   It exits non-zero with a clear message on any violation.
 
 ### 4. Dev dependencies (the only npm packages allowed in `backend/`)

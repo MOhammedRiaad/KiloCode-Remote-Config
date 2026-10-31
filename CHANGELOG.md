@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.0] - 2026-10-31
+
+### Added
+- F-007: example shared `kilo.jsonc` and a validation script for the shared config repo.
+- F-007: documentation for the shared config validator and example config.
+
 ## [0.6.0] - 2026-10-31
 
 ### Added
