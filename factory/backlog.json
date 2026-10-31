@@ -342,7 +342,7 @@
       "title": "Key provisioning: create virtual key per engineer",
       "type": "feature",
       "priority": 3,
-      "status": "todo",
+      "status": "blocked",
       "scope": {
         "backend": true,
         "frontend": false
@@ -358,14 +358,15 @@
         "Given the admin token, When the tool runs, Then it is read from an env var, never from a CLI argument or the shared repo."
       ],
       "source": "vision",
-      "cycle_done": null
+      "cycle_done": null,
+      "notes": "SKIPPED by user instruction (cycle 0012): do not select. Bifrost virtual-key creation and bulk CSV import/list/disable are out of scope for now. Reinstate by setting status back to todo. Architect draft for F-012 is in git stash 'F-012 architect draft'."
     },
     {
       "id": "F-013",
       "title": "Key provisioning: bulk CSV, list and disable (offboarding)",
       "type": "feature",
       "priority": 3,
-      "status": "todo",
+      "status": "blocked",
       "scope": {
         "backend": true,
         "frontend": false
@@ -382,7 +383,8 @@
         "Given `disable` for an unknown email, When run, Then it exits non-zero and modifies nothing."
       ],
       "source": "vision",
-      "cycle_done": null
+      "cycle_done": null,
+      "notes": "SKIPPED by user instruction (cycle 0012): do not select. Bifrost virtual-key creation and bulk CSV import/list/disable are out of scope for now. Reinstate by setting status back to todo. Architect draft for F-012 is in git stash 'F-012 architect draft'."
     },
     {
       "id": "F-014",
@@ -442,10 +444,9 @@
         "frontend": false
       },
       "depends_on": [
-        "F-010",
-        "F-013"
+        "F-010"
       ],
-      "description": "Engineer setup guide, platform-team runbook (config change, key provisioning, offboarding), KILO_PURE caveat, supported Kilo version range, Phase 0 assumptions A1-A3 checklist.",
+      "description": "Engineer setup guide, platform-team runbook (config change, key provisioning, offboarding), KILO_PURE caveat, supported Kilo version range, Phase 0 assumptions A1-A3 checklist. User decision (cycle 0012): F-012/F-013 are skipped, so treat the F-013 dependency as waived and omit key-provisioning/offboarding runbook content.",
       "acceptance_criteria": [
         "Given docs/, When an automated check runs, Then engineer setup, platform runbook and troubleshooting pages exist and link to each other.",
         "Given the troubleshooting page, When checked, Then it mentions KILO_PURE=1, az login and the cache location.",

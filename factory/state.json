@@ -80,6 +80,13 @@
       "result": "released",
       "version": "v0.9.0",
       "rework": 0
+    },
+    {
+      "cycle": 12,
+      "item": "F-012",
+      "result": "abandoned",
+      "phase": "architect",
+      "note": "skipped by user request"
     }
   ]
 }
