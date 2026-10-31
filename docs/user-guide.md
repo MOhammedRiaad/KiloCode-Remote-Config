@@ -6,7 +6,7 @@ The Kilo azdo-remote-config plugin is active. When Kilo starts it fetches one sh
 Azure DevOps, validates it, caches it, and merges it into your Kilo config. If anything fails, Kilo
 starts normally with your local config; the plugin never crashes Kilo.
 
-Also available: a [validator](#validating-the-shared-config-platform-engineers) for the shared config. Not yet available (planned, see `factory/VISION.md`): the bootstrap installers, key provisioning and the Azure Pipelines PR gate (F-008).
+Also available: a [validator](#validating-the-shared-config-platform-engineers) for the shared config. Also available: a [personal config template](#personal-config-template-engineers). Not yet available (planned, see `factory/VISION.md`): the bootstrap installers (F-010, F-011), key provisioning and the Azure Pipelines PR gate (F-008).
 
 Supported Kilo version range (pinned): `>=7.2.0 <8.0.0`.
 
@@ -245,6 +245,44 @@ Warnings (exit stays 0):
 
 The type checks use a vendored subset of Kilo's schema (`backend/validator/kilo-schema-subset.json`)
 pinned to the supported Kilo range `>=7.2.0 <8.0.0`.
+
+## Personal config template (engineers)
+
+`backend/personal-config/kilo.jsonc` is the starting point for your own Kilo config. The shared config
+holds team settings; this file holds the two things that are yours: where the plugin finds the shared
+config, and your own Bifrost virtual key.
+
+### What it contains
+- `$schema`: `https://app.kilo.ai/config.json`.
+- `plugin`: one entry, `./azdo/azdo-remote-config.ts`, with the options `org`, `project`, `repo`,
+  `path` (`/kilo.jsonc`), `branch` (`main`) and `mode` (`defaults`). There is no `pat` option.
+- `provider.bifrost.options.apiKey`: the placeholder `sk-bf-<your-virtual-key>`.
+- Comments that repeat the placement rules below.
+
+### Where it goes
+Copy it to `~/.config/kilo/kilo.jsonc` (the global Kilo config directory) and nowhere else. Never put it
+in a project directory and never commit it to a repository, because it holds your virtual key. A
+project-level config cannot choose where the shared config comes from (see "Trust boundary"). The
+installers (F-010, F-011) will automate this copy; they are not built yet, so copy it by hand for now.
+The plugin path `./azdo/azdo-remote-config.ts` is relative to the Kilo config directory, so the plugin
+file must be at `~/.config/kilo/azdo/azdo-remote-config.ts`, which the installers will also set up.
+
+### What to fill in
+1. `org`, `project`, `repo`: the Azure DevOps organization, project and repository that hold the shared
+   `kilo.jsonc`. The template values (`contoso`, `platform`, `kilo-config`) are examples; replace them.
+2. `path`, `branch`, `mode`: change them only if your platform team says so. See "Plugin settings".
+3. `apiKey`: replace `sk-bf-<your-virtual-key>` with your own Bifrost virtual key. Never share it.
+
+### Azure DevOps credentials
+Do not put a PAT in this file. Set the `AZDO_PAT` environment variable, or sign in with `az login`
+(see "Fetching the shared config").
+
+### Merge behaviour
+Your `apiKey` is never changed in either mode, and the shared file's `plugin` and `$schema` are ignored.
+The shared `baseURL` and models are added around your key.
+
+The validator reports this file's placeholder as an `api-key` error and a `plugin-ignored` warning.
+That is expected: the validator is a gate for the shared config, not for personal files.
 
 ## Example shared config
 

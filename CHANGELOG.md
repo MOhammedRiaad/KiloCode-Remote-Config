@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.0] - 2026-10-31
+
+### Added
+- F-009: personal config template for users of the plugin.
+- F-009: documentation for the personal config template.
+
+### Changed
+- F-009: `.gitattributes` now enforces LF line endings for `*.jsonc` files.
+
 ## [0.7.0] - 2026-10-31
 
 ### Added

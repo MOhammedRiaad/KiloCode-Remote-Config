@@ -51,11 +51,28 @@ The CLI tests run the real CLI against temp files. `kiloVersionRange` in
 sibling `.ts` files or the plugin file. The validator reuses the plugin's `parseJsonc` and
 `resolvePlaceholders` through `__internals`. Usage and rules: [user guide](user-guide.md).
 
+## Personal config template tests
+The template `backend/personal-config/kilo.jsonc` (contract
+`docs/architecture/contracts/personal-config-template.md`, ADR-0011) is tested by
+`backend/test/personal-config/template.test.ts`. It runs with `npm test`; to run only it:
+
+```bash
+cd backend
+node --test "test/personal-config/*.test.ts"
+```
+
+The tests parse the file with the plugin's `parseJsonc`, check the plugin options with
+`resolveSettings`, check the placeholder against the validator's secret pattern, and merge it with
+`backend/shared-config/kilo.jsonc` to confirm the local `apiKey` survives in both modes. They accept
+both LF and CRLF line endings. `.gitattributes` has `*.jsonc text eol=lf`, so `.jsonc` files are LF in
+the repository. Installers (F-010, F-011) will copy this file to `~/.config/kilo/kilo.jsonc`.
+
 ## Layout
 ```
 backend/plugin/azdo-remote-config.ts   the plugin
 backend/validator/                     shared-config validator (CLI, rules library, schema subset)
 backend/shared-config/kilo.jsonc       example shared config
+backend/personal-config/kilo.jsonc     personal config template (copied to ~/.config/kilo/)
 backend/tools/check-fr11.mjs           lint
 backend/test/                          tests
 ```

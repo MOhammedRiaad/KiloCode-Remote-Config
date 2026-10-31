@@ -7,7 +7,8 @@ Owned by the **architect** agent.
   stack and the install/lint/test/build commands that every agent and `scripts/ci.sh` follow.
 - `contracts/`: interface contracts. This product has no HTTP API. The contracts are the typed
   plugin interface in `contracts/plugin-interface.md` and the shared config validator CLI in
-  `contracts/validator-cli.md` (since F-007).
+  `contracts/validator-cli.md` (since F-007) and the personal config template in
+  `contracts/personal-config-template.md` (since F-009).
 
 ADR template:
 

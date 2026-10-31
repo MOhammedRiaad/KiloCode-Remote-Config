@@ -1,11 +1,12 @@
 # Architecture overview - Kilo Shared Config
 
-Last updated: cycle-0009 (F-007). Stack: ADR-0001. Plugin module shape: ADR-0002.
+Last updated: cycle-0010 (F-009). Stack: ADR-0001. Plugin module shape: ADR-0002.
 JSONC parser: ADR-0003. Placeholder resolution: ADR-0004. Config merge: ADR-0005.
 Settings resolution: ADR-0006. Azure DevOps fetch and auth: ADR-0007.
 Hook wiring, cache, logging, never-crash: ADR-0008. Trust boundary: ADR-0009.
-Shared config validator: ADR-0010.
-Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`.
+Shared config validator: ADR-0010. Personal config template: ADR-0011.
+Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`,
+`contracts/personal-config-template.md`.
 
 ## Components
 
@@ -13,7 +14,7 @@ Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`.
 |---|---|---|---|---|
 | C1 | Shared config repo: example config + validation (PR gate) | `backend/shared-config/kilo.jsonc`, `backend/validator/` | Azure DevOps `kilo-config` repo and pipeline | **example config + validator CLI (F-007)**; pipeline and branch policy planned (F-008) |
 | C2 | Remote config plugin (single file, FR-11) | `backend/plugin/azdo-remote-config.ts` | `~/.config/kilo/azdo/azdo-remote-config.ts` | **stub (T-001) + JSONC parser (F-001) + placeholder resolver (F-002) + merge (F-003) + settings resolution (F-004) + AzDO fetch/auth (F-005) + hook wiring, cache, fallback, logging (F-006)** |
-| C3 | Personal config template | `backend/templates/` | `~/.config/kilo/kilo.jsonc` | planned |
+| C3 | Personal config template | `backend/personal-config/kilo.jsonc` | `~/.config/kilo/kilo.jsonc` | **template + tests (F-009)**; copied by installers (F-010/F-011) |
 | C4 | Bifrost gateway | external, not in repo | - | external |
 | C5 | Bootstrap installer | `backend/installer/` (`install.ps1`, `install.sh`) | C1 repo | planned |
 | C6 | Key provisioning | `backend/provisioning/` | platform-team tooling | planned |
@@ -94,13 +95,15 @@ export surface is unchanged.
 backend/                     # the only package (ADR-0001 section 7)
   plugin/azdo-remote-config.ts
   shared-config/kilo.jsonc    # example C1 /kilo.jsonc (F-007)
+  personal-config/kilo.jsonc  # C3 template, copied to ~/.config/kilo/kilo.jsonc (F-009, ADR-0011)
   validator/                  # F-007: validate-kilo-config.ts (CLI), kilo-config-rules.ts (lib),
                               #        kilo-schema-subset.json (vendored, pinned to SUPPORTED_KILO_RANGE)
   tools/check-fr11.mjs        # FR-11 guard + validator import guard (rule 5)
   test/plugin/*.test.ts       # jsonc, placeholders, merge, settings, fetch, hook, smoke
   test/validator/*.test.ts    # rules (lib), cli (child process), schema subset, example config
+  test/personal-config/*.test.ts  # template checks via plugin __internals + validator library (F-009)
   test/tools/check-fr11.test.ts
-  templates/ installer/ provisioning/   # created by later items
+  installer/ provisioning/    # created by later items
 docs/architecture/           # this folder: overview, ADRs, contracts
 factory/                     # backlog, state, run reports
 scripts/ci.sh                # quality gate (CI and local)

@@ -262,7 +262,7 @@
       "title": "Personal config template",
       "type": "feature",
       "priority": 2,
-      "status": "todo",
+      "status": "done",
       "scope": {
         "backend": true,
         "frontend": false
@@ -271,15 +271,18 @@
         "F-001",
         "F-007"
       ],
-      "description": "FR-16 / FR-17. Template matching Appendix B. Cycle 0006 architect follow-up: the template must write `org`, `project` and `repo` explicitly (repo has no default since contract 0.5.0). Cycle 0009: the template legitimately contains apiKey, so its check should filter the validator library's findings to secret-pattern only; use a placeholder like sk-bf-<your-virtual-key>.",
+      "description": "FR-16 / FR-17, C3. Ship the personal config template matching VISION Appendix B as a JSONC file under backend/ (PO default: backend/personal-config/kilo.jsonc; Architect may pick another path under backend/ and record it). It is the file the installers (F-010/F-011) copy to `~/.config/kilo/kilo.jsonc`. Content: `$schema`, one `plugin` entry `[\"./azdo/azdo-remote-config.ts\", {org, project, repo, path, branch, mode}]` with example values (contoso / platform / kilo-config / /kilo.jsonc / main / defaults; org, project and repo written explicitly because repo has no default since contract 0.5.0; no `pat` option, PAT and az login come from env/az per FR-3), and `provider.bifrost.options.apiKey` holding a placeholder (PO default `sk-bf-<your-virtual-key>`) that does NOT match the validator's SECRET_PATTERN. A comment states the file belongs in the global config directory only, never in a project directory (FR-17). The template legitimately contains `apiKey`, so it is NOT checked with the full shared-config rule set: tests reuse the F-007 validator library (`validateConfigText` from backend/validator/kilo-config-rules.ts) and filter its findings (secret-pattern must be absent; api-key and plugin-ignored are expected for this file). No change to the plugin file or its export surface, and no change to the validator's rules or CLI behaviour. Tests live under backend/test/ and run via `bash scripts/ci.sh`. Zero runtime npm deps (FR-11).",
       "acceptance_criteria": [
-        "Given the template, When parsed, Then its top-level keys are only `$schema`, `plugin` and `provider`.",
-        "Given the template, When inspected, Then `plugin` has exactly one entry pointing at `./azdo/azdo-remote-config.ts` with options org, project, repo, path, branch, mode.",
-        "Given the template, When inspected, Then `provider` contains only `bifrost.options.apiKey` with a placeholder value that does not match a real key pattern.",
-        "Given the template, When validated by the F-007 validator's secret check, Then no real `sk-bf-` secret is detected (placeholder only)."
+        "Given the shipped template file, When it is read and parsed with the plugin's `__internals.parseJsonc`, Then it parses without error, the root is a plain object whose top-level keys are exactly `$schema`, `plugin` and `provider`, `$schema` equals `https://app.kilo.ai/config.json`, and the raw text contains a comment mentioning `~/.config/kilo/kilo.jsonc` and that the file must not be placed in a project directory (FR-17).",
+        "Given the parsed template, When `plugin` is inspected, Then it is an array with exactly one entry, that entry is a two-element array whose first element is `./azdo/azdo-remote-config.ts` and whose second element is an object with exactly the keys org, project, repo, path, branch and mode (no `pat`), each a non-empty string, with path starting with `/` and mode equal to `defaults` or `enforce`.",
+        "Given the template's plugin options, When passed to `__internals.resolveSettings` with an empty injected env, Then `missing` is empty, `warnings` is empty, and settings.org/project/repo/path/branch/mode equal the template's values (the template alone is a complete configuration).",
+        "Given the parsed template, When `provider` is inspected, Then its only key is `bifrost`, `provider.bifrost` has only the key `options`, `provider.bifrost.options` has only the key `apiKey`, and apiKey is a string that starts with `sk-bf-` but does not match the validator's exported `SECRET_PATTERN` (e.g. `sk-bf-<your-virtual-key>`), so no baseURL, models or other shared values are duplicated locally.",
+        "Given the template text, When validated with the F-007 library `validateConfigText`, Then there is no `secret-pattern` finding and no error finding other than the expected `api-key` rule; and Given a copy of the template text with the placeholder replaced by `sk-bf-AbCdEf1234567890`, When validated the same way, Then a `secret-pattern` finding is reported and no finding field contains `AbCdEf1234567890` (the check is not vacuous).",
+        "Given the template as the local Kilo config and the shipped shared example (F-007 backend/shared-config/kilo.jsonc) parsed with parseJsonc, When `__internals.mergeConfig` runs in `defaults` and in `enforce` mode, Then provider.bifrost.options.apiKey still equals the template placeholder, provider.bifrost.options.baseURL and the models `azure/gpt-5` and `azure/gpt-5-mini` are added from the shared file, and the local `plugin` and `$schema` values are unchanged.",
+        "Given the repository after the change, When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0 and runs the new template tests, backend/package.json has no runtime `dependencies`, backend/plugin/azdo-remote-config.ts is unchanged, and the validator CLI behaviour on the shared example is unchanged (exit 0)."
       ],
       "source": "vision",
-      "cycle_done": null
+      "cycle_done": 10
     },
     {
       "id": "F-010",
@@ -295,7 +298,7 @@
         "F-006",
         "F-009"
       ],
-      "description": "FR-18..FR-23 / AC-12 / AC-14 for POSIX. Tests run with a temp HOME and faked az/curl. The installer must write org, project and repo explicitly into the plugin options (repo has no default since contract 0.5.0).",
+      "description": "FR-18..FR-23 / AC-12 / AC-14 for POSIX. Tests run with a temp HOME and faked az/curl. The installer must write org, project and repo explicitly into the plugin options (repo has no default since contract 0.5.0). Cycle 0010 security/docs: copy the personal config template with user-only file permissions (users will put a real virtual key in it), never overwrite an existing personal config without a backup, and confirm the plugin path ./azdo/azdo-remote-config.ts resolves relative to the Kilo config dir (~/.config/kilo/azdo/). Template: backend/personal-config/kilo.jsonc.",
       "acceptance_criteria": [
         "Given a temp HOME with no Kilo config, When install.sh runs, Then the plugin is at `~/.config/kilo/azdo/azdo-remote-config.ts` and the personal config is created from the template.",
         "Given an existing personal config with other keys, When install.sh runs, Then only the plugin entry and apiKey are added/updated and other keys are preserved.",
@@ -320,7 +323,7 @@
       "depends_on": [
         "F-010"
       ],
-      "description": "FR-18..FR-23 / AC-12 / AC-14 for Windows, behaviour parity with install.sh. Tests via Pester or pwsh where available; skipped with a clear message otherwise.",
+      "description": "FR-18..FR-23 / AC-12 / AC-14 for Windows, behaviour parity with install.sh. Tests via Pester or pwsh where available; skipped with a clear message otherwise. Cycle 0010 security/docs: copy the personal config template with user-only file permissions (users will put a real virtual key in it), never overwrite an existing personal config without a backup, and confirm the plugin path ./azdo/azdo-remote-config.ts resolves relative to the Kilo config dir (~/.config/kilo/azdo/). Template: backend/personal-config/kilo.jsonc.",
       "acceptance_criteria": [
         "Given a temp USERPROFILE with no Kilo config, When install.ps1 runs, Then the plugin and personal config are created as with install.sh.",
         "Given an existing personal config with other keys, When install.ps1 runs, Then other keys are preserved.",
@@ -796,6 +799,26 @@
       "acceptance_criteria": [
         "Given the CLI path check in schema-subset.test.ts, When run, Then dots are matched literally.",
         "Given a temp path containing 'host', When the UNC test runs, Then it still passes."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-018",
+      "title": "Shared test helpers module",
+      "type": "tech-debt",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-009"
+      ],
+      "description": "Cycle 0010 review info: test/personal-config/template.test.ts imports backendRoot, FAKE_SECRET, SECRET_TAIL from test/validator/helpers.ts. Move shared helpers into backend/test/helpers.ts once more suites use them.",
+      "acceptance_criteria": [
+        "Given the validator and personal-config test suites, When they run, Then both import shared helpers from backend/test/helpers.ts and all tests still pass."
       ],
       "source": "review",
       "cycle_done": null

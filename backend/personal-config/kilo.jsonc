@@ -1,0 +1,30 @@
+// Personal Kilo configuration template (C3, FR-16).
+// Copy this file to ~/.config/kilo/kilo.jsonc (the global Kilo config directory).
+// Never place it in a project directory and never commit it to a repository:
+// it holds your own Bifrost virtual key (FR-17).
+// Azure DevOps credentials do not belong here: use the AZDO_PAT environment
+// variable or `az login` (FR-3).
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "plugin": [
+    [
+      "./azdo/azdo-remote-config.ts",
+      {
+        "org": "contoso",
+        "project": "platform",
+        "repo": "kilo-config",
+        "path": "/kilo.jsonc",
+        "branch": "main",
+        "mode": "defaults"
+      }
+    ]
+  ],
+  "provider": {
+    "bifrost": {
+      "options": {
+        // Replace the placeholder with your own Bifrost virtual key.
+        "apiKey": "sk-bf-<your-virtual-key>"
+      }
+    }
+  }
+}
