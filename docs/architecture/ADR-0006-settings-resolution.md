@@ -1,5 +1,6 @@
 # ADR-0006: Settings resolution (options > KILO_AZDO_* env > defaults), secret-safe and URL-safe
-- Status: accepted
+- Status: accepted (section 4 amended by ADR-0007, cycle-0007: org, project, repo, branch and path
+  must also be well-formed UTF-16, i.e. contain no lone surrogate; otherwise W2)
 - Date: 2026-10-30
 - Cycle / item: cycle-0006 / F-004
 

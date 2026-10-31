@@ -1,9 +1,11 @@
 // azdo-remote-config: Kilo plugin that applies a remote Azure DevOps config.
 // Single file, zero runtime dependencies (FR-11). See docs/architecture/ADR-0001-tech-stack.md
-// and ADR-0002-plugin-module-shape.md, ADR-0003, ADR-0004, ADR-0005, ADR-0006. The config hook is
-// still a no-op; the JSONC parser, the placeholder resolver, the config merge and the settings
-// resolver (options, KILO_AZDO_* env, defaults) are helpers only (not wired yet).
+// and ADR-0002-plugin-module-shape.md, ADR-0003, ADR-0004, ADR-0005, ADR-0006, ADR-0007. The config
+// hook is still a no-op; the JSONC parser, the placeholder resolver, the config merge, the settings
+// resolver (options, KILO_AZDO_* env, defaults) and the Azure DevOps fetch helper (PAT or az token)
+// are helpers only (not wired yet).
 
+import { execFile } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -445,6 +447,19 @@ function hasControlChar(text: string): boolean {
   return false;
 }
 
+// True when every surrogate is part of a valid pair (no lone high or low surrogate).
+function isWellFormedText(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code >= 0xdc00 && code <= 0xdfff) return false;
+    if (code < 0xd800 || code > 0xdbff) continue;
+    const next = text.charCodeAt(i + 1);
+    if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+    i++;
+  }
+  return true;
+}
+
 function hasAnyChar(text: string, chars: string): boolean {
   for (const ch of chars) if (text.includes(ch)) return true;
   return false;
@@ -465,18 +480,18 @@ function checkString(raw: unknown, accept: (trimmed: string) => unknown): Check 
 }
 
 function acceptName(trimmed: string): string | undefined {
-  if (hasControlChar(trimmed) || hasAnyChar(trimmed, "/\\?#%")) return undefined;
+  if (!isWellFormedText(trimmed) || hasControlChar(trimmed) || hasAnyChar(trimmed, "/\\?#%")) return undefined;
   return trimmed === "." || trimmed === ".." ? undefined : trimmed;
 }
 
 function acceptBranch(trimmed: string): string | undefined {
-  if (hasControlChar(trimmed) || hasAnyChar(trimmed, " \\?#%")) return undefined;
+  if (!isWellFormedText(trimmed) || hasControlChar(trimmed) || hasAnyChar(trimmed, " \\?#%")) return undefined;
   if (trimmed.includes("..") || trimmed.includes("//")) return undefined;
   return trimmed.startsWith("/") || trimmed.endsWith("/") ? undefined : trimmed;
 }
 
 function acceptPath(trimmed: string): string | undefined {
-  if (hasControlChar(trimmed) || hasAnyChar(trimmed, "\\?#%")) return undefined;
+  if (!isWellFormedText(trimmed) || hasControlChar(trimmed) || hasAnyChar(trimmed, "\\?#%")) return undefined;
   const normalised = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
   const segments = normalised.slice(1).split("/");
   return segments.every((s) => s !== "" && s !== "." && s !== "..") ? normalised : undefined;
@@ -572,8 +587,436 @@ function resolveSettings(options?: unknown, deps?: SettingsDeps): SettingsResult
   return { settings, missing, warnings };
 }
 
+// ---- Azure DevOps fetch and auth (ADR-0007) ----
+
+// Module-local types: deliberately not exported.
+type FetchErrorCode =
+  | "invalid-settings"
+  | "auth-unavailable"
+  | "timeout"
+  | "too-large"
+  | "bad-response"
+  | "network"
+  | `http-${number}`;
+
+type FetchResult = { ok: true; text: string } | { ok: false; error: FetchErrorCode };
+
+interface FetchInit {
+  method: "GET";
+  headers: Record<string, string>;
+  redirect: "manual";
+  signal: AbortSignal;
+}
+
+type FetchLike = (url: string, init: FetchInit) => Promise<unknown>;
+
+interface AzRunResult {
+  exitCode: number | null;
+  stdout: string;
+}
+
+type AzRunner = (args: readonly string[], options: { timeoutMs: number }) => Promise<AzRunResult>;
+
+interface FetchTarget {
+  org: string;
+  project: string;
+  repo: string;
+  path: string;
+  branch: string;
+}
+
+// Result of one raced external operation.
+type Outcome = { state: "value"; value: unknown } | { state: "failed" } | { state: "deadline" };
+
+interface Clock {
+  set: (callback: () => void, ms: number) => unknown;
+  clear: (handle: unknown) => void;
+}
+
+interface Deadline {
+  race: (op: () => unknown) => Promise<Outcome>;
+  timedOut: () => boolean;
+}
+
+const MAX_RESPONSE_BYTES = 1048576;
+const MAX_EMPTY_CHUNKS = 1024;
+const MAX_TOKEN_CHARS = 16384;
+const AZ_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798";
+const AZ_TOKEN_ARGS: readonly string[] = Object.freeze([
+  "account",
+  "get-access-token",
+  "--resource",
+  AZ_RESOURCE,
+  "--query",
+  "accessToken",
+  "--output",
+  "tsv",
+]);
+const AZ_COMMAND_LINE = `az ${AZ_TOKEN_ARGS.join(" ")}`;
+const AZDO_HOST_PREFIX = "https://dev.azure.com/";
+const AZ_MAX_BUFFER = 65536;
+
+function failure(error: FetchErrorCode): FetchResult {
+  return { ok: false, error };
+}
+
+// Runs a probe that may throw (hostile objects, throwing getters); a throw counts as undefined.
+function attempt<T>(probe: () => T): T | undefined {
+  try {
+    return probe();
+  } catch {
+    return undefined;
+  }
+}
+
+function noop(): void {}
+
+// A non-empty string without surrounding whitespace that the ADR-0006 validator accepts unchanged.
+function validField(raw: unknown, accept: (trimmed: string) => string | undefined): string | undefined {
+  if (typeof raw !== "string" || raw === "" || raw !== raw.trim()) return undefined;
+  return isWellFormedText(raw) && accept(raw) === raw ? raw : undefined;
+}
+
+function readTarget(settings: unknown): FetchTarget | undefined {
+  if (!isRecordLike(settings)) return undefined;
+  const org = validField(readOwn(settings, "org"), acceptName);
+  const project = validField(readOwn(settings, "project"), acceptName);
+  const repo = validField(readOwn(settings, "repo"), acceptName);
+  const path = validField(readOwn(settings, "path"), acceptPath);
+  const branch = validField(readOwn(settings, "branch"), acceptBranch);
+  if (org === undefined || project === undefined || repo === undefined) return undefined;
+  if (path === undefined || branch === undefined) return undefined;
+  return { org, project, repo, path, branch };
+}
+
+function readTimeoutMs(settings: unknown): number {
+  const raw = readOwn(settings, "timeoutMs");
+  return typeof raw === "number" && inTimeoutRange(raw) ? raw : DEFAULT_TIMEOUT_MS;
+}
+
+function buildItemsUrl(target: FetchTarget): string {
+  return (
+    AZDO_HOST_PREFIX +
+    encodeURIComponent(target.org) +
+    "/" +
+    encodeURIComponent(target.project) +
+    "/_apis/git/repositories/" +
+    encodeURIComponent(target.repo) +
+    "/items?path=" +
+    encodeURIComponent(target.path) +
+    "&versionDescriptor.version=" +
+    encodeURIComponent(target.branch) +
+    "&versionDescriptor.versionType=branch" +
+    "&includeContent=true" +
+    "&api-version=7.1"
+  );
+}
+
+// Absent: the real global fetch (read at call time). Injected but not a function: unavailable.
+function resolveFetch(deps: unknown): FetchLike | undefined {
+  const injected = readOwn(deps, "fetch");
+  const candidate = injected === undefined ? globalThis.fetch : injected;
+  return typeof candidate === "function" ? (candidate as FetchLike) : undefined;
+}
+
+function resolveRunner(deps: unknown): AzRunner | undefined {
+  const injected = readOwn(deps, "runAz");
+  if (injected === undefined) return defaultRunAz;
+  return typeof injected === "function" ? (injected as AzRunner) : undefined;
+}
+
+function resolveClock(deps: unknown): Clock {
+  const set = readOwn(deps, "setTimeout");
+  const clear = readOwn(deps, "clearTimeout");
+  return {
+    set: (typeof set === "function" ? set : globalThis.setTimeout) as Clock["set"],
+    clear: (typeof clear === "function" ? clear : globalThis.clearTimeout) as Clock["clear"],
+  };
+}
+
+// One AbortController and one timer for the whole operation. Every raced operation is also guarded
+// against synchronous throws and later rejections.
+function startDeadline(
+  clock: Clock,
+  controller: AbortController,
+  timeoutMs: number,
+): { deadline: Deadline; handle: unknown } {
+  let fired = false;
+  let fire: () => void = noop;
+  const expired = new Promise<Outcome>((resolve) => {
+    fire = () => resolve({ state: "deadline" });
+  });
+  const handle = clock.set(() => {
+    fired = true;
+    attempt(() => controller.abort());
+    fire();
+  }, timeoutMs);
+  const settle = (op: () => unknown): Promise<Outcome> =>
+    new Promise<unknown>((resolve) => resolve(op())).then(
+      (value): Outcome => ({ state: "value", value }),
+      (): Outcome => ({ state: "failed" }),
+    );
+  return {
+    deadline: { race: (op) => Promise.race([settle(op), expired]), timedOut: () => fired },
+    handle,
+  };
+}
+
+function isVisibleAscii(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x21 || code > 0x7e) return false;
+  }
+  return true;
+}
+
+function usablePat(candidate: unknown): string | undefined {
+  if (typeof candidate !== "string") return undefined;
+  const trimmed = candidate.trim();
+  return trimmed !== "" && isVisibleAscii(trimmed) ? trimmed : undefined;
+}
+
+// settings.pat, then AZDO_PAT, then AZURE_DEVOPS_EXT_PAT; later sources are read only when needed.
+function findPat(settings: unknown, deps: unknown): string | undefined {
+  const fromSettings = usablePat(readOwn(settings, "pat"));
+  if (fromSettings !== undefined) return fromSettings;
+  const env = selectEnv(deps);
+  return usablePat(readOwn(env, "AZDO_PAT")) ?? usablePat(readOwn(env, "AZURE_DEVOPS_EXT_PAT"));
+}
+
+function basicHeader(pat: string): string {
+  return `Basic ${Buffer.from(`:${pat}`, "utf8").toString("base64")}`;
+}
+
+function isTokenChar(code: number): boolean {
+  if (code >= 0x30 && code <= 0x39) return true;
+  if ((code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a)) return true;
+  return code === 0x2d || code === 0x2e || code === 0x5f || code === 0x7e || code === 0x2b || code === 0x2f;
+}
+
+// token68: letters, digits and - . _ ~ + / with optional trailing "=" padding.
+function isToken68(text: string): boolean {
+  let end = text.length;
+  while (end > 0 && text.charCodeAt(end - 1) === 0x3d) end--;
+  if (end === 0) return false;
+  for (let i = 0; i < end; i++) {
+    if (!isTokenChar(text.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
+function bearerFrom(result: unknown): string | undefined {
+  if (!isRecordLike(result) || readOwn(result, "exitCode") !== 0) return undefined;
+  const stdout = readOwn(result, "stdout");
+  if (typeof stdout !== "string") return undefined;
+  const token = stdout.trim();
+  if (token === "" || token.length > MAX_TOKEN_CHARS || !isToken68(token)) return undefined;
+  return `Bearer ${token}`;
+}
+
+async function azAuthorization(deps: unknown, deadline: Deadline, timeoutMs: number): Promise<string | undefined> {
+  const runner = resolveRunner(deps);
+  if (runner === undefined) return undefined;
+  const outcome = await deadline.race(() => runner(AZ_TOKEN_ARGS, { timeoutMs }));
+  return outcome.state === "value" ? bearerFrom(outcome.value) : undefined;
+}
+
+async function resolveAuthorization(
+  settings: unknown,
+  deps: unknown,
+  deadline: Deadline,
+  timeoutMs: number,
+): Promise<string | undefined> {
+  const pat = findPat(settings, deps);
+  return pat !== undefined ? basicHeader(pat) : azAuthorization(deps, deadline, timeoutMs);
+}
+
+function codeForInterrupted(outcome: Outcome, deadline: Deadline): FetchErrorCode {
+  return outcome.state === "deadline" || deadline.timedOut() ? "timeout" : "network";
+}
+
+// Guarded and never awaited: a failing cancel must not change the result.
+function discard(cancel: () => unknown): void {
+  attempt(() => {
+    Promise.resolve(cancel()).catch(noop);
+  });
+}
+
+function discardBody(response: unknown): void {
+  discard(() => (response as { body: { cancel: () => unknown } }).body.cancel());
+}
+
+function declaredTooLarge(response: unknown): boolean {
+  const header = attempt(() =>
+    (response as { headers: { get: (name: string) => unknown } }).headers.get("content-length"),
+  );
+  return typeof header === "string" && isDigitString(header) && Number(header) > MAX_RESPONSE_BYTES;
+}
+
+function readStatus(response: unknown): number | undefined {
+  const status = attempt(() => (response as { status: unknown }).status);
+  return typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined;
+}
+
+interface BodyReader {
+  read: () => unknown;
+  cancel: () => unknown;
+}
+
+function openReader(response: unknown): BodyReader | undefined {
+  const reader = attempt(() => (response as { body: { getReader: () => BodyReader } }).body.getReader());
+  const usable = attempt(() => typeof reader?.read === "function" && typeof reader.cancel === "function");
+  return usable === true ? reader : undefined;
+}
+
+function joinChunks(chunks: Uint8Array[], total: number): Uint8Array {
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+// Streams the body with a running byte total; returns the bytes or the failure code.
+async function readCappedBody(response: unknown, deadline: Deadline): Promise<Uint8Array | FetchErrorCode> {
+  const reader = openReader(response);
+  if (reader === undefined) return "bad-response";
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let empty = 0;
+  for (;;) {
+    const outcome = await deadline.race(() => reader.read());
+    if (outcome.state !== "value") {
+      discard(() => reader.cancel());
+      return codeForInterrupted(outcome, deadline);
+    }
+    const step = outcome.value as { done?: unknown; value?: unknown } | null;
+    if (attempt(() => step?.done) === true) return joinChunks(chunks, total);
+    const chunk = attempt(() => step?.value);
+    if (!(chunk instanceof Uint8Array)) {
+      discard(() => reader.cancel());
+      return "bad-response";
+    }
+    total += chunk.byteLength;
+    empty = chunk.byteLength === 0 ? empty + 1 : 0;
+    if (total > MAX_RESPONSE_BYTES || empty > MAX_EMPTY_CHUNKS) {
+      discard(() => reader.cancel());
+      return total > MAX_RESPONSE_BYTES ? "too-large" : "bad-response";
+    }
+    chunks.push(chunk);
+  }
+}
+
+function extractContent(bytes: Uint8Array): FetchResult {
+  const text = attempt(() => new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  const parsed = text === undefined ? undefined : attempt(() => JSON.parse(text) as unknown);
+  const content = readOwn(parsed, "content");
+  if (!isRecordLike(parsed) || typeof content !== "string") return failure("bad-response");
+  return { ok: true, text: content };
+}
+
+async function handleResponse(response: unknown, deadline: Deadline): Promise<FetchResult> {
+  const status = readStatus(response);
+  if (status === undefined) {
+    discardBody(response);
+    return failure("bad-response");
+  }
+  if (status < 200 || status > 299) {
+    discardBody(response);
+    return failure(`http-${status}` as const);
+  }
+  if (declaredTooLarge(response)) {
+    discardBody(response);
+    return failure("too-large");
+  }
+  const body = await readCappedBody(response, deadline);
+  return typeof body === "string" ? failure(body) : extractContent(body);
+}
+
+async function performRequest(
+  url: string,
+  fetchFn: FetchLike,
+  authorization: string,
+  controller: AbortController,
+  deadline: Deadline,
+): Promise<FetchResult> {
+  const init: FetchInit = {
+    method: "GET",
+    headers: { Accept: "application/json", Authorization: authorization, "X-TFS-FedAuthRedirect": "Suppress" },
+    redirect: "manual",
+    signal: controller.signal,
+  };
+  const outcome = await deadline.race(() => fetchFn(url, init));
+  if (outcome.state !== "value") return failure(codeForInterrupted(outcome, deadline));
+  return handleResponse(outcome.value, deadline);
+}
+
+async function runFetch(settings: unknown, deps: unknown): Promise<FetchResult> {
+  const target = readTarget(settings);
+  if (target === undefined) return failure("invalid-settings");
+  const options = isRecordLike(deps) ? deps : {};
+  const fetchFn = resolveFetch(options);
+  if (fetchFn === undefined) return failure("network");
+  const timeoutMs = readTimeoutMs(settings);
+  const clock = resolveClock(options);
+  const controller = new AbortController();
+  const { deadline, handle } = startDeadline(clock, controller, timeoutMs);
+  try {
+    const authorization = await resolveAuthorization(settings, options, deadline, timeoutMs);
+    if (authorization === undefined) return failure("auth-unavailable");
+    return await performRequest(buildItemsUrl(target), fetchFn, authorization, controller, deadline);
+  } finally {
+    attempt(() => clock.clear(handle));
+  }
+}
+
+// Fetches the shared kilo.jsonc text from Azure DevOps. Never throws or rejects; results hold fixed
+// codes only (no message, value, URL, PAT or token). The response text is returned unparsed.
+async function fetchRemoteConfig(settings: unknown, deps?: unknown): Promise<FetchResult> {
+  try {
+    return await runFetch(settings, deps);
+  } catch {
+    return failure("network");
+  }
+}
+
+function toAzResult(error: { code?: unknown } | null, stdout: unknown): AzRunResult {
+  if (error === null || error === undefined) return { exitCode: 0, stdout: typeof stdout === "string" ? stdout : "" };
+  const code = attempt(() => error.code);
+  return { exitCode: typeof code === "number" ? code : null, stdout: "" };
+}
+
+// Windows: az is a .cmd batch file, which Node will not spawn without a shell, so cmd.exe is run
+// explicitly with a command line made only of module constants.
+function windowsCommandInterpreter(): string {
+  const comspec = readOwn(process.env, "ComSpec");
+  return typeof comspec === "string" && isAbsolute(comspec) ? comspec : "cmd.exe";
+}
+
+// Default az runner: execFile without a shell option. cwd is the home directory so that an az
+// executable planted in a project directory is never picked up. Not covered by automated tests.
+function defaultRunAz(args: readonly string[], options: { timeoutMs: number }): Promise<AzRunResult> {
+  return new Promise<AzRunResult>((resolve) => {
+    const execOptions = {
+      timeout: options.timeoutMs,
+      maxBuffer: AZ_MAX_BUFFER,
+      windowsHide: true,
+      encoding: "utf8" as const,
+      cwd: homedir(),
+    };
+    const done = (error: { code?: unknown } | null, stdout: unknown): void => resolve(toAzResult(error, stdout));
+    if (process.platform === "win32") {
+      execFile(windowsCommandInterpreter(), ["/d", "/s", "/c", AZ_COMMAND_LINE], execOptions, done);
+    } else {
+      execFile("az", [...args], execOptions, done);
+    }
+  });
+}
+
 /** Test/validator seam. Never has a `server` key and never holds the entry point. */
-export const __internals = { parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings };
+export const __internals = { parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings, fetchRemoteConfig };
 
 const AzdoRemoteConfig: PluginServer = async () => {
   return { config: async () => {} };

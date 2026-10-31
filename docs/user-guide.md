@@ -2,7 +2,7 @@
 
 ## Current status
 
-The Kilo azdo-remote-config plugin is at an early stage (T-001 skeleton, F-001 JSONC parser, F-002 placeholders, F-003 merge helper, F-004 settings resolution).
+The Kilo azdo-remote-config plugin is at an early stage (T-001 skeleton, F-001 JSONC parser, F-002 placeholders, F-003 merge helper, F-004 settings resolution, F-005 Azure DevOps fetch).
 There is nothing to install or configure for end users yet.
 
 What exists today:
@@ -24,7 +24,11 @@ What exists today:
   user-visible effect today: setting any `KILO_AZDO_*` variable or plugin option changes nothing at
   runtime. The section below describes how settings will be resolved once it is wired in.
 
-Not yet available (planned, see `factory/VISION.md`): using the parser, resolver and merge helper on a fetched file, fetching the shared config from Azure DevOps,
+- An internal Azure DevOps fetch function (F-005). It is not used by the plugin yet, so it has no
+  user-visible effect today: the plugin still makes no network calls. The section "Fetching the
+  shared config" below describes how it will behave once wired in.
+
+Not yet available (planned, see `factory/VISION.md`): using the parser, resolver and merge helper on a fetched file, calling the fetch from the plugin,
 merging it into Kilo, the local cache, the bootstrap installers and key provisioning.
 
 Supported Kilo version range (pinned): `>=7.2.0 <8.0.0`.
@@ -114,12 +118,34 @@ then default.
   No control characters, none of `\ ? # %`, and no empty, `.` or `..` segments.
 - `mode`: exactly `defaults` or `enforce`, lowercase.
 - `timeoutMs`: a whole number from 1 to 2147483647 (milliseconds). A number or a string of digits.
-- `pat`: any non-empty string. Today `KILO_AZDO_PAT` is the only source; the `AZDO_PAT`,
-  `AZURE_DEVOPS_EXT_PAT` and `az` fallbacks arrive with F-005.
+- `pat`: any non-empty string. Settings resolution reads only the plugin option and `KILO_AZDO_PAT`;
+  the `AZDO_PAT`, `AZURE_DEVOPS_EXT_PAT` and `az` fallbacks are applied by the fetch step (next section).
 
 An invalid value is ignored with a warning and the next source is tried (option, then environment
 variable, then default). Warnings contain fixed text and the setting name only, never the value, so a
 PAT is never exposed through them. Example: an invalid `mode` option with `KILO_AZDO_MODE=enforce`
 set resolves to `enforce`, plus a warning about the option.
+
+## Fetching the shared config (not active yet)
+
+The fetch function exists but the plugin does not call it yet. When it is wired in, it downloads the
+shared file with one HTTPS GET to `https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/items`
+for the configured `path` and `branch`. Redirects are never followed.
+
+Credentials, first usable one wins:
+1. The `pat` plugin option, or `KILO_AZDO_PAT`.
+2. Environment variable `AZDO_PAT`.
+3. Environment variable `AZURE_DEVOPS_EXT_PAT`.
+4. An Entra token from the Azure CLI (`az account get-access-token`), used only if no PAT is usable.
+
+A PAT is skipped silently if it is empty or contains whitespace or non-printable or non-ASCII
+characters. If no credential works, the fetch fails with `auth-unavailable` and no request is sent.
+
+Limits: the whole operation (az, request and reading the body) must finish within `timeoutMs`
+(default 5000 ms), and the response body may be at most 1 MiB.
+
+Failures are reported as one fixed code, never with values, URLs or secrets: `invalid-settings`,
+`auth-unavailable`, `timeout`, `too-large`, `bad-response`, `network`, or `http-<status>` (for
+example `http-401`). See [API](api.md) for details.
 
 This page will describe setup and settings once the remaining features ship.

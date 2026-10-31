@@ -1,7 +1,8 @@
 # Contract: `azdo-remote-config` plugin interface
 
-- Version: 0.5.0 (F-004, cycle-0006: `__internals.resolveSettings`, section 2d, section 4 now
-  normative; 0.4.0 was F-003, cycle-0005: `__internals.mergeConfig`, section 2c; 0.3.1 was F-002
+- Version: 0.6.0 (F-005, cycle-0007: `__internals.fetchRemoteConfig`, new section 2e, section 2d
+  amended (well-formed UTF-16 rule), sections 4 and 5 normative for the fetch; 0.5.0 was F-004,
+  cycle-0006: `__internals.resolveSettings`, section 2d, section 4 now normative; 0.4.0 was F-003, cycle-0005: `__internals.mergeConfig`, section 2c; 0.3.1 was F-002
   rework 1, cycle-0004: default `{file:}` reader guard and UNC rejection; 0.3.0 was F-002,
   cycle-0004; 0.2.0 was F-001, cycle-0003; 0.1.0 was T-001, cycle-0002)
 - Owner: Architect. Implemented by: `backend/plugin/azdo-remote-config.ts`.
@@ -49,19 +50,22 @@ export type PluginServer = (input: PluginInput, options?: PluginOptions) => Prom
 | `default` | object | `{ id: "azdo-remote-config", server: PluginServer }` |
 | `PLUGIN_ID` | string const | `"azdo-remote-config"` (also the logger `service` name, FR-9) |
 | `SUPPORTED_KILO_RANGE` | string const | `">=7.2.0 <8.0.0"` |
-| `__internals` | plain object | Test/validator seam. `{ parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings }` since F-004 (sections 2a, 2b, 2c, 2d), in that key order; later F-items add further pure helpers. Never has a `server` key; never itself a function. |
+| `__internals` | plain object | Test/validator seam. `{ parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings, fetchRemoteConfig }` since F-005 (sections 2a, 2b, 2c, 2d, 2e), in that key order; later F-items add further pure helpers. Never has a `server` key; never itself a function. |
 | types | `export type` / `export interface` | as in section 1 |
 
 No other named exports: the runtime named exports are exactly `PLUGIN_ID`, `SUPPORTED_KILO_RANGE`
 and `__internals` (plus `default`). No named export may be a function. Helpers inside
 `__internals` are module-local functions (not exported by name). Their helper types (e.g.
-`PlaceholderDeps`, `PlaceholderResult`, `Settings`, `SettingsDeps`, `SettingsResult`) and constants
-(e.g. `MAX_MERGE_DEPTH`, `DEFAULT_TIMEOUT_MS`) are module-local too
+`PlaceholderDeps`, `PlaceholderResult`, `Settings`, `SettingsDeps`, `SettingsResult`, `FetchDeps`,
+`FetchResult`, `AzRunner`) and constants (e.g. `MAX_MERGE_DEPTH`, `DEFAULT_TIMEOUT_MS`,
+`MAX_RESPONSE_BYTES`, `AZ_TOKEN_ARGS`) are module-local too
 and are not exported.
 
 Imports (FR-11, ADR-0001, ADR-0004): the plugin file may import only `node:` built-ins. Since
 F-002 it imports `readFileSync` and `statSync` from `node:fs`, `homedir` from `node:os`, and
-`isAbsolute` and `join` from `node:path`.
+`isAbsolute` and `join` from `node:path`. Since F-005 it also imports `execFile` from
+`node:child_process` (the only new import). `Buffer`, `TextDecoder`, `AbortController` and
+`fetch` are used as globals.
 
 ## 2a. `__internals.parseJsonc` (F-001, FR-4, ADR-0003)
 
@@ -185,9 +189,10 @@ element of the Kilo plugin tuple (anything).
 | Precedence | Per setting: option, then env, then default. Absent (`undefined` / `null` / not own) or empty (whitespace-only string) -> skip silently. Invalid -> skip with warning. First valid value wins. |
 | Defaults | org / project / repo / pat: `undefined`. path `/kilo.jsonc`, branch `main`, mode `defaults`, timeoutMs `5000`. |
 | Trim | Every string value is `trim()`-ed before validation; the trimmed value is returned. |
-| org, project, repo | string; valid iff non-empty, no control chars (code unit <= 0x1F or 0x7F), none of `/ \ ? # %`, not exactly `.` or `..`. Else W1 (non-string) / W2. |
-| branch | string; valid iff non-empty, no control chars, no space, none of `\ ? # %`, no `..`, no `//`, does not start or end with `/`. Else W1 / W2. |
-| path | string; prepend `/` if missing; valid iff no control chars, none of `\ ? # %`, and every segment after the leading `/` (split on `/`) is non-empty and not `.` / `..`. `teams/a/kilo.jsonc` -> `/teams/a/kilo.jsonc`; `/`, `/a/`, `/a//b`, `/a/../b`, `./x` -> W2. Else W1 / W2. |
+| Well-formed (since 0.6.0) | org, project, repo, branch and path must also be well-formed UTF-16 after trim (`isWellFormedText`: every 0xD800-0xDBFF code unit is immediately followed by a 0xDC00-0xDFFF one, and no 0xDC00-0xDFFF unit stands alone). Otherwise W2 and fall-through, like any disallowed character. pat, mode, timeoutMs unchanged. |
+| org, project, repo | string; valid iff non-empty, well-formed, no control chars (code unit <= 0x1F or 0x7F), none of `/ \ ? # %`, not exactly `.` or `..`. Else W1 (non-string) / W2. |
+| branch | string; valid iff non-empty, well-formed, no control chars, no space, none of `\ ? # %`, no `..`, no `//`, does not start or end with `/`. Else W1 / W2. |
+| path | string; prepend `/` if missing; valid iff well-formed, no control chars, none of `\ ? # %`, and every segment after the leading `/` (split on `/`) is non-empty and not `.` / `..`. `teams/a/kilo.jsonc` -> `/teams/a/kilo.jsonc`; `/`, `/a/`, `/a//b`, `/a/../b`, `./x` -> W2. Else W1 / W2. |
 | mode | exactly `defaults` or `enforce` after trim (case-sensitive). Anything else (any type) -> W3. |
 | pat | string; valid iff non-empty after trim. No charset check. Non-string -> W1. |
 | timeoutMs | number: `Number.isInteger(v) && 1 <= v <= 2147483647`. string: trimmed matches `^[0-9]+$` and `Number(trimmed)` in 1..2147483647. Anything else (incl. `0`, negatives, `NaN`, `Infinity`, `2.5`, `"1e3"`, `"abc"`, booleans, objects) -> W4. |
@@ -196,7 +201,7 @@ element of the Kilo plugin tuple (anything).
 | `warnings` | Only the fixed texts below. W0 first, then by setting order org..timeoutMs, option before env. At most one per setting and source. |
 | Throws | Never (no `throw` statement; all reads of untrusted input guarded). |
 | Secret safety | No input value (PAT or other) ever appears in `missing` or `warnings`. |
-| Wiring | Not called by `server` / `config` yet (F-006). F-005 adds `AZDO_PAT` / `AZURE_DEVOPS_EXT_PAT` / `az` after `KILO_AZDO_PAT` and must still URL-encode every interpolated value. |
+| Wiring | Not called by `server` / `config` yet (F-006). `AZDO_PAT` / `AZURE_DEVOPS_EXT_PAT` / `az` are handled by `fetchRemoteConfig` (section 2e), not here. |
 
 Warning texts. `<src>` is `plugin option <name>` or `environment variable <ENV> (<name>)`, where
 `<name>` is the camelCase setting name and `<ENV>` the env var from section 4:
@@ -208,6 +213,54 @@ Warning texts. `<src>` is `plugin option <name>` or `environment variable <ENV> 
 | W2 | `Ignored <src>: contains characters or segments that are not allowed.` |
 | W3 | `Ignored <src>: expected "defaults" or "enforce".` |
 | W4 | `Ignored <src>: expected a whole number of milliseconds from 1 to 2147483647.` |
+
+## 2e. `__internals.fetchRemoteConfig` (F-005, FR-2, FR-3, FR-8, FR-10, ADR-0007)
+
+```ts
+type FetchErrorCode =                                    // module-local
+  | "invalid-settings" | "auth-unavailable" | "timeout" | "too-large"
+  | "bad-response" | "network" | `http-${number}`;
+type FetchResult = { ok: true; text: string } | { ok: false; error: FetchErrorCode };
+interface FetchInit { method: "GET"; headers: Record<string, string>; redirect: "manual"; signal: AbortSignal }
+type FetchLike = (url: string, init: FetchInit) => Promise<Response>;
+interface AzRunResult { exitCode: number | null; stdout: string }
+type AzRunner = (args: readonly string[], options: { timeoutMs: number }) => Promise<AzRunResult>;
+interface FetchDeps {
+  fetch?: FetchLike;                                     // default globalThis.fetch (call time)
+  env?: Readonly<Record<string, string | undefined>>;   // default process.env (call time)
+  runAz?: AzRunner;                                      // default execFile runner, no shell
+  setTimeout?: (callback: () => void, ms: number) => unknown;  // default globalThis.setTimeout
+  clearTimeout?: (handle: unknown) => void;                    // default globalThis.clearTimeout
+}
+const MAX_RESPONSE_BYTES = 1024 * 1024;                  // 1 MiB; exactly 1 MiB allowed
+const AZ_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798";
+const AZ_TOKEN_ARGS = ["account", "get-access-token", "--resource", AZ_RESOURCE,
+                       "--query", "accessToken", "--output", "tsv"];   // module-local, frozen
+const MAX_TOKEN_CHARS = 16384;
+
+async function fetchRemoteConfig(settings: unknown, deps?: unknown): Promise<FetchResult>;
+```
+
+Access: `await __internals.fetchRemoteConfig(resolveSettings(opts).settings, { fetch, env, runAz })`.
+
+| Aspect | Contract |
+|---|---|
+| Never throws | The returned promise always resolves, for any `settings` / `deps` (incl. `null`, primitives, throwing proxies, throwing or never-settling fakes). No `throw` statement. Catch-all fallback: `{ ok: false, error: "network" }`. |
+| Result | Fresh plain object: `{ ok: true, text }` or `{ ok: false, error }`, no other keys. `error` is exactly one fixed code; `http-<status>` uses the integer status 100..599 (non-2xx). No message, value, URL, header, PAT, token, stdout or underlying error text ever appears in a result. |
+| Purity | Never writes to `settings`, `deps`, env or globals. No logging. |
+| Reads | `settings` and `deps` keys via `readOwn` (own data properties only; getters never invoked). `settings` not record-like -> `invalid-settings`. `deps` not record-like -> `{}`. |
+| Deps | `fetch` / `runAz`: `undefined` -> default; function -> used; any other value -> **unavailable** (`fetch` -> `network` with no call; `runAz` -> `auth-unavailable` when needed). Never falls back to a real default for a wrong injected value. `env`: `selectEnv` rule of 2d (non-record-like injected -> empty env). `setTimeout` / `clearTimeout`: non-function -> global. Default `fetch` not a function -> `network`. Order: settings check first, then fetch availability, then timer, then credentials. |
+| 1. Settings check | Before anything else (no fetch, no runAz, no env read, no timer). org/project/repo: string, well-formed, `acceptName(v) === v`. path: string, well-formed, `acceptPath(v) === v`. branch: string, well-formed, `acceptBranch(v) === v`. Any failure -> `invalid-settings`. `timeoutMs`: `inTimeoutRange(v)` ? v : 5000. |
+| 2. URL | String concatenation, every value through `encodeURIComponent`: `https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/items?path={path}&versionDescriptor.version={branch}&versionDescriptor.versionType=branch&includeContent=true&api-version=7.1`. Passed to fetch as a string. Example: org `my org`, project `plat form`, repo `kilo-config`, path `/teams/a b/kilo.jsonc`, branch `release/1` -> `https://dev.azure.com/my%20org/plat%20form/_apis/git/repositories/kilo-config/items?path=%2Fteams%2Fa%20b%2Fkilo.jsonc&versionDescriptor.version=release%2F1&versionDescriptor.versionType=branch&includeContent=true&api-version=7.1`. |
+| 3. Deadline | One `AbortController` + one timer (`setTimeout(cb, timeoutMs)`), started after steps 1-2, before credentials. Covers az + fetch + whole body read. Every await on runAz / fetch / `reader.read()` is raced with the deadline. Timer always cleared in `finally`. |
+| 4. Credentials | First usable of: `settings.pat`, env `AZDO_PAT`, env `AZURE_DEVOPS_EXT_PAT` (own data properties). Usable = string whose `trim()` is non-empty and only code units 0x21..0x7E; unusable values are skipped silently. Header `Basic ` + `Buffer.from(":" + pat, "utf8").toString("base64")`. With a usable PAT `runAz` is never called. |
+| 5. az | No usable PAT: `runAz(AZ_TOKEN_ARGS, { timeoutMs })` exactly once. Token accepted iff resolved value is record-like, own `exitCode === 0`, own `stdout` string, `stdout.trim()` non-empty, <= 16384 chars, chars only `A-Z a-z 0-9 - . _ ~ + /` with optional trailing `=`. Else (sync throw, rejection, deadline, non-zero/null exit, empty, bad chars) -> `auth-unavailable` and **fetch is not called**. Header `Bearer ` + trimmed token. |
+| 6. Request | Exactly one `fetch(url, init)`. `init` keys exactly: `method: "GET"`, `headers` (plain object with exactly, in order: `Accept: "application/json"`, `Authorization`, `X-TFS-FedAuthRedirect: "Suppress"`), `redirect: "manual"`, `signal`. Sync throw / rejection -> `network` (or `timeout` if the deadline fired). Deadline first -> `timeout`; the signal is aborted. |
+| 7. Status | `response.status` integer 200..299 -> continue; integer 100..599 otherwise -> `http-<status>` (3xx included, redirects are never followed); anything else -> `bad-response`. Body cancelled (guarded) on early return. |
+| 8. Size | `content-length` header made of ASCII digits only and > 1048576 -> `too-large` without reading. Body read through `response.body.getReader()` (missing -> `bad-response`; non-`Uint8Array` chunk -> `bad-response`); running total > 1048576 -> reader cancelled, `too-large`. Read error -> `network` (`timeout` if the deadline fired). Cap applies before decoding and parsing. |
+| 9. Body | `TextDecoder("utf-8", { fatal: true })`; decode error, `JSON.parse` error, parsed value not record-like, or own `content` not a string -> `bad-response`. Else `{ ok: true, text: content }` (exact string, not trimmed, not parsed). |
+| Default runAz | `execFile` from `node:child_process`, never `shell: true`, options `{ timeout: timeoutMs, maxBuffer: 65536, windowsHide: true, encoding: "utf8", cwd: homedir() }`. POSIX: file `az`, args as given. Windows (`process.platform === "win32"`): file = own absolute `process.env.ComSpec` or `"cmd.exe"`, args `["/d", "/s", "/c", "az " + args.join(" ")]` (args are the constant `AZ_TOKEN_ARGS`; no input ever reaches the command line). Callback: no error -> `{ exitCode: 0, stdout }`; numeric `error.code` -> `{ exitCode: code, stdout: "" }`; other error -> `{ exitCode: null, stdout: "" }`. Wrapped so it never rejects with data. Not covered by tests (no real az). |
+| Wiring | Not called by `server` / `config` yet (F-006: logs the error code only, then cache fallback). |
 
 ## 3. Behaviour contract
 
@@ -236,17 +289,20 @@ Warning texts. `<src>` is `plugin option <name>` or `environment variable <ENV> 
 | `path` | string | `KILO_AZDO_PATH` | `/kilo.jsonc` |
 | `branch` | string | `KILO_AZDO_BRANCH` | `main` |
 | `mode` | `"defaults" \| "enforce"` | `KILO_AZDO_MODE` | `defaults` |
-| `pat` | string (secret) | `KILO_AZDO_PAT`; then (F-005) `AZDO_PAT`, `AZURE_DEVOPS_EXT_PAT` | none -> `az` Entra token (F-005) |
+| `pat` | string (secret) | `KILO_AZDO_PAT`; then `AZDO_PAT`, `AZURE_DEVOPS_EXT_PAT` (read by `fetchRemoteConfig`, 2e) | none -> `az` Entra token (2e) |
 | `timeoutMs` | positive integer (1..2147483647) or digit string | `KILO_AZDO_TIMEOUT_MS` | `5000` |
 
-## 5. Outbound calls (informative, later items)
+## 5. Outbound calls (Items API and az normative since 0.6.0, section 2e; rest informative)
 
 - **Azure DevOps Git Items API** (FR-2):
   `GET https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/items?path={path}&versionDescriptor.version={branch}&versionDescriptor.versionType=branch&includeContent=true&api-version=7.1`
-  with `Authorization: Basic base64(":" + pat)` or `Authorization: Bearer <entra token>` (FR-3),
-  aborted after `timeoutMs` (FR-8).
-- **`az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798`** (FR-3)
-  when no PAT is configured.
+  (every value `encodeURIComponent`-encoded), headers `Accept: application/json`,
+  `Authorization: Basic base64(":" + pat)` or `Authorization: Bearer <entra token>` (FR-3),
+  `X-TFS-FedAuthRedirect: Suppress`; `redirect: "manual"`; aborted after `timeoutMs` (FR-8);
+  response body capped at 1 MiB; file text = JSON body `content` string.
+- **`az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken --output tsv`**
+  (FR-3) when no PAT is usable; `execFile` without a shell (`cmd.exe /d /s /c` with a constant
+  command line on Windows), cwd = home directory, bounded by the same deadline.
 - **Cache file** `~/.cache/kilo-azdo/remote-config.json` (FR-7).
 - **Logs** only via `input.client.app.log` with `service: "azdo-remote-config"`; never secret
   values (FR-9).

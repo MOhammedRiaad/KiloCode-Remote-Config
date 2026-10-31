@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0] - 2026-10-31
+
+### Added
+- F-005: Azure DevOps fetch and authentication via `__internals.fetchRemoteConfig` (ADR-0007, plugin contract 0.6.0), using the Items API with PAT or `az` authentication.
+- F-005: user documentation for remote configuration fetch and authentication.
+
+### Changed
+- F-005: settings validation now also requires org, project, repo, branch and path to be well-formed UTF-16; lone surrogates yield W2 and fall through to the next source.
+- F-005: `docs/api.md` authoritative contract reference updated to v0.6.0 and ADR-0007.
+
+### Security
+- F-005: the PAT and other secrets are never included in warnings or errors.
+
 ## [0.4.0] - 2026-10-30
 
 ### Added

@@ -72,11 +72,13 @@ test("no named export is a function and __internals has no server key", () => {
   assert.equal(typeof mod.__internals.resolvePlaceholders, "function");
   assert.equal(typeof mod.__internals.mergeConfig, "function");
   assert.equal(typeof mod.__internals.resolveSettings, "function");
+  assert.equal(typeof mod.__internals.fetchRemoteConfig, "function");
   assert.deepEqual(Object.keys(mod.__internals), [
     "parseJsonc",
     "resolvePlaceholders",
     "mergeConfig",
     "resolveSettings",
+    "fetchRemoteConfig",
   ]);
 });
 

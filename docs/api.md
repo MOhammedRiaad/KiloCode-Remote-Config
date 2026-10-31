@@ -13,9 +13,9 @@ export default { id: "azdo-remote-config", server }
 
 - `config` hook: receives Kilo's resolved config; in the current stub it does nothing.
 - Named exports: `PLUGIN_ID` (`"azdo-remote-config"`), `SUPPORTED_KILO_RANGE` (`">=7.2.0 <8.0.0"`)
-  and `__internals` (test seam, now `{ parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings }`).
+  and `__internals` (test seam, now `{ parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings, fetchRemoteConfig }`).
 - The plugin settings (`org`, `project`, `repo`, `path`, `branch`, `mode`, `pat`, `timeoutMs`) are
-  not read by the hook yet; see `resolveSettings` below.
+  not read by the hook yet; see `resolveSettings` below. `fetchRemoteConfig` is not called by the hook either.
 
 ## `parseJsonc` (internal)
 
@@ -214,4 +214,67 @@ const { settings, missing, warnings } = __internals.resolveSettings(
 // warnings: ['Ignored plugin option mode: expected "defaults" or "enforce".']
 ```
 
-Authoritative contract: `docs/architecture/contracts/plugin-interface.md` (v0.5.0), ADR-0006 (`docs/architecture/ADR-0006-settings-resolution.md`), ADR-0002, ADR-0003 (`docs/architecture/ADR-0003-jsonc-parser.md`), ADR-0004 (`docs/architecture/ADR-0004-placeholder-resolution.md`) and ADR-0005 (`docs/architecture/ADR-0005-config-merge.md`).
+## `fetchRemoteConfig` (internal)
+
+Reachable only as `__internals.fetchRemoteConfig`; the `config` hook does not call it yet. Async; the
+promise always resolves and never rejects, whatever the arguments.
+
+```ts
+fetchRemoteConfig(settings: unknown, deps?: {
+  fetch?: (url: string, init: { method: "GET"; headers: Record<string, string>; redirect: "manual"; signal: AbortSignal }) => Promise<Response>;
+  env?: Readonly<Record<string, string | undefined>>;   // default: process.env
+  runAz?: (args: readonly string[], options: { timeoutMs: number }) => Promise<{ exitCode: number | null; stdout: string }>;
+  setTimeout?: (cb: () => void, ms: number) => unknown;
+  clearTimeout?: (handle: unknown) => void;
+}): Promise<{ ok: true; text: string } | { ok: false; error: string }>
+```
+
+`settings` is the `settings` object from `resolveSettings`. A non-function `fetch` or `runAz` in `deps`
+counts as unavailable (`network` / `auth-unavailable`); it never falls back to the real one.
+
+Request: one `GET https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/items?path=...&versionDescriptor.version={branch}&versionDescriptor.versionType=branch&includeContent=true&api-version=7.1`,
+every value URL-encoded. Headers: `Accept: application/json`, `Authorization`, `X-TFS-FedAuthRedirect: Suppress`.
+`redirect: "manual"`, so redirects are never followed.
+
+Authentication, first usable wins:
+
+| Order | Source | Header |
+|-------|--------|--------|
+| 1 | `settings.pat` (plugin option, else `KILO_AZDO_PAT`) | `Basic base64(":" + pat)` |
+| 2 | env `AZDO_PAT` | same |
+| 3 | env `AZURE_DEVOPS_EXT_PAT` | same |
+| 4 | `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken --output tsv` (run once) | `Bearer <token>` |
+
+A PAT is usable if it is a string, non-empty after trim, with only printable ASCII (0x21-0x7E); others
+are skipped silently. With a usable PAT `az` is never run. The az token must come from exit code 0, be
+at most 16384 characters and use only `A-Z a-z 0-9 - . _ ~ + /` (optional trailing `=`); otherwise the
+result is `auth-unavailable` and no request is made.
+
+Limits: one deadline of `settings.timeoutMs` (5000 if invalid) covers az, the request and the body
+read. The body is capped at 1 048 576 bytes (exactly 1 MiB is allowed), checked via `content-length`
+and while streaming.
+
+Result: success is `{ ok: true, text }`, where `text` is the `content` string of the JSON response,
+unmodified and not parsed. Failure is `{ ok: false, error }` with exactly one code. Results never
+contain messages, URLs, headers, PATs, tokens or response text.
+
+| Code | Cause |
+|------|-------|
+| `invalid-settings` | org/project/repo/path/branch missing or invalid, or `settings` not an object (checked first; nothing else runs) |
+| `auth-unavailable` | no usable PAT and the `az` token is unavailable or invalid |
+| `timeout` | deadline reached |
+| `too-large` | body over 1 MiB |
+| `bad-response` | status outside 100..599, no readable body, invalid UTF-8 or JSON, not an object, or `content` not a string |
+| `network` | `fetch` unavailable or failed, or body read error |
+| `http-<status>` | non-2xx status, e.g. `http-401`, `http-404`, `http-302` |
+
+Example:
+```ts
+const { settings } = __internals.resolveSettings({ org: "acme", project: "p", repo: "cfg" });
+const r = await __internals.fetchRemoteConfig(settings);
+if (r.ok) { /* r.text is the raw kilo.jsonc text */ } else { /* r.error, e.g. "http-401" */ }
+```
+
+Security: the PAT is never logged or returned. Tests inject fakes; none call the network or `az`.
+
+Authoritative contract: `docs/architecture/contracts/plugin-interface.md` (v0.6.0), ADR-0007 (`docs/architecture/ADR-0007-azdo-fetch-and-auth.md`), ADR-0006 (`docs/architecture/ADR-0006-settings-resolution.md`), ADR-0002, ADR-0003 (`docs/architecture/ADR-0003-jsonc-parser.md`), ADR-0004 (`docs/architecture/ADR-0004-placeholder-resolution.md`) and ADR-0005 (`docs/architecture/ADR-0005-config-merge.md`).

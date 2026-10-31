@@ -511,3 +511,52 @@ test("W0 comes first, before setting warnings", () => {
   const r = run(["x"], { KILO_AZDO_ORG: "a/b" });
   assert.deepEqual(r.warnings, [W0, envWarn("org", NOT_ALLOWED)]);
 });
+
+// ADR-0007 amendment: lone surrogates are rejected like any other disallowed character.
+test("lone surrogates give W2 and fall through to the next source", () => {
+  const env: Env = {
+    KILO_AZDO_ORG: "envorg",
+    KILO_AZDO_PROJECT: "envproj",
+    KILO_AZDO_REPO: "envrepo",
+    KILO_AZDO_PATH: "/env/p.jsonc",
+    KILO_AZDO_BRANCH: "envbranch",
+  };
+  const options = { org: "\ud800", project: "a\udc00b", repo: "x\ud800", branch: "b\ud800", path: "/a\udfff" };
+  const r = run(options, env);
+  assert.deepEqual(r.warnings, [
+    optWarn("org", NOT_ALLOWED),
+    optWarn("project", NOT_ALLOWED),
+    optWarn("repo", NOT_ALLOWED),
+    optWarn("path", NOT_ALLOWED),
+    optWarn("branch", NOT_ALLOWED),
+  ]);
+  assert.equal(r.settings.org, "envorg");
+  assert.equal(r.settings.project, "envproj");
+  assert.equal(r.settings.repo, "envrepo");
+  assert.equal(r.settings.path, "/env/p.jsonc");
+  assert.equal(r.settings.branch, "envbranch");
+  assert.deepEqual(r.missing, []);
+});
+
+test("lone surrogates in env warn too and defaults apply", () => {
+  const r = run({}, { KILO_AZDO_ORG: "\udbff", KILO_AZDO_BRANCH: "\udc00x", KILO_AZDO_PATH: "/p\ud800" });
+  assert.deepEqual(r.warnings, [
+    envWarn("org", NOT_ALLOWED),
+    envWarn("path", NOT_ALLOWED),
+    envWarn("branch", NOT_ALLOWED),
+  ]);
+  assert.deepEqual(r.missing, ["org", "project", "repo"]);
+  assert.equal(r.settings.path, "/kilo.jsonc");
+  assert.equal(r.settings.branch, "main");
+});
+
+test("a valid surrogate pair is accepted and nothing throws", () => {
+  const emoji = "😀";
+  const r = run({ org: emoji, project: `a${emoji}b`, repo: "r", branch: emoji, path: `/${emoji}` });
+  assert.deepEqual(r.warnings, []);
+  assert.equal(r.settings.org, emoji);
+  assert.equal(r.settings.project, `a${emoji}b`);
+  assert.equal(r.settings.branch, emoji);
+  assert.equal(r.settings.path, `/${emoji}`);
+  assert.doesNotThrow(() => run({ org: "\ud800\ud800", project: "\udc00\ud800", repo: "\ud83d" }));
+});

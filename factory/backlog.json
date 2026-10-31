@@ -155,7 +155,7 @@
       "title": "Plugin: Azure DevOps fetch and authentication",
       "type": "feature",
       "priority": 2,
-      "status": "todo",
+      "status": "done",
       "scope": {
         "backend": true,
         "frontend": false
@@ -163,20 +163,19 @@
       "depends_on": [
         "F-004"
       ],
-      "description": "FR-2 / FR-3 / FR-8. Fetch via Git Items API using injected fetch and injected `az` runner for testability.",
+      "description": "FR-2 / FR-3 / FR-8. Async helper exposed as `__internals.fetchRemoteConfig(settings, deps?)` (ADR-0002 seam) inside the single plugin file backend/plugin/azdo-remote-config.ts. Takes the output `settings` of `resolveSettings` (F-004, contract 0.5.0; `settings.pat` already covers the plugin option and KILO_AZDO_PAT) and fetches the shared file via the Azure DevOps Git Items API. Returns a discriminated result `{ ok: true, text }` or `{ ok: false, error }` where `error` is a fixed, value-free code/message (e.g. invalid-settings, auth-unavailable, timeout, http-<status>, too-large, bad-response, network); it NEVER throws or rejects (FR-10). Injectable deps: `fetch` (default globalThis.fetch), `env` (default process.env, own properties only), `runAz` (default: node:child_process execFile without a shell, bounded by timeoutMs), and timer/AbortController seams as the Architect sees fit. Request uses `Accept: application/json`; the file text is read from the JSON body's `content` string. Lone UTF-16 surrogates in settings (security low finding 1, cycle 0006) must be handled here: either an `isWellFormed()` guard via a contract amendment or catching URIError during URL building. Parsing, placeholder resolution, merge, cache and logging stay in F-006. Zero runtime npm deps (FR-11); Node built-ins only.",
       "acceptance_criteria": [
-        "Given settings, When fetching, Then the request URL targets `https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/items` with path, versionDescriptor.version=branch, versionDescriptor.versionType=branch, includeContent=true, api-version=7.1 (all URL-encoded).",
-        "Given a `pat` option, When fetching, Then the Authorization header is `Basic base64(':' + pat)`.",
-        "Given no pat option but AZDO_PAT or AZURE_DEVOPS_EXT_PAT set, When fetching, Then that PAT is used with Basic auth (AZDO_PAT preferred).",
-        "Given no PAT anywhere, When fetching, Then the faked `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` token is used as `Bearer`.",
-        "Given a server that does not respond within timeoutMs, When fetching, Then the fetch is aborted and a timeout error is returned.",
-        "Given a non-2xx response, When fetching, Then an error including the HTTP status (but no token) is returned.",
-        "Given a remote config response larger than a fixed cap (e.g. 1 MiB), When fetched, Then it is rejected before parseJsonc is called (parseJsonc memory is ~50x input size).",
-        "Given a setting value containing a lone surrogate (e.g. U+D800) that passed resolveSettings, When F-005 builds the Azure DevOps URL, Then it neither throws a URIError nor sends a request; the setting is treated as invalid (guard via isWellFormed with a contract amendment, or catch URIError). All values are URL-encoded.",
-        "Given PAT sources, When resolved, Then precedence is plugin option, KILO_AZDO_PAT, AZDO_PAT, AZURE_DEVOPS_EXT_PAT, then az (contract 0.5.0: KILO_AZDO_PAT already handled by resolveSettings)."
+        "Given settings {org:'my org', project:'plat form', repo:'kilo-config', path:'/teams/a b/kilo.jsonc', branch:'release/1', timeoutMs:5000} and a fake fetch, When `__internals.fetchRemoteConfig` runs, Then exactly one GET is sent to `https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/items` with org/project/repo percent-encoded as path segments and query parameters path, versionDescriptor.version=<branch>, versionDescriptor.versionType=branch, includeContent=true and api-version=7.1 (all values percent-encoded), with an `Accept: application/json` header; and Given a 200 response whose JSON body has `content` equal to a JSONC string, Then the result is `{ ok: true, text }` with text equal to that string byte-for-byte (not parsed).",
+        "Given PAT sources, When the request is built, Then the Authorization header is `Basic ` + base64(':' + pat) using the first available of: settings.pat (plugin option or KILO_AZDO_PAT, from resolveSettings), then injected env AZDO_PAT, then AZURE_DEVOPS_EXT_PAT (empty/whitespace-only values skipped, env read as own properties only); and in every PAT case the injected az runner is never invoked.",
+        "Given no PAT from any source, When fetching, Then the injected az runner is invoked once with arguments starting `account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` (no shell), the trimmed returned token is sent as `Authorization: Bearer <token>`; and Given the runner throws, exits non-zero, times out or returns empty output, Then no HTTP request is sent and the result is `{ ok: false }` with a fixed auth-unavailable error.",
+        "Given a fake fetch that never responds, When fetching with timeoutMs 50, Then the request's AbortSignal is aborted at the timeout and the result is `{ ok: false }` with a timeout error within a bounded time (no hang), and the default timeout when settings come from resolveSettings defaults is 5000 ms (FR-8).",
+        "Given a non-2xx response (e.g. 401, 404, 500), or a fetch that rejects with an error whose message contains the PAT, When fetching, Then the result is `{ ok: false }` and the error includes the HTTP status number for non-2xx responses, while no returned error contains the PAT, the bearer token, the Authorization header value or the underlying error's message.",
+        "Given a response larger than 1 MiB (declared by Content-Length or actual body length when the header is missing or lies), or a 200 body that is not JSON or lacks a string `content` field, When fetching, Then the result is `{ ok: false }` with a too-large or bad-response error and no oversized text is returned (cap enforced before any parsing; parseJsonc memory is about 50x input size).",
+        "Given settings with missing org/project/repo, or a value containing a lone surrogate (e.g. org `\ud800`) that passed resolveSettings, When fetching, Then no URIError or other exception escapes, neither fetch nor the az runner is called, and the result is `{ ok: false }` with an invalid-settings error that names no values.",
+        "Given any input including hostile values (null/non-object settings or deps, throwing fetch, throwing env proxy), When `fetchRemoteConfig` runs, Then the returned promise always resolves (never rejects) and the settings/env objects are not mutated; and When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0, backend/package.json has no runtime `dependencies`, and the only new export surface is the `fetchRemoteConfig` key on `__internals`."
       ],
       "source": "vision",
-      "cycle_done": null
+      "cycle_done": 7
     },
     {
       "id": "F-006",
@@ -194,7 +193,7 @@
         "F-003",
         "F-005"
       ],
-      "description": "FR-7 / FR-9 / FR-10 / AC-3 / AC-4 / AC-8 / AC-9. Wire the full startup sequence into the plugin's config hook.",
+      "description": "FR-7 / FR-9 / FR-10 / AC-3 / AC-4 / AC-8 / AC-9. Wire the full startup sequence into the plugin's config hook. Also from cycle 0006: when `missing` is non-empty skip the fetch and log names only; log `warnings` at warn level; never log `settings` wholesale (no %o/showHidden). Cycle 0007 security info 4: decide which config sources may set org/project/repo/path (an untrusted project-local config must not redirect the credential to an attacker-chosen repo) and validate the fetched config before applying it.",
       "acceptance_criteria": [
         "Given a successful fetch, When the config hook runs, Then the resolved config is written to `<home>/.cache/kilo-azdo/remote-config.json` and merged into the config.",
         "Given the fetch fails and a cache exists, When the config hook runs, Then the cached config is merged and a warning is logged with service `azdo-remote-config` (AC-3).",
@@ -271,7 +270,7 @@
       "depends_on": [
         "F-001"
       ],
-      "description": "FR-16 / FR-17. Template matching Appendix B.",
+      "description": "FR-16 / FR-17. Template matching Appendix B. Cycle 0006 architect follow-up: the template must write `org`, `project` and `repo` explicitly (repo has no default since contract 0.5.0).",
       "acceptance_criteria": [
         "Given the template, When parsed, Then its top-level keys are only `$schema`, `plugin` and `provider`.",
         "Given the template, When inspected, Then `plugin` has exactly one entry pointing at `./azdo/azdo-remote-config.ts` with options org, project, repo, path, branch, mode.",
@@ -295,7 +294,7 @@
         "F-006",
         "F-009"
       ],
-      "description": "FR-18..FR-23 / AC-12 / AC-14 for POSIX. Tests run with a temp HOME and faked az/curl.",
+      "description": "FR-18..FR-23 / AC-12 / AC-14 for POSIX. Tests run with a temp HOME and faked az/curl. The installer must write org, project and repo explicitly into the plugin options (repo has no default since contract 0.5.0).",
       "acceptance_criteria": [
         "Given a temp HOME with no Kilo config, When install.sh runs, Then the plugin is at `~/.config/kilo/azdo/azdo-remote-config.ts` and the personal config is created from the template.",
         "Given an existing personal config with other keys, When install.sh runs, Then only the plugin entry and apiKey are added/updated and other keys are preserved.",
@@ -623,12 +622,53 @@
       "depends_on": [
         "F-004"
       ],
-      "description": "Optional security info items from cycle 0006: extend hasControlChar to C1 controls and bidi overrides; cap string setting values at about 1024 characters with W2; reject lone surrogates in validators (needs a contract amendment) if not handled in F-005.",
+      "description": "Optional security info items from cycle 0006: extend hasControlChar to C1 controls and bidi overrides; cap string setting values at about 1024 characters with W2. (Lone surrogates are handled in F-005.)",
       "acceptance_criteria": [
         "Given an org/project/repo/branch/path value with C1 controls or bidi overrides, When resolved, Then it is ignored with the fixed W2 warning.",
         "Given a value longer than the cap, When resolved, Then it is ignored with W2."
       ],
       "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-010",
+      "title": "Test default az runner and kill az process tree on Windows",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-005"
+      ],
+      "description": "Cycle 0007 security low 1 / info 3 and review info 1+2: defaultRunAz (POSIX and Windows cmd.exe path) has no automated test, and a Windows timeout kills only cmd.exe so az may keep running. Kill the process tree (taskkill /T) or pass the shared AbortSignal to execFile; add tests with a stub az / az.cmd.",
+      "acceptance_criteria": [
+        "Given a stub az on PATH, When the default runner runs, Then it returns the stub's trimmed stdout and sends no shell metacharacters.",
+        "Given an az that hangs on Windows, When the timeout fires, Then the whole process tree is terminated."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-011",
+      "title": "Document MAX_EMPTY_CHUNKS in the plugin contract",
+      "type": "chore",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-005"
+      ],
+      "description": "Cycle 0007 review info 3: the 1024 consecutive empty-chunk limit in fetchRemoteConfig is not in the contract; Architect to add it (plugin-interface.md / ADR-0007).",
+      "acceptance_criteria": [
+        "Given the plugin contract, When read, Then it states the consecutive empty-chunk limit and the resulting error code."
+      ],
+      "source": "review",
       "cycle_done": null
     }
   ]
