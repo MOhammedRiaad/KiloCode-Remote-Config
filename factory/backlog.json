@@ -459,7 +459,7 @@
       "id": "F-019",
       "title": "Bootstrap installer smoke test (install.sh)",
       "type": "feature",
-      "priority": 3,
+      "priority": 2,
       "status": "todo",
       "scope": {
         "backend": true,
