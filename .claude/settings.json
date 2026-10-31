@@ -69,5 +69,11 @@
       "Read(./**/*.pem)",
       "Read(./**/*.key)"
     ]
+  },
+
+  "attribution": {
+    "commit": "",
+    "pr": ""
   }
+
 }

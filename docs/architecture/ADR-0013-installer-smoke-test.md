@@ -3,6 +3,8 @@
 - Date: 2026-10-31
 - Cycle / item: cycle-0013 / F-019
 - Amends: ADR-0012 (installer), contract `installer-cli.md` 1.0.0 -> 1.1.0
+- Amended by: ADR-0016 (cycle-0016, F-014): the test preload gains an additive `auth` answer;
+  the existing variants are unchanged (`contracts/e2e-harness.md` section 3)
 
 ## Context
 

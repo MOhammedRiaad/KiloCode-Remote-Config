@@ -2,11 +2,15 @@
 // Never imported at runtime by product code. Without a scenario or matching answer, denies all calls.
 import { appendFileSync, readFileSync } from "node:fs";
 
-export type FakeAnswer =
+export type FakeStaticAnswer =
   | { status: number; content: string; headers?: Record<string, string> }
-  | { status: number; body?: string; headers?: Record<string, string> }
+  | { status: number; body?: string; headers?: Record<string, string> };
+
+export type FakeAnswer =
+  | FakeStaticAnswer
   | { mode: "hang" }
-  | { mode: "throw"; message?: string };
+  | { mode: "throw"; message?: string }
+  | { mode: "auth"; authorization: string; answer: FakeStaticAnswer };
 
 export interface FakeScenario {
   azdo?: FakeAnswer;
@@ -42,6 +46,21 @@ function waitForAbort(signal: AbortSignal | null | undefined): Promise<Response>
   });
 }
 
+function renderStatic(answer: FakeStaticAnswer): Response {
+  if ("content" in answer && typeof answer.content === "string") {
+    return new Response(JSON.stringify({ content: answer.content }), {
+      status: answer.status,
+      headers: { "content-type": "application/json", ...(answer.headers ?? {}) },
+    });
+  }
+  const body = "body" in answer ? answer.body : undefined;
+  const nullBody = body === undefined && (answer.status === 204 || answer.status === 205 || answer.status === 304);
+  return new Response(nullBody ? null : (body ?? ""), {
+    status: answer.status,
+    headers: answer.headers,
+  });
+}
+
 const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   const method = init?.method ?? (input instanceof Request ? input.method : "GET");
@@ -62,21 +81,17 @@ const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Pro
     if (answer.mode === "throw") {
       throw new Error(answer.message ?? "fake-network: forced failure");
     }
+    if (answer.mode === "auth") {
+      if (headers["authorization"] === answer.authorization) return renderStatic(answer.answer);
+      return new Response('{"error":"unauthorized"}', {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    }
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     return waitForAbort(signal);
   }
-  if ("content" in answer && typeof answer.content === "string") {
-    return new Response(JSON.stringify({ content: answer.content }), {
-      status: answer.status,
-      headers: { "content-type": "application/json", ...(answer.headers ?? {}) },
-    });
-  }
-  const body = "body" in answer ? answer.body : undefined;
-  const nullBody = body === undefined && (answer.status === 204 || answer.status === 205 || answer.status === 304);
-  return new Response(nullBody ? null : (body ?? ""), {
-    status: answer.status,
-    headers: answer.headers,
-  });
+  return renderStatic(answer);
 };
 
 globalThis.fetch = fakeFetch as typeof globalThis.fetch;

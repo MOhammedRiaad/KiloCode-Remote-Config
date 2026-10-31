@@ -1,6 +1,6 @@
 # Architecture overview - Kilo Shared Config
 
-Last updated: cycle-0015 (F-008). Stack: ADR-0001. Plugin module shape: ADR-0002.
+Last updated: cycle-0016 (F-014). Stack: ADR-0001. Plugin module shape: ADR-0002.
 JSONC parser: ADR-0003. Placeholder resolution: ADR-0004. Config merge: ADR-0005.
 Settings resolution: ADR-0006. Azure DevOps fetch and auth: ADR-0007.
 Hook wiring, cache, logging, never-crash: ADR-0008. Trust boundary: ADR-0009.
@@ -8,9 +8,10 @@ Shared config validator: ADR-0010. Personal config template: ADR-0011.
 POSIX bootstrap installer: ADR-0012. Installer smoke test: ADR-0013.
 Windows bootstrap installer (install.ps1): ADR-0014.
 Shared config repo template, PR pipeline and branch-policy script: ADR-0015.
+End-to-end simulated startup harness (test only): ADR-0016.
 Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`,
 `contracts/personal-config-template.md`, `contracts/installer-cli.md`,
-`contracts/shared-config-repo.md`.
+`contracts/shared-config-repo.md`, `contracts/e2e-harness.md` (test only).
 
 ## Components
 
@@ -94,6 +95,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer\install.ps1 -Org O
   install-helper.ts: exactly as above (same files, same smoke test); messages use the install.ps1 prefix
   Windows: no chmod, no ACL calls; files inherit the profile ACL (user, SYSTEM, Administrators)
 ```
+
+## End-to-end simulated startup (TEST ONLY, F-014; ADR-0016, `contracts/e2e-harness.md`)
+
+```
+test/e2e/startup.test.ts (node:test, skipped with a reason when bash is missing)
+  -> temp sandbox: home/, bin/{node stub, az stub that fails}, work/
+  -> install.sh in child bash (runInstall: allow-listed env, deny-all fetch preload, --no-smoke
+     unless the smoke scenario opts in; fake Bifrost/AzDO "auth" answers check the key / PAT)
+  -> per Kilo start: child node --import=fake-network.ts kilo-start-simulator.ts --out <file>
+       env built from scratch (HOME/USERPROFILE = sandbox home, PATH = stub bin, AZDO_PAT, scenario)
+       reads INSTALLED ~/.config/kilo/kilo.jsonc, resolves plugin entries against the config dir
+       (+ auto-load plugin/ and plugins/), imports the INSTALLED azdo/azdo-remote-config.ts,
+       server(input{client.app.log}, options) -> await hooks.config(parsed personal config)
+       -> result file {entries, serverCalls, hookCalls, initialConfig, config, logs}
+  -> successive starts share HOME, so ~/.cache/kilo-azdo/remote-config.json carries over
+  -> assertions: merged config, log records, request log, cache file, config dir snapshot,
+     no secret in any stdout/stderr/log record
+```
+
+Real Kilo, the VS Code extension, real AzDO and real Bifrost are not used. That part of vision AC-1 is a manual
+Phase 0 check (F-016 docs).
 
 ## Data flow (PR gate, shared config repo C1; ADR-0010, `contracts/validator-cli.md`)
 
@@ -182,6 +204,10 @@ backend/                     # the only package (ADR-0001 section 7)
                               # + install.ps1 tests via pwsh / powershell.exe, skipped without PowerShell (F-011)
   test/installer/fixtures/fake-network.ts  # TEST ONLY: --import preload replacing globalThis.fetch
                               # (loaded via NODE_OPTIONS by tests; never imported by product code)
+                              # F-014: + "auth" answer (401 unless Authorization matches)
+  test/e2e/startup.test.ts    # F-014: install.sh -> simulated Kilo starts, end to end (ADR-0016)
+  test/e2e/helpers.ts         #   sandbox, runStart, probeFetch, assertNoLeaks
+  test/e2e/fixtures/kilo-start-simulator.ts  # TEST ONLY: child Node stand-in for Kilo start
   provisioning/               # created by a later item
 docs/architecture/           # this folder: overview, ADRs, contracts
 factory/                     # backlog, state, run reports
@@ -193,4 +219,4 @@ scripts/ci.sh                # quality gate (CI and local)
 
 `bash scripts/ci.sh` -> in `backend/`: `npm ci`, `npm run lint` (FR-11 guard),
 `npm run typecheck` (`tsc --noEmit`, includes `validator/**/*.ts` since F-007 and `installer/**/*.ts` since F-010), `npm test`
-(`node --test`, includes `test/validator/`), plus factory JSON checks.
+(`node --test`, includes `test/validator/` and, since F-014, `test/e2e/`), plus factory JSON checks.

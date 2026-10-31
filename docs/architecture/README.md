@@ -11,7 +11,8 @@ Owned by the **architect** agent.
   `contracts/personal-config-template.md` (since F-009) and the bootstrap installer in
   `contracts/installer-cli.md` (since F-010; `install.ps1` since F-011, section 10) and the shared
   config repo template, assemble tool, PR pipeline and branch-policy script in
-  `contracts/shared-config-repo.md` (since F-008).
+  `contracts/shared-config-repo.md` (since F-008) and the test-only end-to-end harness
+  (Kilo start simulator, fake-network preload) in `contracts/e2e-harness.md` (since F-014).
 
 ADR template:
 

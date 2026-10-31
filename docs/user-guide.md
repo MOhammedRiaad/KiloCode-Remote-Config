@@ -8,6 +8,8 @@ starts normally with your local config; the plugin never crashes Kilo.
 
 Also available: a [validator](#validating-the-shared-config-platform-engineers) for the shared config. Also available: a [personal config template](#personal-config-template-engineers). Also available: the [macOS/Linux installer](#installing-on-macos-and-linux-engineers) and the [Windows installer](#installing-on-windows-engineers). Not yet available (planned, see `factory/VISION.md`): key provisioning and the Azure Pipelines PR gate (F-008).
 
+Verification status: an automated end-to-end test simulates a fresh install and first start against a fake network. Checking against the real Kilo CLI, VS Code extension, Azure DevOps and Bifrost (vision AC-1) is still a manual Phase 0 step; see [development](development.md#what-stays-manual-phase-0).
+
 Supported Kilo version range (pinned): `>=7.2.0 <8.0.0`.
 
 ## How it works at startup

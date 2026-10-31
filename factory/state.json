@@ -1,6 +1,6 @@
 {
   "status": "running",
-  "cycle": 15,
+  "cycle": 16,
   "max_cycles": 50,
   "phase": "idle",
   "current_item": null,
@@ -9,7 +9,7 @@
   "max_rework": 3,
   "consecutive_blocked": 0,
   "max_consecutive_blocked": 3,
-  "last_release": "v0.12.0",
+  "last_release": "v0.13.0",
   "history": [
     {
       "cycle": 3,
@@ -107,6 +107,13 @@
       "item": "F-008",
       "result": "released",
       "version": "v0.12.0",
+      "rework": 0
+    },
+    {
+      "cycle": 16,
+      "item": "F-014",
+      "result": "released",
+      "version": "v0.13.0",
       "rework": 0
     }
   ]

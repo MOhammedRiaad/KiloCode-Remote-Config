@@ -13,9 +13,9 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { FakeAnswer, FakeScenario } from "./fixtures/fake-network.ts";
+import type { FakeAnswer, FakeScenario, FakeStaticAnswer } from "./fixtures/fake-network.ts";
 
-export type { FakeAnswer, FakeScenario };
+export type { FakeAnswer, FakeScenario, FakeStaticAnswer };
 
 export const backendRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const installShPath = join(backendRoot, "installer", "install.sh").replaceAll("\\", "/");

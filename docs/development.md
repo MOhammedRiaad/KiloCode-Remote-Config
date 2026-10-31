@@ -120,6 +120,43 @@ The tests never contact Azure DevOps; the branch-policy script is run with `--dr
 built-ins and must not use `require(`. To try the tool by hand, see the
 [user guide](user-guide.md#setting-up-the-shared-config-repo-platform-engineers).
 
+## End-to-end startup tests (F-014)
+`backend/test/e2e/` (`startup.test.ts`, `helpers.ts`, `fixtures/kilo-start-simulator.ts`; contract
+`docs/architecture/contracts/e2e-harness.md`, ADR-0016) is a test-only suite. Each scenario runs the
+real `install.sh` in a temporary HOME, then starts a child-process Kilo start simulator that imports the
+installed plugin, calls its `server` and runs its `config` hook against the fake network
+(`backend/test/installer/fixtures/fake-network.ts`, which gained an additive `auth` answer that
+returns the given answer only when the `authorization` header matches, else 401). No real network,
+Azure DevOps, Bifrost or Kilo is used.
+
+It covers (vision acceptance criteria in brackets): fresh install then first start applies the shared
+config and loads the plugin once (AC-1 and AC-12, simulated); a changed shared file is picked up without
+re-running the installer (AC-2); AzDO down with a cache uses the cache (AC-3); AzDO down without a cache
+keeps the local config (AC-4); `defaults` and `enforce` merge modes, with the key never replaced (AC-6,
+AC-7); the installer smoke test checks the key against fake Bifrost (AC-10); and no key, PAT or credential
+appears in any output, log or cache (AC-9).
+
+Run only this suite, from `backend/`:
+
+```bash
+node --test test/e2e/startup.test.ts
+```
+
+It also runs with `npm test`. Notes:
+- It needs `bash` (Git Bash on Windows; set `KILO_TEST_BASH` to point at one). Without bash every test is skipped with the message "bash not found on PATH (set KILO_TEST_BASH): end-to-end startup suite skipped".
+- The simulator writes its result to a file (`--out`), not stdout, because the result holds the engineer's key. Tests never print it.
+- Guard: the simulator exits 2 unless the fake-network preload is active (`globalThis.fetch.name === "fakeFetch"`) and `KILO_TEST_FAKE_NET` is set, so it cannot reach a real network. Exit 1 means the plugin threw, which is a product defect.
+- Product code under `backend/installer/` must not mention these test switches (lint rule 7).
+
+To add a scenario: add a `test(...)` with `OPTS` in `startup.test.ts`, build the fake network answers (`azdo`, `bifrost`, using `auth` where the credential matters), call `withE2eSandbox`, `runInstall` and `runStart` from `helpers.ts`, assert on the `SimResult` (`config`, `logs`, `hookCalls`), and call `assertNoLeaks` on all output.
+
+### What stays manual (Phase 0)
+These tests simulate startup; they do not prove vision AC-1. Still to be checked by hand against the
+real systems in Phase 0 (for F-016 to fold into the runbook):
+- Kilo CLI `/models` and the VS Code extension model list show the Bifrost models, with real Azure DevOps and real Bifrost.
+- Kilo's own loading of the `.ts` plugin and its path resolution (the simulator imitates it from the contract, not from Kilo).
+- A disabled virtual key is rejected by Bifrost at request time (AC-11); the tests only check that the key is sent.
+
 ## Layout
 ```
 backend/plugin/azdo-remote-config.ts   the plugin
@@ -129,6 +166,6 @@ backend/tools/assemble-shared-repo.ts  builds the shared config repo tree
 backend/personal-config/kilo.jsonc     personal config template (copied to ~/.config/kilo/)
 backend/installer/                     bootstrap installer (install.sh, install.ps1 + Node helper)
 backend/tools/check-fr11.mjs           lint
-backend/test/                          tests
+backend/test/                          tests (backend/test/e2e/ = end-to-end startup suite)
 ```
 Further folders (templates, provisioning) arrive with later items.

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.13.0] - 2026-10-31
+
+### Added
+- F-014: end-to-end simulated startup test suite.
+- F-014: fake-network `auth` answer for the simulated startup.
+- F-014: documentation for the end-to-end startup test.
+
+### Changed
+- Unrelated settings commit: removed attribution (co-author) settings.
+
 ## [0.12.0] - 2026-10-31
 
 ### Added

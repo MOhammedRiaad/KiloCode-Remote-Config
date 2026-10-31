@@ -67,6 +67,11 @@ scope for the installers.
 - Lint that enforces the FR-11 constraints (single file, zero npm runtime dependencies).
 - Strict TypeScript type-check and a `node:test` test suite.
 - One quality gate, `scripts/ci.sh`, used locally and in GitHub Actions.
+- End-to-end startup test (F-014, test only): `cd backend && node --test test/e2e/startup.test.ts` installs into a temp HOME and simulates Kilo's startup against a fake network. It needs bash. It does not test real Kilo, Azure DevOps or Bifrost.
+
+### Still manual (Phase 0)
+The simulated startup test does not prove vision AC-1. These checks stay manual: Kilo CLI `/models` and the VS Code model list against real Azure DevOps and Bifrost; Kilo's own loading of the `.ts` plugin and path resolution; a disabled key rejected at request time. See [development](docs/development.md#what-stays-manual-phase-0).
+
 
 ### Quick start
 Prerequisite: Node.js 22.18 or newer (native TypeScript support). There is no frontend, no server and no Docker step.
