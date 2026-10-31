@@ -182,7 +182,7 @@
       "title": "Plugin: cache, fallback, logging and never-crash wiring",
       "type": "feature",
       "priority": 2,
-      "status": "todo",
+      "status": "done",
       "scope": {
         "backend": true,
         "frontend": false
@@ -191,23 +191,22 @@
         "F-001",
         "F-002",
         "F-003",
+        "F-004",
         "F-005"
       ],
-      "description": "FR-7 / FR-9 / FR-10 / AC-3 / AC-4 / AC-8 / AC-9. Wire the full startup sequence into the plugin's config hook. Also from cycle 0006: when `missing` is non-empty skip the fetch and log names only; log `warnings` at warn level; never log `settings` wholesale (no %o/showHidden). Cycle 0007 security info 4: decide which config sources may set org/project/repo/path (an untrusted project-local config must not redirect the credential to an attacker-chosen repo) and validate the fetched config before applying it.",
+      "description": "FR-7 / FR-9 / FR-10 / AC-3 / AC-4 / AC-6 / AC-7 / AC-8 / AC-9, startup steps 2-6. Wire the shipped helpers (resolveSettings, fetchRemoteConfig, parseJsonc, resolvePlaceholders, mergeConfig) into the plugin's exported `config` hook inside the single file backend/plugin/azdo-remote-config.ts. Flow: resolve settings from plugin options + env; if `missing` is non-empty skip the fetch (log setting names only) and use the cache path; otherwise fetch; parse and validate the fetched text (root must be a plain object); on success write the cache, on any failure read the cache; resolve placeholders on the chosen config; merge in place with settings.mode. Cache: `<home>/.cache/kilo-azdo/remote-config.json`, holding the parsed shared config BEFORE placeholder resolution (PO decision: resolved {env:}/{file:} values may be secrets and must never be written to disk); directory created if missing; file mode 0600 on POSIX; written atomically (temp file + rename) so a crash never leaves a half-written cache; the cache content is validated on read exactly like fetched content. Logging goes through Kilo's logger with `service: azdo-remote-config` (Architect decides the exact Kilo logger API and keeps an injectable logger seam for tests); only fixed messages, setting names, error codes and placeholder names are logged, never values, and `settings` is never passed to the logger as an object. Trust boundary (cycle 0007 security info 4): the Architect records in an ADR which Kilo config layers may supply org/project/repo/path/pat and that fetched and cached content is treated as untrusted input (validated before merge; apiKey never applied, already enforced by mergeConfig). Deps (home dir, fs, fetch, env, runAz, logger) are injectable; tests never touch the real home directory or network. The Windows case-insensitive process.env note moved to T-012. Zero runtime npm deps (FR-11).",
       "acceptance_criteria": [
-        "Given a successful fetch, When the config hook runs, Then the resolved config is written to `<home>/.cache/kilo-azdo/remote-config.json` and merged into the config.",
-        "Given the fetch fails and a cache exists, When the config hook runs, Then the cached config is merged and a warning is logged with service `azdo-remote-config` (AC-3).",
-        "Given the fetch fails and no cache exists, When the config hook runs, Then the config is unchanged and an error is logged (AC-4).",
-        "Given any internal exception (parse error, unwritable cache, logger failure), When the config hook runs, Then it does not throw (FR-10).",
-        "Given a run with a PAT, a bearer token and an `sk-bf-` key present, When all log calls are captured, Then none contains any of those secret values (AC-9).",
-        "Given `{env:MISSING}` in the shared file, When the hook runs, Then the log names `env:MISSING` and contains no value (AC-8).",
-        "Given a successful fetch on POSIX, When the cache file is written, Then its permissions are 0600 and the cache directory is created if missing (security follow-up, cycle 0002).",
-        "Given a Windows host where process.env lookups are case-insensitive, When {env:NAME} placeholders are resolved through the hook, Then behaviour is documented/tested (injected envs are case-sensitive; process.env is not).",
-        "Given a frozen/sealed Kilo config making mergeConfig throw a TypeError, When the hook runs, Then the error is caught and a fixed message is logged (never err.message), and Kilo continues (FR-10).",
-        "Given resolved settings with a PAT, When logging, Then settings are never logged with %o, showHidden or util.inspect(showHidden) (the non-enumerable pat would show); only setting names and fixed warnings are logged."
+        "Given complete settings in plugin options, a fake fetch returning a shared JSONC with comments and `{\"model\":\"shared\",\"small_model\":\"s\",\"provider\":{\"bifrost\":{\"options\":{\"baseURL\":\"https://b/v1\",\"apiKey\":\"sk-bf-shared\"}}}}`, and a Kilo config `{model:'local', provider:{bifrost:{options:{apiKey:'sk-bf-local'}}}}`, When the plugin's `config` hook runs in `defaults` mode, Then the same config object is mutated in place with model `local`, small_model `s`, baseURL `https://b/v1` and apiKey `sk-bf-local`; and in `enforce` mode model becomes `shared` while apiKey stays `sk-bf-local` (AC-6, AC-7).",
+        "Given a successful fetch and a fake home directory without `.cache/kilo-azdo/`, When the hook runs, Then `<home>/.cache/kilo-azdo/remote-config.json` is created containing the parsed shared config with placeholders still unresolved (no resolved env/file value is written to disk), the write is atomic (temp file + rename), and on POSIX the file mode is 0600; and an info log with service `azdo-remote-config` states the remote source was used.",
+        "Given the fetch fails (e.g. timeout or http-500) and a valid cache file exists, When the hook runs, Then the cached config is placeholder-resolved and merged into the config, the cache is not overwritten, and a warn-level log with service `azdo-remote-config` names the fixed error code (AC-3).",
+        "Given the fetch fails and no cache exists, or the cache file is corrupt, not JSON, or has a non-object root, When the hook runs, Then the config deep-equals its original value, an error-level log is written with a fixed message, and a corrupt cache is never merged (AC-4).",
+        "Given resolved settings with `missing` non-empty, When the hook runs, Then neither fetch nor the az runner is called, the log names only the missing setting names (e.g. `org`), the cache fallback of the previous criteria applies, and each resolveSettings warning is logged at warn level; and Given fetched text that is invalid JSONC or whose root is not a plain object (array, string, number, null), When the hook runs, Then it is neither merged nor cached and the cache fallback applies.",
+        "Given a shared file containing `\"x\": \"{env:MISSING}\"` and `\"y\": \"{env:SECRET_VAR}\"` with SECRET_VAR set to `s3cr3t-value`, When the hook runs, Then config.x is not set, config.y is `s3cr3t-value`, and the logs name `env:MISSING` but contain neither `s3cr3t-value` nor any other placeholder value (AC-8).",
+        "Given a run with a PAT in plugin options, a bearer token returned by a fake az runner (PAT-less run), an `sk-bf-` apiKey in the local config and a resolved secret placeholder, across the success, cache-fallback and exception paths, When every argument of every logger call is captured and serialised (including util.inspect with showHidden), Then none contains any of those secret values, and the logger never receives the settings object (AC-9, FR-9).",
+        "Given each internal failure in turn (fetch dependency rejecting, parseJsonc throwing, unwritable cache directory, cache write throwing, logger throwing, a frozen Kilo config making mergeConfig throw TypeError, options null or non-object), When the hook runs, Then it resolves without throwing, any logged message is fixed text (never err.message), and Kilo's config is left either unchanged or fully merged (FR-10); and When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0, backend/package.json has no runtime `dependencies`, and docs/architecture contains an ADR stating which config layers may supply org/project/repo/path/pat and that fetched/cached content is validated as untrusted before merge."
       ],
       "source": "vision",
-      "cycle_done": null
+      "cycle_done": 8
     },
     {
       "id": "F-007",
@@ -667,6 +666,91 @@
       "description": "Cycle 0007 review info 3: the 1024 consecutive empty-chunk limit in fetchRemoteConfig is not in the contract; Architect to add it (plugin-interface.md / ADR-0007).",
       "acceptance_criteria": [
         "Given the plugin contract, When read, Then it states the consecutive empty-chunk limit and the resulting error code."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-012",
+      "title": "Document and test Windows case-insensitive env lookup for {env:} placeholders",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-006"
+      ],
+      "description": "Moved out of F-006 (cycle 0008 PO) to keep F-006 at 8 ACs. On Windows, process.env lookups are case-insensitive while injected test envs are case-sensitive; document the behaviour of {env:NAME} through the hook and test it.",
+      "acceptance_criteria": [
+        "Given the plugin contract and user docs, When read, Then they state that {env:NAME} lookups follow process.env semantics (case-insensitive on Windows, case-sensitive elsewhere).",
+        "Given a Windows CI runner and process.env with `Path` set, When `{env:PATH}` is resolved through the default env, Then it resolves; on non-Windows the test is skipped with a clear message."
+      ],
+      "source": "po",
+      "cycle_done": null
+    },
+    {
+      "id": "T-013",
+      "title": "Bind cache to the settings that produced it",
+      "type": "security",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-006"
+      ],
+      "description": "Cycle 0008 security low 1: the cache is one fixed file not linked to org/project/repo/path/branch, so on fetch failure a cache from another repo or org can be applied. Store a settings fingerprint (no secrets) with the cache and check it on read; reconsider using the cache when settings are missing. Also from the trust-boundary ADR-0009 accepted risk: verify whether Kilo lets a project-level config override the global plugin options and document or guard it.",
+      "acceptance_criteria": [
+        "Given a cache written for repo A, When the hook runs with settings for repo B and the fetch fails, Then the cache is not applied.",
+        "Given matching settings, When the fetch fails, Then the cache is still applied."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-014",
+      "title": "Cache and log hardening (cleanName, temp files, TOCTOU)",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-006"
+      ],
+      "description": "Cycle 0008 security/review info: cleanName should also map U+2028, U+2029 and bidi controls to '?'; remove stale *.tmp files after a successful cache write; read the cache through one fd or check length after reading (2 MiB cap TOCTOU); document cache dir permission behaviour on Windows.",
+      "acceptance_criteria": [
+        "Given a placeholder name containing U+2028 or a bidi override, When logged, Then those characters are replaced.",
+        "Given an orphan cache temp file, When a write succeeds, Then it is removed.",
+        "Given a cache file that grows past 2 MiB between stat and read, When read, Then it is rejected."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-015",
+      "title": "Hook test hygiene: temp dirs, env allow-list, formatting",
+      "type": "tech-debt",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-006"
+      ],
+      "description": "Cycle 0008 security/review info: hook.test.ts never removes its temp home dirs (use t.after); child-process tests should pass an allow-listed env, and the KILO_AZDO_* filter must be case-insensitive on Windows; fix formatting nits (hook.test.ts:19 'OPTIONS ={', mis-indented logsAfterServer in the smoke test).",
+      "acceptance_criteria": [
+        "Given the hook tests, When they finish, Then no temp home directories remain.",
+        "Given lowercase kilo_azdo_project in the parent env on Windows, When the hostile-deps child runs, Then it is not passed through."
       ],
       "source": "review",
       "cycle_done": null

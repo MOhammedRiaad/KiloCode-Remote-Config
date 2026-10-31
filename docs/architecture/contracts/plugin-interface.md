@@ -1,6 +1,7 @@
 # Contract: `azdo-remote-config` plugin interface
 
-- Version: 0.6.0 (F-005, cycle-0007: `__internals.fetchRemoteConfig`, new section 2e, section 2d
+- Version: 0.7.0 (F-006, cycle-0008: `__internals.runConfigHook`, new section 2f, section 3 hook
+  behaviour normative, section 5 cache and logs normative, trust boundary ADR-0009; 0.6.0 was F-005, cycle-0007: `__internals.fetchRemoteConfig`, new section 2e, section 2d
   amended (well-formed UTF-16 rule), sections 4 and 5 normative for the fetch; 0.5.0 was F-004,
   cycle-0006: `__internals.resolveSettings`, section 2d, section 4 now normative; 0.4.0 was F-003, cycle-0005: `__internals.mergeConfig`, section 2c; 0.3.1 was F-002
   rework 1, cycle-0004: default `{file:}` reader guard and UNC rejection; 0.3.0 was F-002,
@@ -50,21 +51,22 @@ export type PluginServer = (input: PluginInput, options?: PluginOptions) => Prom
 | `default` | object | `{ id: "azdo-remote-config", server: PluginServer }` |
 | `PLUGIN_ID` | string const | `"azdo-remote-config"` (also the logger `service` name, FR-9) |
 | `SUPPORTED_KILO_RANGE` | string const | `">=7.2.0 <8.0.0"` |
-| `__internals` | plain object | Test/validator seam. `{ parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings, fetchRemoteConfig }` since F-005 (sections 2a, 2b, 2c, 2d, 2e), in that key order; later F-items add further pure helpers. Never has a `server` key; never itself a function. |
+| `__internals` | plain object | Test/validator seam. `{ parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings, fetchRemoteConfig, runConfigHook }` since F-006 (sections 2a, 2b, 2c, 2d, 2e, 2f), in that key order; later F-items add further pure helpers. Never has a `server` key; never itself a function. |
 | types | `export type` / `export interface` | as in section 1 |
 
 No other named exports: the runtime named exports are exactly `PLUGIN_ID`, `SUPPORTED_KILO_RANGE`
 and `__internals` (plus `default`). No named export may be a function. Helpers inside
 `__internals` are module-local functions (not exported by name). Their helper types (e.g.
 `PlaceholderDeps`, `PlaceholderResult`, `Settings`, `SettingsDeps`, `SettingsResult`, `FetchDeps`,
-`FetchResult`, `AzRunner`) and constants (e.g. `MAX_MERGE_DEPTH`, `DEFAULT_TIMEOUT_MS`,
-`MAX_RESPONSE_BYTES`, `AZ_TOKEN_ARGS`) are module-local too
+`FetchResult`, `AzRunner`, `HookDeps`, `CacheFs`, `SharedCheck`) and constants (e.g. `MAX_MERGE_DEPTH`, `DEFAULT_TIMEOUT_MS`,
+`MAX_RESPONSE_BYTES`, `AZ_TOKEN_ARGS`, `MAX_CACHE_BYTES`, `MAX_LOGGED_PLACEHOLDERS`) are module-local too
 and are not exported.
 
 Imports (FR-11, ADR-0001, ADR-0004): the plugin file may import only `node:` built-ins. Since
 F-002 it imports `readFileSync` and `statSync` from `node:fs`, `homedir` from `node:os`, and
 `isAbsolute` and `join` from `node:path`. Since F-005 it also imports `execFile` from
-`node:child_process` (the only new import). `Buffer`, `TextDecoder`, `AbortController` and
+`node:child_process` (the only new import). Since F-006 it also imports `mkdirSync`, `renameSync`,
+`unlinkSync` and `writeFileSync` from `node:fs` (no other new import). `Buffer`, `TextDecoder`, `AbortController` and
 `fetch` are used as globals.
 
 ## 2a. `__internals.parseJsonc` (F-001, FR-4, ADR-0003)
@@ -123,7 +125,7 @@ dep uses its default. Synchronous.
 | Purity | Input never mutated. No logging, no global state. The only I/O is through `homedir` / `readFile`. |
 | Secret safety | Errors from `homedir`/`readFile` are caught without binding and discarded. They are never rethrown, never set as `cause`, and never copied into `value` or `unresolved`. File contents appear only in `value`, and only on success. |
 | Depth cap / throws | The root container is level 0. A container at level 64 or deeper (that is, more than 64 nested containers) throws `Error("Placeholder resolution: config nested too deeply")`. A cyclic input throws the same error. This is the **only** error the function may throw. 64 nested arrays resolve; 65 throw. |
-| Wiring | Not called by the `config` hook yet (F-006 wires it, logs `unresolved`, and catches everything). |
+| Wiring | Since F-006 called by `runConfigHook` (2f) on the chosen remote or cached config with the hook's `env`, `homedir`, `readFile` deps; `unresolved` is logged as L-UNRESOLVED (names only, sanitised). |
 
 ## 2c. `__internals.mergeConfig` (F-003, FR-6, AC-6, AC-7, ADR-0005)
 
@@ -156,7 +158,7 @@ Returns `undefined`.
 | Pollution | `Object.prototype` is never modified; the prototype of `target` and of every nested object is never changed. |
 | Depth cap / throws | Phase 1: root container is level 0; a container at level 64 or deeper in `shared` throws `Error("Config merge: config nested too deeply")`. Cyclic `shared` throws the same error. 64 nested containers merge; 65 throw. On this throw `target` is unchanged. This is the only error the function itself throws. |
 | Out of contract | Frozen / sealed / non-configurable `target` properties: `Object.defineProperty` may throw `TypeError`. F-006 catches everything. |
-| Wiring | Not called by the `config` hook yet (F-006). |
+| Wiring | Since F-006 `runConfigHook` (2f) uses phase 1 (`sanitizeShared`) for the cache content and a journaled variant of phase 2 (`applyShared`, ADR-0008 section 6) with rollback; `mergeConfig` itself is unchanged. |
 
 ## 2d. `__internals.resolveSettings` (F-004, FR-1, FR-8, settings half of FR-3, ADR-0006)
 
@@ -201,7 +203,7 @@ element of the Kilo plugin tuple (anything).
 | `warnings` | Only the fixed texts below. W0 first, then by setting order org..timeoutMs, option before env. At most one per setting and source. |
 | Throws | Never (no `throw` statement; all reads of untrusted input guarded). |
 | Secret safety | No input value (PAT or other) ever appears in `missing` or `warnings`. |
-| Wiring | Not called by `server` / `config` yet (F-006). `AZDO_PAT` / `AZURE_DEVOPS_EXT_PAT` / `az` are handled by `fetchRemoteConfig` (section 2e), not here. |
+| Wiring | Since F-006 called first by `runConfigHook` (2f); `warnings` logged at warn (L-SET), `missing` names logged (L-MISSING) and the fetch skipped. `AZDO_PAT` / `AZURE_DEVOPS_EXT_PAT` / `az` are handled by `fetchRemoteConfig` (section 2e), not here. |
 
 Warning texts. `<src>` is `plugin option <name>` or `environment variable <ENV> (<name>)`, where
 `<name>` is the camelCase setting name and `<ENV>` the env var from section 4:
@@ -260,24 +262,94 @@ Access: `await __internals.fetchRemoteConfig(resolveSettings(opts).settings, { f
 | 8. Size | `content-length` header made of ASCII digits only and > 1048576 -> `too-large` without reading. Body read through `response.body.getReader()` (missing -> `bad-response`; non-`Uint8Array` chunk -> `bad-response`); running total > 1048576 -> reader cancelled, `too-large`. Read error -> `network` (`timeout` if the deadline fired). Cap applies before decoding and parsing. |
 | 9. Body | `TextDecoder("utf-8", { fatal: true })`; decode error, `JSON.parse` error, parsed value not record-like, or own `content` not a string -> `bad-response`. Else `{ ok: true, text: content }` (exact string, not trimmed, not parsed). |
 | Default runAz | `execFile` from `node:child_process`, never `shell: true`, options `{ timeout: timeoutMs, maxBuffer: 65536, windowsHide: true, encoding: "utf8", cwd: homedir() }`. POSIX: file `az`, args as given. Windows (`process.platform === "win32"`): file = own absolute `process.env.ComSpec` or `"cmd.exe"`, args `["/d", "/s", "/c", "az " + args.join(" ")]` (args are the constant `AZ_TOKEN_ARGS`; no input ever reaches the command line). Callback: no error -> `{ exitCode: 0, stdout }`; numeric `error.code` -> `{ exitCode: code, stdout: "" }`; other error -> `{ exitCode: null, stdout: "" }`. Wrapped so it never rejects with data. Not covered by tests (no real az). |
-| Wiring | Not called by `server` / `config` yet (F-006: logs the error code only, then cache fallback). |
+| Wiring | Since F-006 called by `runConfigHook` (2f) when `missing` is empty; an error code is logged verbatim as `<reason>` (L-CACHE / L-NONE), then the cache fallback applies. |
+
+## 2f. `__internals.runConfigHook` (F-006, FR-6, FR-7, FR-9, FR-10, ADR-0008, ADR-0009)
+
+```ts
+interface CacheFs {                                       // module-local; methods called unbound
+  mkdirSync(path: string, options: { recursive: true; mode: number }): unknown;
+  writeFileSync(path: string, data: string, options: { encoding: "utf8"; mode: number; flag: "wx" }): void;
+  renameSync(from: string, to: string): void;
+  unlinkSync(path: string): void;
+  statSync(path: string): { isFile(): boolean; size: number };
+  readFileSync(path: string, encoding: "utf8"): string;
+}
+interface HookDeps {                                      // module-local; all optional
+  env?: Readonly<Record<string, string | undefined>>;    // -> resolveSettings, fetchRemoteConfig, resolvePlaceholders
+  fetch?: FetchLike; runAz?: AzRunner;                    // -> fetchRemoteConfig
+  setTimeout?: (callback: () => void, ms: number) => unknown; clearTimeout?: (handle: unknown) => void;
+  homedir?: () => string;                                 // cache path + {file:~/}; default os.homedir
+  readFile?: (path: string) => string;                    // -> resolvePlaceholders
+  fs?: CacheFs;                                           // default: real node:fs sync functions
+}
+type SharedCheck = { ok: true; value: Record<string, unknown> } | { ok: false; error: "invalid-jsonc" | "invalid-shape" };
+const MAX_CACHE_BYTES = 2 * 1024 * 1024;                  // exactly 2 MiB allowed
+const MAX_LOGGED_PLACEHOLDERS = 20; const MAX_LOGGED_NAME_CHARS = 200;
+
+async function runConfigHook(input: unknown, options: unknown, config: unknown, deps?: unknown): Promise<void>;
+```
+
+Access: `await __internals.runConfigHook(fakeInput, options, kiloConfig, { env, fetch, runAz, homedir, fs, readFile })`.
+The default export's hook is exactly `(config) => runConfigHook(input, options, config)` (no deps).
+
+| Aspect | Contract |
+|---|---|
+| Never rejects | For any arguments (including `null`, primitives, frozen or proxied objects, throwing / rejecting / hanging-logger fakes). Outer `try` / `catch` without binding -> L-UNEXPECTED. |
+| Deps | Read with `readOwn`; non-record-like `deps` -> `{}`. Absent key -> each helper's default. `homedir` present but not a function, or `fs` present but not record-like -> cache unavailable (never the real home / fs). A missing or non-function `fs` method -> that operation fails. `env`, `fetch`, `runAz`, `setTimeout`, `clearTimeout`, `readFile` passed through (each helper's own rules, 2b / 2d / 2e). Only non-`undefined` keys are passed on. |
+| Order | 0 logger; 1 `config` not a plain object -> L-BADCONFIG, return; 2 `resolveSettings(options, {env})`, each warning -> L-SET; 3 `missing` non-empty -> L-MISSING, reason `missing-settings`, **no fetch, no runAz**; else `fetchRemoteConfig(settings, {fetch, env, runAz, setTimeout, clearTimeout})`, then `validateShared(text)`; 4 remote ok -> L-REMOTE, write cache (failure -> L-CACHE-WRITE); otherwise read cache: ok -> L-CACHE, else L-NONE and return; 5 `resolvePlaceholders(shared, {env, homedir, readFile})`, unresolved -> L-UNRESOLVED; 6 transactional merge with `settings.mode` -> L-APPLIED or L-MERGE (ADR-0008 section 2). |
+| Reasons | `<reason>` = a `FetchErrorCode` (2e) \| `missing-settings` \| `invalid-jsonc` \| `invalid-shape`. |
+| Validation | `validateShared(text)`: non-string or `parseJsonc` throws -> `invalid-jsonc`; root not a plain object, or a container at level >= 64 (root 0) -> `invalid-shape`. Applied to fetched text and to cache text alike. Invalid content is never cached, never merged. |
+| Cache path | `join(homedir(), ".cache", "kilo-azdo", "remote-config.json")`. `homedir` throws / non-string / empty / not `isAbsolute` -> `cache-unavailable`, no fs call. |
+| Cache content | `JSON.stringify(sanitizeShared(shared), null, 2) + "\n"` of the validated **unresolved** shared config (2c phase 1: no `apiKey`, no prototype keys, no top-level `$schema` / `plugin`). Never contains a resolved placeholder value. Serialised size > `MAX_CACHE_BYTES` (UTF-8 bytes) -> `cache-too-large`, not written. |
+| Cache write | Only after a validated fetch. `mkdirSync(dir, {recursive: true, mode: 0o700})`; `writeFileSync(tmp, data, {encoding: "utf8", mode: 0o600, flag: "wx"})` with `tmp = file + "." + pid + "-" + Date.now() + "-" + counter + ".tmp"` in the same directory; `renameSync(tmp, file)`. Any throw -> guarded `unlinkSync(tmp)` (if the temp write was attempted), `cache-write-failed`. Never writes to `file` directly. POSIX mode 0600. |
+| Cache read | Only on the fallback path. `statSync(file)` throw with `code === "ENOENT"` -> `cache-missing`, other throw -> `cache-unreadable`; not `isFile()` or `size > MAX_CACHE_BYTES` -> `cache-unreadable`; `readFileSync(file, "utf8")` throw / non-string -> `cache-unreadable`; `validateShared` fails -> `cache-invalid`. The cache is never modified on this path. |
+| Merge | `applyShared(config, resolved, settings.mode)`: sanitize, journaled phase-2 merge, on any throw roll back in reverse (`Reflect.deleteProperty` for new keys, `Reflect.defineProperty(previous)` otherwise). Result: `config` is the same reference and is either deep-equal to its original or fully merged (frozen / sealed / non-extensible / non-configurable targets). |
+| Logger | `input.client.app.log` read with ordinary property access in `try` (SDK class instances: `log` may be a prototype method); called as `log.call(app, { body: { service: "azdo-remote-config", level, message } })`; never awaited; sync throw caught; a returned thenable gets a rejection handler. Missing / non-function -> silent. **No `extra`**, no other argument. |
+| Log text | Only the fixed messages of section 2f-L below. Never a value, `err.message`, URL, path, token, PAT, or the `settings` object. |
+| Server | `server(input, options)` does no I/O and no logging; returns `{ config }`. |
+
+### 2f-L. Log messages (service `azdo-remote-config`)
+
+| Id | Level | Exact message |
+|---|---|---|
+| L-SET | warn | the `resolveSettings` warning text verbatim (W0-W4, 2d) |
+| L-MISSING | warn | `Remote config skipped: missing required settings: <names>.` (`missing.join(", ")`) |
+| L-REMOTE | info | `Loaded shared config from Azure DevOps.` |
+| L-CACHE-WRITE | warn | `Could not update the config cache (<writeCode>).` (`cache-unavailable` \| `cache-too-large` \| `cache-write-failed`) |
+| L-CACHE | warn | `Remote config unavailable (<reason>); using cached config.` |
+| L-NONE | error | `Remote config unavailable (<reason>) and no usable cache (<readCode>); continuing with local config only.` (`cache-unavailable` \| `cache-missing` \| `cache-unreadable` \| `cache-invalid`) |
+| L-UNRESOLVED | warn | `Unresolved placeholders: <names>.` |
+| L-APPLIED | info | `Applied shared config from <remote\|cache> in <defaults\|enforce> mode.` |
+| L-MERGE | error | `Could not apply the shared config; local config left unchanged.` |
+| L-BADCONFIG | error | `Shared config not applied: the Kilo config is not an object.` |
+| L-UNEXPECTED | error | `Remote config failed unexpectedly; continuing with local config only.` |
+
+`<names>` for L-UNRESOLVED: each `unresolved` entry with code units `<= 0x1F`, `0x7F`, `0x80..0x9F`
+replaced by `?`, cut to 200 code units; at most 20 entries joined with `", "`, then
+`, and <n> more` when entries were left out. Example: `Unresolved placeholders: env:MISSING.`
+
+Example sequences:
+- success, defaults: L-REMOTE, L-APPLIED (`Applied shared config from remote in defaults mode.`)
+- fetch `timeout`, valid cache: L-CACHE (`Remote config unavailable (timeout); using cached config.`), L-APPLIED (`... from cache ...`)
+- missing `org`, no cache: L-MISSING (`Remote config skipped: missing required settings: org.`), L-NONE (`Remote config unavailable (missing-settings) and no usable cache (cache-missing); continuing with local config only.`)
 
 ## 3. Behaviour contract
 
 ### `server(input, options)`
 - MUST resolve (never reject) for any `input` (including `{}`) and any `options`
   (including `undefined`, `null`, non-objects).
-- MUST NOT perform network or filesystem I/O in T-001 (stub). Later items do the fetch here or
-  lazily in `config`; either way all errors are caught (FR-10).
+- MUST NOT perform network or filesystem I/O and MUST NOT log (since F-006 all work is done
+  lazily in the `config` hook; ADR-0008).
 - Returns an object whose `config` property is a function.
 
 ### `hooks.config(config)`
 - Called by Kilo once with the fully resolved config; Kilo awaits it.
 - MUST resolve (never reject) for any argument.
-- **T-001 stub:** a no-op. After the call, `config` is deep-equal to its state before the call
-  and is the same object reference (no replacement, no added/removed keys).
-- **Later (F-006):** mutates `config` in place per FR-6 through `mergeConfig` (section 2c); never
-  replaces the object.
+- **Since F-006:** runs `runConfigHook(input, options, config)` (section 2f). Mutates `config` in
+  place per FR-6 (section 2c rules, transactional); never replaces the object. After the call
+  `config` is the same reference and is either unchanged or fully merged.
+- The T-001 "no-op" behaviour is superseded.
 
 ## 4. Plugin options schema (FR-1) - normative since 0.5.0 (rules: section 2d, ADR-0006)
 
@@ -292,7 +364,7 @@ Access: `await __internals.fetchRemoteConfig(resolveSettings(opts).settings, { f
 | `pat` | string (secret) | `KILO_AZDO_PAT`; then `AZDO_PAT`, `AZURE_DEVOPS_EXT_PAT` (read by `fetchRemoteConfig`, 2e) | none -> `az` Entra token (2e) |
 | `timeoutMs` | positive integer (1..2147483647) or digit string | `KILO_AZDO_TIMEOUT_MS` | `5000` |
 
-## 5. Outbound calls (Items API and az normative since 0.6.0, section 2e; rest informative)
+## 5. Outbound calls (Items API and az normative since 0.6.0, section 2e; cache and logs since 0.7.0, section 2f)
 
 - **Azure DevOps Git Items API** (FR-2):
   `GET https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/items?path={path}&versionDescriptor.version={branch}&versionDescriptor.versionType=branch&includeContent=true&api-version=7.1`
@@ -303,6 +375,11 @@ Access: `await __internals.fetchRemoteConfig(resolveSettings(opts).settings, { f
 - **`az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken --output tsv`**
   (FR-3) when no PAT is usable; `execFile` without a shell (`cmd.exe /d /s /c` with a constant
   command line on Windows), cwd = home directory, bounded by the same deadline.
-- **Cache file** `~/.cache/kilo-azdo/remote-config.json` (FR-7).
-- **Logs** only via `input.client.app.log` with `service: "azdo-remote-config"`; never secret
-  values (FR-9).
+- **Cache file** `~/.cache/kilo-azdo/remote-config.json` (FR-7), normative since 0.7.0: section 2f
+  (sanitised unresolved shared config, dir 0700, file 0600 on POSIX, temp file + rename, read and
+  validated only on the fallback path).
+- **Logs** only via `input.client.app.log` with `service: "azdo-remote-config"`, normative since
+  0.7.0: fixed messages of section 2f-L, no `extra`, fire and forget; never secret values (FR-9).
+- **Trust boundary** (ADR-0009): settings only from the global Kilo config's plugin options and
+  the process env; project-level configs unsupported; fetched and cached content validated as
+  untrusted before caching / merging.

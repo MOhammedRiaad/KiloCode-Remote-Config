@@ -41,19 +41,21 @@ The full vision is in [`factory/VISION.md`](factory/VISION.md); the stack is rec
 [`docs/architecture/ADR-0001-tech-stack.md`](docs/architecture/ADR-0001-tech-stack.md).
 
 ### Status
-The project skeleton (T-001), an internal JSONC parser (F-001), an internal placeholder resolver
-(F-002) and an internal config merge helper (F-003) an internal settings resolver (F-004) and an internal Azure DevOps fetch function (F-005) are shipped. The plugin is still a no-op at runtime: it loads, exposes a `config` hook that
-changes nothing, and does no I/O (the hook does not call the fetch function). The parser, resolver and merge helper exist (as `__internals.parseJsonc`,
-`__internals.resolvePlaceholders`, `__internals.mergeConfig`, `__internals.resolveSettings` and `__internals.fetchRemoteConfig`) but are not yet used by the hook. Wiring fetch into the hook, merging,
-caching, the validator, installers and key provisioning are planned and not yet built.
+The plugin is wired and active. At startup Kilo calls its `config` hook (`runConfigHook`), which
+resolves the settings, fetches the shared `kilo.jsonc` from Azure DevOps, validates it, caches it,
+falls back to the cache when the fetch fails, merges it into Kilo's config, and logs fixed
+messages. It never throws: on any failure Kilo continues with your local config. Not built yet:
+installers and key provisioning.
 
 ### Features shipped so far
-- `backend/plugin/azdo-remote-config.ts`: stub plugin (Kilo v1 module shape, supported Kilo range `>=7.2.0 <8.0.0`).
-- `parseJsonc`: zero-dependency JSONC parser (comments, trailing commas) with input-free error messages. Internal only, reachable via `__internals`; not yet wired into the `config` hook.
-- `resolvePlaceholders`: resolves `{env:NAME}` and `{file:path}` placeholders in a parsed config. Internal only, reachable via `__internals`; not yet wired into the `config` hook. See [API](docs/api.md).
-- `mergeConfig`: merges a shared config into a Kilo config object in place, in `defaults` or `enforce` mode, never overwriting a local `apiKey` and never applying a shared one. Internal only, reachable via `__internals`; not yet wired into the `config` hook. See [API](docs/api.md).
-- `resolveSettings`: resolves the 8 plugin settings (`org`, `project`, `repo`, `path`, `branch`, `mode`, `pat`, `timeoutMs`) from plugin options, then `KILO_AZDO_*` environment variables, then defaults, and reports missing required settings and warnings. Internal only, reachable via `__internals`; not yet wired into the `config` hook. See [API](docs/api.md).
-- `fetchRemoteConfig`: fetches the shared config file from Azure DevOps over HTTPS using a PAT (plugin option or `KILO_AZDO_PAT`, `AZDO_PAT`, `AZURE_DEVOPS_EXT_PAT`) or an `az` Entra token, with a timeout and a 1 MiB response cap. Returns `{ ok, text }` or `{ ok: false, error }` with a fixed error code and never throws. Internal only, reachable via `__internals`; not yet wired into the `config` hook. See [API](docs/api.md).
+- `backend/plugin/azdo-remote-config.ts`: the plugin (Kilo v1 module shape, supported Kilo range `>=7.2.0 <8.0.0`). Its `config` hook loads and merges the shared config; `server` itself does no I/O.
+- Settings: the 8 plugin settings (`org`, `project`, `repo`, `path`, `branch`, `mode`, `pat`, `timeoutMs`) come from the global plugin options, then `KILO_AZDO_*` environment variables, then defaults. Project-level configs are not a settings source (trust boundary, ADR-0009).
+- Fetch: one HTTPS GET to the Azure DevOps Items API using a PAT (plugin option or `KILO_AZDO_PAT`, `AZDO_PAT`, `AZURE_DEVOPS_EXT_PAT`) or an `az` Entra token, with a timeout and a 1 MiB response cap.
+- Cache and fallback: a validated fetch is written to `~/.cache/kilo-azdo/remote-config.json` (file mode 0600, atomic write). If the fetch fails, the validated cache is used instead.
+- Parsing and placeholders: JSONC (comments, trailing commas); `{env:NAME}` and `{file:path}` placeholders are resolved at merge time and never stored in the cache.
+- Merge: `defaults` or `enforce` mode, never overwriting a local `apiKey` and never applying a shared one; transactional, so Kilo's config is either unchanged or fully merged.
+- Logging: fixed messages with service `azdo-remote-config` via Kilo's logger; never values, URLs or secrets. See the [user guide](docs/user-guide.md#troubleshooting-log-messages).
+- Internal helpers (`parseJsonc`, `resolvePlaceholders`, `mergeConfig`, `resolveSettings`, `fetchRemoteConfig`, `runConfigHook`) are reachable via `__internals` for tests. See [API](docs/api.md).
 - Lint that enforces the FR-11 constraints (single file, zero npm runtime dependencies).
 - Strict TypeScript type-check and a `node:test` test suite.
 - One quality gate, `scripts/ci.sh`, used locally and in GitHub Actions.

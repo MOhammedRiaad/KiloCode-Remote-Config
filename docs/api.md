@@ -2,7 +2,7 @@
 
 This product has no HTTP API. It is a Kilo plugin.
 
-## Plugin interface (current: stub)
+## Plugin interface
 
 File: `backend/plugin/azdo-remote-config.ts`. Default export, Kilo v1 plugin module shape:
 
@@ -11,16 +11,17 @@ export default { id: "azdo-remote-config", server }
 // server(input, options?) => Promise<{ config(config) => Promise<void> }>
 ```
 
-- `config` hook: receives Kilo's resolved config; in the current stub it does nothing.
+- `config` hook: receives Kilo's resolved config and calls `runConfigHook(input, options, config)`, which mutates `config` in place (merge) and never rejects. `server` itself does no I/O and does not log.
 - Named exports: `PLUGIN_ID` (`"azdo-remote-config"`), `SUPPORTED_KILO_RANGE` (`">=7.2.0 <8.0.0"`)
-  and `__internals` (test seam, now `{ parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings, fetchRemoteConfig }`).
+  and `__internals` (test seam, now `{ parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings, fetchRemoteConfig, runConfigHook }`).
 - The plugin settings (`org`, `project`, `repo`, `path`, `branch`, `mode`, `pat`, `timeoutMs`) are
-  not read by the hook yet; see `resolveSettings` below. `fetchRemoteConfig` is not called by the hook either.
+  read by the hook through `resolveSettings` (below), and the shared file is fetched with `fetchRemoteConfig`.
+  See `runConfigHook` at the end of this page.
 
 ## `parseJsonc` (internal)
 
-Reachable only as `__internals.parseJsonc`; it is not a named export and the `config` hook does not
-call it yet. Signature: `parseJsonc(text: string): unknown`.
+Reachable only as `__internals.parseJsonc`; it is not a named export and the `config` hook
+uses it. Signature: `parseJsonc(text: string): unknown`.
 
 Accepted syntax, on top of standard JSON:
 - `// line comments` (end at `
@@ -53,7 +54,7 @@ __internals.parseJsonc('{ // c
 ## `resolvePlaceholders` (internal)
 
 Reachable only as `__internals.resolvePlaceholders`; it is not a named export and the `config` hook
-does not call it yet. Synchronous.
+uses it. Synchronous.
 
 ```ts
 resolvePlaceholders(input: unknown, deps?: {
@@ -106,8 +107,8 @@ shared config can read any env variable and any user-readable file, so it must b
 
 ## `mergeConfig` (internal)
 
-Reachable only as `__internals.mergeConfig`; it is not a named export and the `config` hook does not
-call it yet. Synchronous, returns `undefined`.
+Reachable only as `__internals.mergeConfig`; it is not a named export and the `config` hook
+uses it. Synchronous, returns `undefined`.
 
 ```ts
 mergeConfig(target: unknown, shared: unknown, mode?: unknown): void
@@ -150,8 +151,8 @@ Security: the shared `apiKey` is never applied, but the shared file can still se
 
 ## `resolveSettings` (internal)
 
-Reachable only as `__internals.resolveSettings`; it is not a named export and the `config` hook does
-not call it yet. Synchronous, never throws, no I/O, does not mutate `options`, `deps` or env.
+Reachable only as `__internals.resolveSettings`; it is not a named export and the `config` hook
+uses it. Synchronous, never throws, no I/O, does not mutate `options`, `deps` or env.
 
 ```ts
 resolveSettings(options?: unknown, deps?: { env?: Readonly<Record<string, string | undefined>> }): {
@@ -216,7 +217,7 @@ const { settings, missing, warnings } = __internals.resolveSettings(
 
 ## `fetchRemoteConfig` (internal)
 
-Reachable only as `__internals.fetchRemoteConfig`; the `config` hook does not call it yet. Async; the
+Reachable only as `__internals.fetchRemoteConfig`; the `config` hook calls it. Async; the
 promise always resolves and never rejects, whatever the arguments.
 
 ```ts
@@ -277,4 +278,45 @@ if (r.ok) { /* r.text is the raw kilo.jsonc text */ } else { /* r.error, e.g. "h
 
 Security: the PAT is never logged or returned. Tests inject fakes; none call the network or `az`.
 
-Authoritative contract: `docs/architecture/contracts/plugin-interface.md` (v0.6.0), ADR-0007 (`docs/architecture/ADR-0007-azdo-fetch-and-auth.md`), ADR-0006 (`docs/architecture/ADR-0006-settings-resolution.md`), ADR-0002, ADR-0003 (`docs/architecture/ADR-0003-jsonc-parser.md`), ADR-0004 (`docs/architecture/ADR-0004-placeholder-resolution.md`) and ADR-0005 (`docs/architecture/ADR-0005-config-merge.md`).
+## `runConfigHook` (internal)
+
+Reachable as `__internals.runConfigHook`; it is what the default export's `config` hook runs.
+Signature: `runConfigHook(input, options, config, deps?): Promise<void>`. It never rejects, for any arguments.
+
+Order of work:
+1. `config` must be a plain object, otherwise log and return.
+2. `resolveSettings(options, { env })`; each warning is logged.
+3. If required settings are missing (`org`, `project`, `repo`), log and skip the fetch (no network, no `az`).
+4. `fetchRemoteConfig`, then validate the text (valid JSONC, root is an object, nesting below 64 levels).
+   On success, write the cache (a failure to write only logs a warning).
+5. If the fetch or validation fails, read and validate the cache. If there is no usable cache, log and
+   return with `config` untouched.
+6. Resolve placeholders, then merge into `config` in `settings.mode`, transactionally: on any error `config`
+   is rolled back, so it is either unchanged or fully merged. Same object reference.
+
+Cache: `~/.cache/kilo-azdo/remote-config.json`. Content is the sanitised, unresolved shared config
+(no `apiKey`, no top-level `$schema` or `plugin`, no resolved placeholder values), pretty-printed JSON, at most
+2 MiB. Written only after a validated fetch, to a temp file in the same directory and then renamed; directory mode
+0700 and file mode 0600 on POSIX. Read only on the fallback path and never modified there.
+
+Logging: `input.client.app.log` with `service: "azdo-remote-config"`, fire and forget, fixed messages only (no
+`extra`). If no logger exists the plugin is silent. The messages are listed in the
+[user guide](user-guide.md#troubleshooting-log-messages).
+
+`deps` (all optional, for tests): `env`, `fetch`, `runAz`, `setTimeout`, `clearTimeout`, `homedir`, `readFile`, `fs`.
+
+Example:
+```ts
+const config = { model: "local/model" };
+await __internals.runConfigHook(
+  { client: { app: { log: (m) => console.log(m.body.level, m.body.message) } } },
+  { org: "acme", project: "p", repo: "cfg" },
+  config,
+);
+// config now contains the shared settings (defaults mode), or is unchanged on failure
+```
+
+Trust boundary (ADR-0009): settings come only from the global plugin options, the process environment and
+`az`; the fetched and cached content is treated as untrusted and validated before it is cached or merged.
+
+Authoritative contract: `docs/architecture/contracts/plugin-interface.md` (v0.7.0), ADR-0008 (`docs/architecture/ADR-0008-config-hook-wiring-cache-logging.md`), ADR-0009 (`docs/architecture/ADR-0009-settings-and-content-trust-boundary.md`), ADR-0007 (`docs/architecture/ADR-0007-azdo-fetch-and-auth.md`), ADR-0006 (`docs/architecture/ADR-0006-settings-resolution.md`), ADR-0002, ADR-0003 (`docs/architecture/ADR-0003-jsonc-parser.md`), ADR-0004 (`docs/architecture/ADR-0004-placeholder-resolution.md`) and ADR-0005 (`docs/architecture/ADR-0005-config-merge.md`).

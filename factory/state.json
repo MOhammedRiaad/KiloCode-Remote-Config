@@ -1,6 +1,6 @@
 {
   "status": "running",
-  "cycle": 7,
+  "cycle": 8,
   "max_cycles": 50,
   "phase": "idle",
   "current_item": null,
@@ -9,7 +9,7 @@
   "max_rework": 3,
   "consecutive_blocked": 0,
   "max_consecutive_blocked": 3,
-  "last_release": "v0.5.0",
+  "last_release": "v0.6.0",
   "history": [
     {
       "cycle": 3,
@@ -47,11 +47,18 @@
       "rework": 0
     },
     {
-      "cycle": 7,
+      "cycle": 8,
       "item": "F-005",
       "result": "released",
       "version": "v0.5.0",
       "rework": 0
+    },
+    {
+      "cycle": 8,
+      "item": "F-006",
+      "result": "released",
+      "version": "v0.6.0",
+      "rework": 1
     }
   ]
 }

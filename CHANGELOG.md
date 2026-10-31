@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.0] - 2026-10-31
+
+### Added
+- F-006: plugin cache, fallback, logging and never-crash wiring of the config hook.
+- F-006: documentation for the wired config hook, cache and logging.
+
+### Changed
+- F-006: the config hook now resolves settings, fetches remote configuration, and falls back to cache without throwing.
+
+### Fixed
+- F-006: rework fixes from backend, security and review passes.
+
+### Security
+- F-006: logging never includes secrets.
+
 ## [0.5.0] - 2026-10-31
 
 ### Added

@@ -2,41 +2,66 @@
 
 ## Current status
 
-The Kilo azdo-remote-config plugin is at an early stage (T-001 skeleton, F-001 JSONC parser, F-002 placeholders, F-003 merge helper, F-004 settings resolution, F-005 Azure DevOps fetch).
-There is nothing to install or configure for end users yet.
+The Kilo azdo-remote-config plugin is active. When Kilo starts it fetches one shared `kilo.jsonc` from
+Azure DevOps, validates it, caches it, and merges it into your Kilo config. If anything fails, Kilo
+starts normally with your local config; the plugin never crashes Kilo.
 
-What exists today:
-- A stub plugin file, `backend/plugin/azdo-remote-config.ts`. If Kilo loaded it, it would start
-  normally and change nothing: it makes no network calls, reads no files and writes no logs.
-- An internal JSONC parser (F-001). It is not used by the plugin yet, so it has no user-visible
-  effect today. Once the fetch step is built, the shared `kilo.jsonc` will be parsed with it, so the
-  file may contain `//` and `/* */` comments, trailing commas and `https://` URLs inside strings.
-
-- An internal placeholder resolver (F-002). It is not used by the plugin yet, so it has no
-  user-visible effect today. The rules below describe how it will treat the shared `kilo.jsonc`
-  once it is wired in.
-
-- An internal merge helper (F-003). It is not used by the plugin yet, so it has no user-visible
-  effect today. The rules below describe how the shared config will be merged into your Kilo config
-  once it is wired in.
-
-- An internal settings resolver (F-004). It is not used by the plugin yet, so it has no
-  user-visible effect today: setting any `KILO_AZDO_*` variable or plugin option changes nothing at
-  runtime. The section below describes how settings will be resolved once it is wired in.
-
-- An internal Azure DevOps fetch function (F-005). It is not used by the plugin yet, so it has no
-  user-visible effect today: the plugin still makes no network calls. The section "Fetching the
-  shared config" below describes how it will behave once wired in.
-
-Not yet available (planned, see `factory/VISION.md`): using the parser, resolver and merge helper on a fetched file, calling the fetch from the plugin,
-merging it into Kilo, the local cache, the bootstrap installers and key provisioning.
+Not yet available (planned, see `factory/VISION.md`): the bootstrap installers and key provisioning.
 
 Supported Kilo version range (pinned): `>=7.2.0 <8.0.0`.
 
-## Placeholders in the shared config (not active yet)
+## How it works at startup
 
-The resolver is implemented but the plugin does not call it yet. When it is wired in, string values
-in the shared config may use:
+1. Settings are read (see "Plugin settings"). If `org`, `project` or `repo` is missing, no request is made.
+2. The shared file is fetched from Azure DevOps (see "Fetching the shared config") and validated: it must
+   be valid JSONC with an object at the top and be nested fewer than 64 levels.
+3. A valid result is saved to the cache. If the fetch or validation fails, the cache is used instead.
+4. Placeholders are resolved and the shared config is merged into your Kilo config in `defaults` or
+   `enforce` mode. The merge is all or nothing: on an error your config is left unchanged.
+
+If there is neither a usable fetch nor a usable cache, Kilo runs with local config only.
+
+## Cache
+
+Location: `~/.cache/kilo-azdo/remote-config.json` (under your home directory). The directory is created
+with mode 0700 and the file with mode 0600 on POSIX systems, and it is replaced atomically (temp file,
+then rename). It holds the last valid shared config, still containing placeholders such as `{env:NAME}`
+(never their values) and without any `apiKey`. It is written only after a successful, validated fetch, and
+is at most 2 MiB. It is read only when the fetch fails. To reset it, delete the file.
+
+## Trust boundary
+
+Settings (`org`, `project`, `repo`, `pat`, ...) are taken only from the global Kilo config's plugin
+options, `KILO_AZDO_*` environment variables, and `az`. A project-level Kilo config in a repository
+you open cannot choose where the shared config is fetched from or which credentials are used. Fetched and
+cached content is treated as untrusted and validated before it is cached or merged. The shared file itself
+is still trusted to the extent described in the security notes below, so keep its repository PR-gated.
+
+## Troubleshooting log messages
+
+The plugin logs through Kilo's logger with service `azdo-remote-config`. Messages are fixed text; they
+never contain setting values, URLs, paths, PATs or tokens. `<reason>` is a fetch error code (see
+"Fetching the shared config"), `missing-settings`, `invalid-jsonc` or `invalid-shape`.
+
+| Level | Message | Meaning |
+|-------|---------|---------|
+| info | `Loaded shared config from Azure DevOps.` | Fetch and validation succeeded. |
+| info | `Applied shared config from <remote or cache> in <defaults or enforce> mode.` | The merge finished. |
+| warn | `Remote config skipped: missing required settings: <names>.` | Set the named settings (`org`, `project`, `repo`). |
+| warn | `Remote config unavailable (<reason>); using cached config.` | Fetch failed; the cache was used. For example `http-401` means a bad or expired PAT. |
+| warn | `Could not update the config cache (<code>).` | Code is `cache-unavailable`, `cache-too-large` or `cache-write-failed`. The fetched config is still applied. |
+| warn | `Unresolved placeholders: <names>.` | `{env:}` or `{file:}` entries that could not be resolved (names only). |
+| warn | (a setting warning) | An invalid option or variable was ignored; see "Plugin settings". |
+| error | `Remote config unavailable (<reason>) and no usable cache (<code>); continuing with local config only.` | Code is `cache-unavailable`, `cache-missing`, `cache-unreadable` or `cache-invalid`. Fix the cause of `<reason>`. |
+| error | `Could not apply the shared config; local config left unchanged.` | The merge failed and was rolled back. |
+| error | `Shared config not applied: the Kilo config is not an object.` | Unexpected Kilo config. |
+| error | `Remote config failed unexpectedly; continuing with local config only.` | Internal error, caught. |
+
+If Kilo provides no logger, the plugin stays silent.
+
+## Placeholders in the shared config
+
+String values in the shared config may use:
 
 - `{env:NAME}`: the value of environment variable `NAME`. An unset or empty variable is unresolved.
 - `{file:path}`: the trimmed contents of a file (surrounding whitespace, including a BOM, is removed).
@@ -67,10 +92,9 @@ Security: the shared config can make the plugin read any environment variable an
 user can read, and put the content into Kilo's config. Keep the shared repository PR-gated and
 reviewed. No allowlist exists yet.
 
-## How the shared config will be merged (not active yet)
+## How the shared config is merged
 
-The merge helper exists but the plugin does not call it yet. When it is wired in, the shared config
-is merged into your Kilo config in one of two modes. Only the exact, lowercase string `enforce`
+The shared config is merged into your Kilo config in one of two modes. Only the exact, lowercase string `enforce`
 selects enforce mode; any other value (including `ENFORCE`, an empty value or none) means `defaults`.
 
 - Settings that you do not have locally are added from the shared config, in both modes.
@@ -91,9 +115,9 @@ Security: the merge ignores a shared `apiKey`, but the shared file can still set
 `headers` for a provider that uses your local `apiKey`, which could send your key to another host.
 Keep the shared repository PR-gated and reviewed.
 
-## Plugin settings (not active yet)
+## Plugin settings
 
-The resolver exists but the plugin does not call it yet. Each setting can come from a plugin option
+Each setting can come from a plugin option
 or from an environment variable. Precedence per setting: plugin option, then environment variable,
 then default.
 
@@ -126,9 +150,9 @@ variable, then default). Warnings contain fixed text and the setting name only, 
 PAT is never exposed through them. Example: an invalid `mode` option with `KILO_AZDO_MODE=enforce`
 set resolves to `enforce`, plus a warning about the option.
 
-## Fetching the shared config (not active yet)
+## Fetching the shared config
 
-The fetch function exists but the plugin does not call it yet. When it is wired in, it downloads the
+The plugin downloads the
 shared file with one HTTPS GET to `https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/items`
 for the configured `path` and `branch`. Redirects are never followed.
 
@@ -147,5 +171,3 @@ Limits: the whole operation (az, request and reading the body) must finish withi
 Failures are reported as one fixed code, never with values, URLs or secrets: `invalid-settings`,
 `auth-unavailable`, `timeout`, `too-large`, `bad-response`, `network`, or `http-<status>` (for
 example `http-401`). See [API](api.md) for details.
-
-This page will describe setup and settings once the remaining features ship.

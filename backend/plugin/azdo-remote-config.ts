@@ -1,12 +1,11 @@
 // azdo-remote-config: Kilo plugin that applies a remote Azure DevOps config.
 // Single file, zero runtime dependencies (FR-11). See docs/architecture/ADR-0001-tech-stack.md
-// and ADR-0002-plugin-module-shape.md, ADR-0003, ADR-0004, ADR-0005, ADR-0006, ADR-0007. The config
-// hook is still a no-op; the JSONC parser, the placeholder resolver, the config merge, the settings
-// resolver (options, KILO_AZDO_* env, defaults) and the Azure DevOps fetch helper (PAT or az token)
-// are helpers only (not wired yet).
+// and ADR-0002-plugin-module-shape.md, ADR-0003 .. ADR-0009. The config hook (runConfigHook) resolves
+// the settings, fetches the shared config from Azure DevOps, caches it, falls back to the cache, merges
+// it into the Kilo config transactionally and logs fixed messages. It never throws or rejects.
 
 import { execFile } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
@@ -351,17 +350,60 @@ function containsApiKey(value: unknown, depth: number): boolean {
 }
 
 // Phase 2: merge the sanitized tree into the target; keys of the target not in the tree are untouched.
-function mergeInto(target: Record<string, unknown>, source: Record<string, unknown>, enforce: boolean): void {
+// An optional journal records the previous descriptor of every key before it is written.
+interface JournalEntry {
+  target: object;
+  key: string;
+  previous: PropertyDescriptor | undefined;
+}
+
+function journaledDefine(target: object, key: string, value: unknown, journal: JournalEntry[] | undefined): void {
+  journal?.push({ target, key, previous: Object.getOwnPropertyDescriptor(target, key) });
+  defineOwn(target, key, value);
+}
+
+function mergeInto(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+  enforce: boolean,
+  journal?: JournalEntry[],
+): void {
   for (const key of Object.keys(source)) {
     const incoming = source[key];
     const local = hasOwn(target, key) ? target[key] : undefined;
     if (local === undefined) {
-      defineOwn(target, key, incoming);
+      journaledDefine(target, key, incoming, journal);
     } else if (isPlainObject(local) && isPlainObject(incoming)) {
-      mergeInto(local, incoming, enforce);
+      mergeInto(local, incoming, enforce, journal);
     } else if (enforce && !containsApiKey(local, 0)) {
-      defineOwn(target, key, incoming);
+      journaledDefine(target, key, incoming, journal);
     }
+  }
+}
+
+// Restores the journaled descriptors in reverse order; every step is guarded on its own.
+function rollback(journal: readonly JournalEntry[]): void {
+  for (let i = journal.length - 1; i >= 0; i--) {
+    const { target, key, previous } = journal[i]!;
+    try {
+      if (previous === undefined) Reflect.deleteProperty(target, key);
+      else Reflect.defineProperty(target, key, previous);
+    } catch {
+      continue;
+    }
+  }
+}
+
+// Transactional merge: true when fully merged; false when it threw and was rolled back.
+function applyShared(target: unknown, shared: unknown, mode: unknown): boolean {
+  if (!isPlainObject(target) || !isPlainObject(shared)) return false;
+  const journal: JournalEntry[] = [];
+  try {
+    mergeInto(target, sanitizeShared(shared), mode === "enforce", journal);
+    return true;
+  } catch {
+    rollback(journal);
+    return false;
   }
 }
 
@@ -1015,11 +1057,274 @@ function defaultRunAz(args: readonly string[], options: { timeoutMs: number }): 
   });
 }
 
-/** Test/validator seam. Never has a `server` key and never holds the entry point. */
-export const __internals = { parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings, fetchRemoteConfig };
+// ---- Config hook: cache, fallback, logging, never-crash (ADR-0008, ADR-0009) ----
 
-const AzdoRemoteConfig: PluginServer = async () => {
-  return { config: async () => {} };
+// Module-local types: deliberately not exported.
+interface CacheFs {
+  mkdirSync(path: string, options: { recursive: true; mode: number }): unknown;
+  writeFileSync(path: string, data: string, options: { encoding: "utf8"; mode: number; flag: "wx" }): void;
+  renameSync(from: string, to: string): void;
+  unlinkSync(path: string): void;
+  statSync(path: string): { isFile(): boolean; size: number };
+  readFileSync(path: string, encoding: "utf8"): string;
+}
+
+type SharedCheck = { ok: true; value: Record<string, unknown> } | { ok: false; error: "invalid-jsonc" | "invalid-shape" };
+type CacheWriteCode = "cache-unavailable" | "cache-too-large" | "cache-write-failed";
+type CacheReadCode = "cache-unavailable" | "cache-missing" | "cache-unreadable" | "cache-invalid";
+type CacheWrite = { ok: true } | { ok: false; error: CacheWriteCode };
+type CacheRead = { ok: true; value: Record<string, unknown> } | { ok: false; error: CacheReadCode };
+type Acquired = { ok: true; value: Record<string, unknown> } | { ok: false; reason: string };
+type HookLog = (level: LogLevel, message: string) => void;
+type HookDeps = Record<string, unknown>;
+
+const MAX_CACHE_BYTES = 2 * 1024 * 1024;
+const MAX_LOGGED_PLACEHOLDERS = 20;
+const MAX_LOGGED_NAME_CHARS = 200;
+const HOOK_DEP_KEYS = ["env", "fetch", "runAz", "setTimeout", "clearTimeout", "homedir", "readFile", "fs"] as const;
+const REAL_FS: CacheFs = { mkdirSync, writeFileSync, renameSync, unlinkSync, statSync, readFileSync };
+
+const LOG_REMOTE = "Loaded shared config from Azure DevOps.";
+const LOG_MERGE = "Could not apply the shared config; local config left unchanged.";
+const LOG_BADCONFIG = "Shared config not applied: the Kilo config is not an object.";
+const LOG_UNEXPECTED = "Remote config failed unexpectedly; continuing with local config only.";
+
+let cacheCounter = 0;
+
+// A container at nesting level 64 or deeper (root = level 0).
+function exceedsDepth(node: unknown, depth: number): boolean {
+  if (typeof node !== "object" || node === null) return false;
+  if (depth >= MAX_MERGE_DEPTH) return true;
+  const children: unknown[] = Array.isArray(node) ? node : Object.values(node);
+  return children.some((child) => exceedsDepth(child, depth + 1));
+}
+
+// Fetched text and cache text are untrusted; both pass through here. The parse error is discarded.
+function validateShared(text: unknown): SharedCheck {
+  let parsed: unknown;
+  try {
+    if (typeof text !== "string") return { ok: false, error: "invalid-jsonc" };
+    parsed = parseJsonc(text);
+  } catch {
+    return { ok: false, error: "invalid-jsonc" };
+  }
+  if (!isPlainObject(parsed) || exceedsDepth(parsed, 0)) return { ok: false, error: "invalid-shape" };
+  return { ok: true, value: parsed };
+}
+
+// ---- cache ----
+
+interface CacheLocation {
+  dir: string;
+  file: string;
+}
+
+// Only an absolute home directory from a function gives a location; anything else is unavailable.
+function cacheLocation(homeFn: unknown): CacheLocation | undefined {
+  try {
+    if (typeof homeFn !== "function") return undefined;
+    const home: unknown = homeFn();
+    if (typeof home !== "string" || home === "" || !isAbsolute(home)) return undefined;
+    const dir = join(home, ".cache", "kilo-azdo");
+    return { dir, file: join(dir, "remote-config.json") };
+  } catch {
+    return undefined;
+  }
+}
+
+function selectFs(raw: unknown): CacheFs | undefined {
+  if (raw === undefined) return REAL_FS;
+  return isRecordLike(raw) ? (raw as CacheFs) : undefined;
+}
+
+function nextTempPath(file: string): string {
+  cacheCounter += 1;
+  return `${file}.${process.pid}-${Date.now()}-${cacheCounter}.tmp`;
+}
+
+function removeTemp(fs: CacheFs, tmp: string | undefined): void {
+  if (tmp === undefined) return;
+  try {
+    fs.unlinkSync(tmp);
+  } catch {
+    return;
+  }
+}
+
+function writeCache(shared: Record<string, unknown>, homeFn: unknown, rawFs: unknown): CacheWrite {
+  const location = cacheLocation(homeFn);
+  const fs = selectFs(rawFs);
+  if (location === undefined || fs === undefined) return { ok: false, error: "cache-unavailable" };
+  let tmp: string | undefined;
+  try {
+    const data = `${JSON.stringify(sanitizeShared(shared), null, 2)}\n`;
+    if (Buffer.byteLength(data, "utf8") > MAX_CACHE_BYTES) return { ok: false, error: "cache-too-large" };
+    fs.mkdirSync(location.dir, { recursive: true, mode: 0o700 });
+    const candidate = nextTempPath(location.file);
+    tmp = candidate;
+    fs.writeFileSync(candidate, data, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    fs.renameSync(candidate, location.file);
+    return { ok: true };
+  } catch {
+    removeTemp(fs, tmp);
+    return { ok: false, error: "cache-write-failed" };
+  }
+}
+
+function readCache(homeFn: unknown, rawFs: unknown): CacheRead {
+  const location = cacheLocation(homeFn);
+  const fs = selectFs(rawFs);
+  if (location === undefined || fs === undefined) return { ok: false, error: "cache-unavailable" };
+  let text: unknown;
+  try {
+    const st = fs.statSync(location.file);
+    if (!st.isFile() || st.size > MAX_CACHE_BYTES) return { ok: false, error: "cache-unreadable" };
+    text = fs.readFileSync(location.file, "utf8");
+  } catch (error) {
+    const code = attempt(() => (error as { code?: unknown }).code);
+    return { ok: false, error: code === "ENOENT" ? "cache-missing" : "cache-unreadable" };
+  }
+  if (typeof text !== "string") return { ok: false, error: "cache-unreadable" };
+  const checked = validateShared(text);
+  return checked.ok ? checked : { ok: false, error: "cache-invalid" };
+}
+
+// ---- logging ----
+
+// Fire and forget: never awaited; sync throws and rejections are swallowed. A missing logger is silent.
+function makeLogger(input: unknown): HookLog {
+  let app: unknown;
+  let log: unknown;
+  try {
+    app = (input as { client?: { app?: unknown } } | null | undefined)?.client?.app;
+    log = (app as { log?: unknown } | null | undefined)?.log;
+  } catch {
+    return noop;
+  }
+  if (typeof log !== "function") return noop;
+  const logFn = log as (this: unknown, arg: unknown) => unknown;
+  return (level, message) => {
+    try {
+      const result = logFn.call(app, { body: { service: PLUGIN_ID, level, message } });
+      const then = (result as { then?: unknown } | null | undefined)?.then;
+      if (typeof then === "function") then.call(result, noop, noop);
+    } catch {
+      return;
+    }
+  };
+}
+
+function cleanName(name: string): string {
+  const cut = name.slice(0, MAX_LOGGED_NAME_CHARS);
+  let out = "";
+  for (let i = 0; i < cut.length; i++) {
+    const code = cut.charCodeAt(i);
+    out += code <= 0x1f || (code >= 0x7f && code <= 0x9f) ? "?" : cut[i];
+  }
+  return out;
+}
+
+function listNames(names: readonly string[]): string {
+  const shown = names.slice(0, MAX_LOGGED_PLACEHOLDERS).map(cleanName).join(", ");
+  const rest = names.length - MAX_LOGGED_PLACEHOLDERS;
+  return rest > 0 ? `${shown}, and ${rest} more` : shown;
+}
+
+// ---- hook ----
+
+function readHookDeps(deps: unknown): HookDeps {
+  const out: HookDeps = {};
+  if (!isRecordLike(deps)) return out;
+  for (const key of HOOK_DEP_KEYS) {
+    const value = readOwn(deps, key);
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
+function pickDeps(all: HookDeps, keys: readonly string[]): HookDeps {
+  const out: HookDeps = {};
+  for (const key of keys) if (all[key] !== undefined) out[key] = all[key];
+  return out;
+}
+
+async function acquireRemote(settings: unknown, deps: HookDeps): Promise<Acquired> {
+  const fetched = await fetchRemoteConfig(
+    settings,
+    pickDeps(deps, ["fetch", "env", "runAz", "setTimeout", "clearTimeout"]),
+  );
+  if (!fetched.ok) return { ok: false, reason: fetched.error };
+  const checked = validateShared(fetched.text);
+  return checked.ok ? checked : { ok: false, reason: checked.error };
+}
+
+async function executeHook(log: HookLog, options: unknown, config: unknown, deps: HookDeps): Promise<void> {
+  if (!isPlainObject(config)) {
+    log("error", LOG_BADCONFIG);
+    return;
+  }
+  const { settings, missing, warnings } = resolveSettings(options, pickDeps(deps, ["env"]));
+  for (const warning of warnings) log("warn", warning);
+  let remote: Acquired;
+  if (missing.length > 0) {
+    log("warn", `Remote config skipped: missing required settings: ${missing.join(", ")}.`);
+    remote = { ok: false, reason: "missing-settings" };
+  } else {
+    remote = await acquireRemote(settings, deps);
+  }
+  const home = deps.homedir ?? homedir;
+  let shared: Record<string, unknown>;
+  let source: "remote" | "cache";
+  if (remote.ok) {
+    log("info", LOG_REMOTE);
+    const written = writeCache(remote.value, home, deps.fs);
+    if (!written.ok) log("warn", `Could not update the config cache (${written.error}).`);
+    shared = remote.value;
+    source = "remote";
+  } else {
+    const cached = readCache(home, deps.fs);
+    if (!cached.ok) {
+      log(
+        "error",
+        `Remote config unavailable (${remote.reason}) and no usable cache (${cached.error}); continuing with local config only.`,
+      );
+      return;
+    }
+    log("warn", `Remote config unavailable (${remote.reason}); using cached config.`);
+    shared = cached.value;
+    source = "cache";
+  }
+  const { value, unresolved } = resolvePlaceholders(shared, pickDeps(deps, ["env", "homedir", "readFile"]));
+  if (unresolved.length > 0) log("warn", `Unresolved placeholders: ${listNames(unresolved)}.`);
+  if (applyShared(config, value, settings.mode)) {
+    log("info", `Applied shared config from ${source} in ${settings.mode} mode.`);
+  } else {
+    log("error", LOG_MERGE);
+  }
+}
+
+// Never rejects: every failure ends as a fixed log message and an unchanged or fully merged config.
+async function runConfigHook(input: unknown, options: unknown, config: unknown, deps?: unknown): Promise<void> {
+  const log = makeLogger(input);
+  try {
+    await executeHook(log, options, config, readHookDeps(deps));
+  } catch {
+    log("error", LOG_UNEXPECTED);
+  }
+}
+
+/** Test/validator seam. Never has a `server` key and never holds the entry point. */
+export const __internals = {
+  parseJsonc,
+  resolvePlaceholders,
+  mergeConfig,
+  resolveSettings,
+  fetchRemoteConfig,
+  runConfigHook,
+};
+
+const AzdoRemoteConfig: PluginServer = async (input, options) => {
+  return { config: (config) => runConfigHook(input, options, config) };
 };
 
 export default { id: PLUGIN_ID, server: AzdoRemoteConfig };
