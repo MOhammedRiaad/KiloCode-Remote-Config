@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.12.0] - 2026-10-31
+
+### Added
+- F-008: shared config repo template and assemble tool.
+- F-008: Azure Pipelines PR gate for the shared config repo.
+- F-008: branch-policy setup script.
+- F-008: documentation for shared config repo, PR gate and branch policy setup.
+
+### Changed
+- F-008: lint rule 8 added.
+
 ## [0.11.0] - 2026-10-31
 
 ### Added

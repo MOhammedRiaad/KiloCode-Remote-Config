@@ -2,6 +2,9 @@
 - Status: accepted
 - Date: 2026-10-31
 - Cycle / item: cycle-0009 / F-007
+- Extended by: ADR-0015 (cycle-0015, F-008): the C1 repo tree is produced by
+  `tools/assemble-shared-repo.ts` (validator + plugin in the same relative layout, `package.json`
+  with `"type": "module"`); the Azure Pipelines gate always passes `--allowed-hosts`.
 
 ## Context
 

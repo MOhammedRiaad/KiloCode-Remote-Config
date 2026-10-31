@@ -30,14 +30,14 @@ const HELPER_ALLOWED = [/^node:/, /^\.\/[A-Za-z0-9._-]+\.ts$/, /^\.\.\/plugin\/a
 const FORBIDDEN_INSTALLER_TOKENS = ["KILO_TEST_", "NODE_OPTIONS"];
 
 // Rules 5 and 6 (ADR-0010, ADR-0012): <folder>/*.ts may import only node:, sibling .ts files or the plugin file.
-function checkHelperDir(root, folder) {
+function checkHelperDir(root, folder, allowed = HELPER_ALLOWED) {
   const errors = [];
   const dir = join(root, folder);
   if (!existsSync(dir)) return errors;
   for (const file of readdirSync(dir).filter((f) => f.endsWith(".ts"))) {
     const source = stripComments(readFileSync(join(dir, file), "utf8"));
     for (const spec of importSpecifiers(source)) {
-      if (!HELPER_ALLOWED.some((re) => re.test(spec))) {
+      if (!allowed.some((re) => re.test(spec))) {
         errors.push(`disallowed import "${spec}" in ${folder}/${file}`);
       }
     }
@@ -61,6 +61,11 @@ function checkInstallerSwitches(root) {
     }
   }
   return errors;
+}
+
+// Rule 8 (ADR-0015): <root>/tools/*.ts may import only node: built-ins and must not use require(.
+function checkToolsDir(root) {
+  return checkHelperDir(root, "tools", [/^node:/]);
 }
 
 function check(root) {
@@ -94,6 +99,7 @@ function check(root) {
     ...checkHelperDir(root, "validator"),
     ...checkHelperDir(root, "installer"),
     ...checkInstallerSwitches(root),
+    ...checkToolsDir(root),
   ];
 }
 

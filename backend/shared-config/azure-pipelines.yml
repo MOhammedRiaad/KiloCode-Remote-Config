@@ -1,0 +1,39 @@
+# Azure Pipelines PR gate for the shared Kilo config repo (kilo-config).
+# Contract: docs/architecture/contracts/shared-config-repo.md (ADR-0015).
+# Azure Repos Git ignores the pr: block; the PR trigger is the blocking build-validation
+# policy on main created by set-branch-policies.sh.
+
+trigger: none
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  # Comma-separated host names allowed in provider.*.options.baseURL (your Bifrost host).
+  KILO_ALLOWED_HOSTS: bifrost.yourcompany.internal
+
+steps:
+  - checkout: self
+    fetchDepth: 1
+    persistCredentials: false
+
+  - task: UseNode@1
+    displayName: Use Node.js 22.x (22.18 or later)
+    inputs:
+      version: "22.x"
+
+  - bash: |
+      set -euo pipefail
+      node -e 'const [a, b] = process.versions.node.split(".").map(Number); if (a < 22 || (a === 22 && b < 18)) { console.error("kilo-config gate: Node.js 22.18 or later is required"); process.exit(1); }'
+      shopt -s nullglob
+      files=(kilo.jsonc)
+      for f in teams/*/kilo.jsonc; do files+=("$f"); done
+      node validator/validate-kilo-config.ts --allowed-hosts "$KILO_ALLOWED_HOSTS" -- "${files[@]}"
+    displayName: Validate kilo.jsonc and teams/*/kilo.jsonc
+    env:
+      KILO_ALLOWED_HOSTS: $(KILO_ALLOWED_HOSTS)

@@ -1,0 +1,8 @@
+{
+  "name": "kilo-config",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  }
+}

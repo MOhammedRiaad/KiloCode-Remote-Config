@@ -75,9 +75,13 @@ This keeps the file self-contained (FR-11) and type-checkable without a Kilo dep
      Since F-011 (ADR-0014) this also covers `install.ps1`. `.ps1` format rules (ASCII, no BOM, LF,
      no `param()` block, banned cmdlets) are enforced by `test/installer/install-ps1-static.test.ts`,
      not by this tool. PSScriptAnalyzer is optional and not part of the gate.
+  8. (since F-008, ADR-0015) every `.ts` file directly in `tools/` imports only `node:` built-ins
+     (no relative or npm imports) and does not contain `require(` (skipped when `tools/` does
+     not exist; `.mjs` files are not checked). `.sh` files in `shared-config/` follow the
+     `install.sh` rule: bash builtins plus `az` only (ADR-0015), checked by tests.
   It exits non-zero with a clear message on any violation.
 - `tsconfig.json` `include` covers `plugin/**/*.ts`, `validator/**/*.ts`, `installer/**/*.ts`
-  (since F-010) and `test/**/*.ts`.
+  (since F-010), `tools/**/*.ts` (since F-008) and `test/**/*.ts`.
 
 ### 4. Dev dependencies (the only npm packages allowed in `backend/`)
 
@@ -129,8 +133,11 @@ backend/
   templates/              # C3 personal config template (later items)
   installer/              # C5 install.sh + install-helper.ts + personal-config-edit.ts (F-010, ADR-0012); install.ps1 (F-011, ADR-0014)
   provisioning/           # C6 Bifrost key provisioning (later items)
+  shared-config/          # C1 repo template: kilo.jsonc, azure-pipelines.yml, set-branch-policies.sh,
+                          # package.json, .gitattributes (F-007, F-008; ADR-0015)
   tools/
     check-fr11.mjs        # lint: FR-11 guard rails
+    assemble-shared-repo.ts  # writes the complete C1 repo tree (F-008, ADR-0015)
   test/
     plugin/               # tests for C2 (*.test.ts)
     validator/ ...        # one test folder per component, mirroring the source tree

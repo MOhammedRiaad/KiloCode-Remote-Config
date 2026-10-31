@@ -176,8 +176,9 @@ example `http-401`). See [API](api.md) for details.
 
 Before you merge a change to the shared `kilo.jsonc`, check it with the validator. It is a
 command-line tool in this repository; it reads the files and reports problems. It does not fetch
-anything and does not need a PAT. Running it automatically on every pull request in the Azure DevOps
-repo comes with F-008; until then, run it by hand.
+anything and does not need a PAT. To run it automatically on every pull request, set up the shared
+config repo as described in [Setting up the shared config repo](#setting-up-the-shared-config-repo-platform-engineers).
+You can also run it by hand.
 
 ### Run it
 From the repository root (Node.js 22.18 or newer):
@@ -245,6 +246,118 @@ Warnings (exit stays 0):
 
 The type checks use a vendored subset of Kilo's schema (`backend/validator/kilo-schema-subset.json`)
 pinned to the supported Kilo range `>=7.2.0 <8.0.0`.
+
+## Setting up the shared config repo (platform engineers)
+
+This repository ships a template and an assemble tool for the Azure DevOps repo that holds the
+shared config (the examples call it `kilo-config`). The tool builds the repo contents; you push them
+and create the pipeline and branch policies yourself. Nothing in this repository creates or contacts
+Azure DevOps for you, and this guide does not mean such a repo or its policies already exist in your
+organization.
+
+### 1. Assemble the repo tree
+From the repository root (Node.js 22.18 or newer):
+
+```bash
+node backend/tools/assemble-shared-repo.ts ./kilo-config-out
+node backend/tools/assemble-shared-repo.ts --help
+```
+
+It writes 9 files, byte-identical copies of the sources: `.gitattributes`, `azure-pipelines.yml`,
+`kilo.jsonc`, `package.json`, `set-branch-policies.sh`, `validator/validate-kilo-config.ts`,
+`validator/kilo-config-rules.ts`, `validator/kilo-schema-subset.json` and
+`plugin/azdo-remote-config.ts` (the validator reuses the plugin). On success it prints
+`assemble-shared-repo: wrote 9 files`.
+
+What it refuses (exit 2): no argument, more than one argument, an unknown option, or an output
+directory that exists and is not empty (or is a symlink). It never overwrites or deletes anything.
+Exit 1: a source file is missing, or writing failed (the message carries only an error code).
+
+### 2. Push it to Azure Repos
+Create an empty Git repo in your Azure DevOps project, then from the output directory:
+
+```bash
+cd kilo-config-out
+git init -b main && git add . && git commit -m "Initial shared config"
+git remote add origin <your Azure Repos clone URL>
+git push -u origin main
+```
+
+Edit `kilo.jsonc` for your gateway before real use (it is an example).
+
+### 3. Create the pipeline and set KILO_ALLOWED_HOSTS
+In Azure DevOps, create a pipeline from the existing `azure-pipelines.yml` in that repo and note its
+numeric build definition id (it is in the pipeline URL as `definitionId=`).
+
+Set the pipeline variable `KILO_ALLOWED_HOSTS` to the comma-separated host names allowed in
+`provider.*.options.baseURL` (for example your Bifrost host). The file contains a default value that
+is a placeholder (`bifrost.yourcompany.internal`); set the real value in the pipeline's variables
+settings. The gate runs the validator with `--allowed-hosts`, so it fails closed: if the variable is
+empty or missing, the validator reports a usage error (exit 2) and the build fails.
+
+The pipeline uses an `ubuntu-latest` agent, `UseNode@1` (22.x, and the script checks for 22.18 or
+later), installs nothing from npm, and validates `kilo.jsonc` and every `teams/*/kilo.jsonc`.
+
+### 4. Create the branch policies with set-branch-policies.sh
+Azure Repos Git ignores the `pr:` block in the YAML, so the PR trigger is a blocking build-validation
+policy on `main`. The script creates three policies on `main`: minimum approver count 1 (creator vote
+does not count, downvotes not allowed, votes reset on new pushes), a required reviewer group, and
+the blocking build validation for your pipeline.
+
+Get the repository GUID (not the name):
+
+```bash
+az repos show --repository kilo-config --org https://dev.azure.com/<org> --project <project> --query id -o tsv
+```
+
+Preview first, then run:
+
+```bash
+bash set-branch-policies.sh --org <org> --project <project> --repository-id <guid> \
+  --reviewer-group <group> --build-definition-id <n> --dry-run
+bash set-branch-policies.sh --org <org> --project <project> --repository-id <guid> \
+  --reviewer-group <group> --build-definition-id <n>
+```
+
+| Flag | Meaning |
+|---|---|
+| `--org` | Organization name, `https://dev.azure.com/<org>` or `https://<org>.visualstudio.com`. |
+| `--project` | Project name. |
+| `--repository-id` | Repository GUID (see above). |
+| `--reviewer-group` | Required reviewer, passed to `az` as is. A group identity GUID is recommended; a display name must match exactly one identity. |
+| `--build-definition-id` | Numeric id of the pipeline from step 3. |
+| `--dry-run` | Print the three `az` commands (one per line) instead of running them. `az` is not needed. |
+| `--help`, `-h` | Print usage. |
+
+Only the `--flag value` form is accepted. The branch is fixed to `main`. There is no token flag:
+authenticate with `az login` (with the `azure-devops` extension) or the `AZURE_DEVOPS_EXT_PAT`
+environment variable. The script needs `bash` and `az`.
+
+| Exit | Meaning |
+|---|---|
+| 0 | Dry run printed, all three policies created, or `--help`. |
+| 1 | `az` not found, or an `az` call failed. Later policies are not created; ones already created stay. |
+| 2 | Usage error. `az` was never invoked. |
+
+Re-running creates duplicate policies. Remove duplicates in the Azure DevOps UI; automated
+idempotent handling is planned (T-023). The script never prints `az` output or environment values.
+
+### Security caveat: a PR can change its own gate
+The pipeline file and the validator live in the same repo as the config they check. A pull request
+can therefore change `azure-pipelines.yml` or the validator in the same change that it is validated
+with. Mitigate this:
+
+- Restrict the "Bypass policies when completing pull requests" and "Edit policies" permissions to a
+  small trusted group.
+- Keep the platform team as a blocking required reviewer on `main` (this is what the
+  required-reviewer policy does), and review changes to `azure-pipelines.yml`, `validator/` and
+  `plugin/` with extra care.
+
+### What the gate checks
+The validator rules listed in [Validating the shared config](#validating-the-shared-config-platform-engineers)
+run on `kilo.jsonc` and `teams/*/kilo.jsonc`: no secrets or `apiKey`, valid JSONC and types, no
+unsafe keys, and (because `KILO_ALLOWED_HOSTS` is set) every `baseURL` is https on an allowed host.
+Errors fail the build; warnings do not. The `teams/` folder is optional.
 
 ## Personal config template (engineers)
 

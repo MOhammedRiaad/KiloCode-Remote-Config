@@ -239,8 +239,8 @@
       "id": "F-008",
       "title": "Shared config repo: Azure Pipelines PR gate and branch policy setup",
       "type": "feature",
-      "priority": 3,
-      "status": "todo",
+      "priority": 2,
+      "status": "done",
       "scope": {
         "backend": true,
         "frontend": false
@@ -248,14 +248,19 @@
       "depends_on": [
         "F-007"
       ],
-      "description": "FR-13 / FR-14. azure-pipelines.yml running the validator on PRs, and a script (az repos policy) that applies the main branch policy. Cycle 0009: the pipeline must pass --allowed-hosts to the validator (host check is opt-in and ignores ports); when copying the validator into the shared config repo also copy plugin/azdo-remote-config.ts with the same relative layout plus a package.json with \"type\": \"module\".",
+      "description": "FR-13 / FR-14 / AC-13, C1 (shared config repo). Cycle 0015 PO: priority raised to 2 (critical path; F-015 depends on it). Two deliverables under backend/shared-config/ (the template of the C1 `kilo-config` repo; Architect fixes exact file names and records them in an ADR + contract, e.g. a new contracts/shared-config-repo.md): (a) `azure-pipelines.yml`, the PR validation pipeline: `trigger: none` (or main only), `pr` on branch main, installs/uses Node >= 22.18 (e.g. UseNode@1 / NodeTool@0, no npm install, zero runtime deps), and runs the F-007 validator CLI with `--allowed-hosts <host list>` (host list from a pipeline variable with a documented default; cycle 0009: host check is opt-in and ignores ports) over `kilo.jsonc` plus every `teams/*/kilo.jsonc` that exists (no teams directory, or an empty one, must not cause a usage error/exit 2); a non-zero validator exit fails the job. The validator needs `validator/` and `plugin/azdo-remote-config.ts` in the same relative layout plus a package.json with \"type\": \"module\" (ADR-0010): the Architect decides how C1 gets them (PO suggestion: a zero-dependency assemble/export script, e.g. `node backend/tools/assemble-shared-repo.ts <outdir>`, that writes the complete C1 repo tree: kilo.jsonc, azure-pipelines.yml, the policy script, the validator files, the plugin file and package.json, byte-identical copies, refusing a non-empty outdir) so the pipeline's exact command line is testable end to end. (b) A branch-policy script for the platform team (Architect picks bash or a zero-dependency Node .ts; it must run on macOS/Linux and Git Bash) that applies FR-14 to `main` with `az repos policy`: approver-count (minimum 1 reviewer, blocking), required-reviewer for the platform-team group, and build validation bound to the pipeline's build definition id (blocking). Inputs: org (URL or name), project, repository id or name, reviewer group id/descriptor, build definition id, all REQUIRED as flags; `--dry-run` prints the exact az commands without invoking az. It never takes a PAT/token as an argument (az login or AZURE_DEVOPS_EXT_PAT env only), never echoes env values, and passes each value as a single argv element (no eval / shell interpolation). PO decision: idempotency (detecting existing policies) is out of scope for this slice; the usage text states that re-running creates duplicate policies. Tests (node:test under backend/test/) inspect the YAML as text or with a tiny dev-only parser, run the pipeline's validator command in a temp copy/assembled tree, and run the policy script in child processes with a stub `az` on PATH that records argv; they never call real az, Azure DevOps or the network. The plugin file, its export surface, the validator rules/CLI behaviour, the installers and the personal config template are unchanged. Zero runtime npm deps (FR-11). Out of scope: per-team example files and team-specific validation behaviour (F-015).",
       "acceptance_criteria": [
-        "Given azure-pipelines.yml, When parsed by a test, Then it triggers on PRs to main and runs the validator against kilo.jsonc and teams/*/kilo.jsonc.",
-        "Given the branch-policy script run in dry-run mode, When executed, Then it prints `az repos policy` commands for: minimum 1 reviewer, required platform-team reviewer group, and build validation on the pipeline.",
-        "Given the branch-policy script without required arguments, When executed, Then it exits non-zero with usage help."
+        "Given backend/shared-config/azure-pipelines.yml, When a test inspects it, Then it has a `pr` trigger including branch `main`, CI-push triggering is disabled or limited to main, it selects Node 22.18 or later, contains no `npm install`/`npm ci` step, and has a script step that invokes the validator CLI (`validate-kilo-config.ts`) with `--allowed-hosts` and the files `kilo.jsonc` and `teams/*/kilo.jsonc`.",
+        "Given the C1 repo tree in a temp directory (as assembled by the Architect's chosen mechanism) containing the example kilo.jsonc and no teams directory, When the pipeline's validator script step is executed in bash from the repo root with the default allowed-hosts value, Then it exits 0; and Given a `teams/payments/kilo.jsonc` that is valid, Then it exits 0 and the output reports both files.",
+        "Given the same temp C1 tree, When kilo.jsonc (or teams/x/kilo.jsonc) gains an `apiKey` field, an `sk-bf-AbCdEf1234567890` string, or a baseURL on a host not in the allowed-hosts list, When the pipeline's validator script step runs, Then it exits non-zero (failing the PR, AC-13) and the output never contains `AbCdEf1234567890`.",
+        "Given the C1 tree, When it is inspected, Then validator/validate-kilo-config.ts, validator/kilo-config-rules.ts, validator/kilo-schema-subset.json and plugin/azdo-remote-config.ts are byte-identical to the backend/ sources and their relative layout matches backend/, and a package.json with `\"type\": \"module\"` and no `dependencies` is present.",
+        "Given the branch-policy script with all required inputs and `--dry-run`, When executed with a stub az on PATH, Then it exits 0, the stub az is never invoked, and stdout lists exactly three `az repos policy` commands: `approver-count create` with `--minimum-approver-count 1` and `--blocking true`, `required-reviewer create` naming the supplied reviewer group, and `build create` naming the supplied build definition id with `--blocking true`, each scoped to `--branch main` and the supplied repository, org and project.",
+        "Given the branch-policy script without `--dry-run`, When executed with a recording stub az, Then az is invoked exactly three times with the same arguments as the dry-run output (each value as one argv element, so a value like `team; rm -rf x` or `$(id)` is passed literally and nothing else is executed), and Given the stub az fails on any call, Then the script stops at that call and exits non-zero with a fixed message naming the failing policy, without echoing az's output.",
+        "Given the branch-policy script with any required input missing, an empty value, an unknown flag, or a positional argument, When executed, Then it exits 2 with usage help that does not echo the offending value, and az is never invoked; and Given AZURE_DEVOPS_EXT_PAT set to a sentinel value on any path, Then the sentinel appears in no stdout/stderr, and the script accepts no flag for a PAT or token.",
+        "Given the repository after the change, When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0 and runs the new pipeline and policy-script tests, backend/package.json has no runtime `dependencies`, backend/plugin/azdo-remote-config.ts, backend/validator/*, backend/personal-config/kilo.jsonc and backend/installer/* are unchanged, and docs/architecture documents the C1 repo layout, the pipeline and the policy script's flags and exit codes."
       ],
       "source": "vision",
-      "cycle_done": null
+      "cycle_done": 15
     },
     {
       "id": "F-009",
@@ -449,7 +454,7 @@
       "depends_on": [
         "F-010"
       ],
-      "description": "Engineer setup guide, platform-team runbook (config change, key provisioning, offboarding), KILO_PURE caveat, supported Kilo version range, Phase 0 assumptions A1-A3 checklist. User decision (cycle 0012): F-012/F-013 are skipped, so treat the F-013 dependency as waived and omit key-provisioning/offboarding runbook content. Cycle 0013 architect follow-up: document installer exit code 4, --no-smoke (and the Windows equivalent once F-011 ships) and each smoke fixed code with what to do. Cycle 0014: also document install.ps1 ExecutionPolicy/Unblock-File guidance (already in the user guide), the 'Rewritten by install.sh' header note, and Windows ACL residual risk.",
+      "description": "Engineer setup guide, platform-team runbook (config change, key provisioning, offboarding), KILO_PURE caveat, supported Kilo version range, Phase 0 assumptions A1-A3 checklist. User decision (cycle 0012): F-012/F-013 are skipped, so treat the F-013 dependency as waived and omit key-provisioning/offboarding runbook content. Cycle 0013 architect follow-up: document installer exit code 4, --no-smoke (and the Windows equivalent once F-011 ships) and each smoke fixed code with what to do. Cycle 0014: also document install.ps1 ExecutionPolicy/Unblock-File guidance (already in the user guide), the 'Rewritten by install.sh' header note, and Windows ACL residual risk. Cycle 0015: the platform runbook should cover setting up the C1 repo, the PR pipeline and the branch-policy script from F-008 (if shipped by then). Cycle 0015 security: runbook should tell platform engineers to restrict the 'Bypass policies' and 'Edit policies' permissions on the shared config repo (a PR can alter its own gate).",
       "acceptance_criteria": [
         "Given docs/, When an automated check runs, Then engineer setup, platform runbook and troubleshooting pages exist and link to each other.",
         "Given the troubleshooting page, When checked, Then it mentions KILO_PURE=1, az login and the cache location.",
@@ -941,6 +946,68 @@
       "acceptance_criteria": [
         "Given a helper path containing %, When install.ps1 runs with a node .cmd shim, Then it exits 3 with a fixed message and no stack trace.",
         "Given the AC-7 node-version prerequisite failure, When it runs, Then the output is checked for the key and PAT sentinels."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-023",
+      "title": "Branch-policy script idempotency",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-008"
+      ],
+      "description": "Cycle 0015 PO split from F-008: re-running the branch-policy script creates duplicate policies. Use `az repos policy list` to detect an existing approver-count / required-reviewer / build policy on main for the repo and update it (or skip) instead of creating a duplicate.",
+      "acceptance_criteria": [
+        "Given a stub az whose `repos policy list` reports the three policies already present on main, When the script runs, Then no `create` command is invoked and it exits 0.",
+        "Given a stub az reporting only the approver-count policy, When the script runs, Then only the missing required-reviewer and build policies are created."
+      ],
+      "source": "po",
+      "cycle_done": null
+    },
+    {
+      "id": "T-024",
+      "title": "Branch-policy script and assemble tool hardening",
+      "type": "tech-debt",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-008"
+      ],
+      "description": "Cycle 0015 follow-ups: (sec low 1 / review low 3) set-branch-policies.sh text_ok must reject a value starting with '@' (az reads @<path> from a file) with a test and contract 4.1 update; (review info 1) usage() printf format contains a real line break: use printf '%s\n' \"$line\"; (review low 2) add assemble tests for missing source file (exit 1), symlinked output dir refused (POSIX), and the 'cannot write output' message.",
+      "acceptance_criteria": [
+        "Given --project @/some/file, When set-branch-policies.sh runs, Then it exits 2 without calling az.",
+        "Given a missing source file or a symlinked outdir, When assemble-shared-repo.ts runs, Then it exits per the contract with the fixed message."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-025",
+      "title": "Verify branch-policy semantics in a real org",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-008"
+      ],
+      "description": "Cycle 0015 security/architect follow-ups needing a real Azure DevOps org (manual or documented check): (sec low 2) confirm what --valid-duration 0 --queue-on-source-update-only false means for build validation expiry and correct the script if needed; (sec info 4 / architect) az cannot set creatorVoteCounts on the required-reviewer policy: check whether a platform-team author's own approval satisfies the group and, if so, set it through the REST API; optionally protect the gate with a required `extends` template in a separate repo so a PR cannot edit its own pipeline; suggest ShellCheck in ci.sh when available and extend check-lf to backend/**/*.sh and *.yml.",
+      "acceptance_criteria": [
+        "Given a documented real-org check, When performed, Then the validity-duration and creator-vote behaviour are recorded in ADR-0015 and the script/contract corrected if they differ."
       ],
       "source": "security",
       "cycle_done": null

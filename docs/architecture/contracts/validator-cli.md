@@ -4,8 +4,8 @@
 - Owner: Architect. Implemented by: `backend/validator/validate-kilo-config.ts` (CLI),
   `backend/validator/kilo-config-rules.ts` (library), `backend/validator/kilo-schema-subset.json`
   (data). Example input: `backend/shared-config/kilo.jsonc`.
-- Consumers: Azure Pipelines PR gate in the C1 repo (F-008), personal template check (F-009),
-  tests.
+- Consumers: Azure Pipelines PR gate in the C1 repo (F-008; exact command line and C1 layout in
+  `shared-config-repo.md`), personal template check (F-009), tests.
 
 ## 1. Command line
 

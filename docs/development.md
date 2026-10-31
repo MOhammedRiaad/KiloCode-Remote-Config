@@ -102,11 +102,30 @@ with `npm test`, and the script tests run on both `pwsh` (PowerShell 7+) and `po
 (Windows PowerShell 5.1). A host that is not installed is skipped with a clear message, so the suite
 also passes on machines with only one of them.
 
+## Shared config repo tests and lint rule 8
+The shared config repo template (`backend/shared-config/`: `azure-pipelines.yml`,
+`set-branch-policies.sh`, `package.json`, `.gitattributes`, `kilo.jsonc`) and the assemble tool
+(`backend/tools/assemble-shared-repo.ts`; contract
+`docs/architecture/contracts/shared-config-repo.md`, ADR-0015) are tested by
+`backend/test/shared-config/` (`assemble.test.ts`, `pipeline.test.ts`, `branch-policies.test.ts`,
+shared `helpers.ts`). They run with `npm test`; to run only these:
+
+```bash
+cd backend
+node --test "test/shared-config/*.test.ts"
+```
+
+The tests never contact Azure DevOps; the branch-policy script is run with `--dry-run` or with a fake
+`az`. `npm run lint` has an eighth rule: `.ts` files in `backend/tools/` may import only `node:`
+built-ins and must not use `require(`. To try the tool by hand, see the
+[user guide](user-guide.md#setting-up-the-shared-config-repo-platform-engineers).
+
 ## Layout
 ```
 backend/plugin/azdo-remote-config.ts   the plugin
 backend/validator/                     shared-config validator (CLI, rules library, schema subset)
-backend/shared-config/kilo.jsonc       example shared config
+backend/shared-config/                 shared config repo template (kilo.jsonc, azure-pipelines.yml, set-branch-policies.sh, package.json, .gitattributes)
+backend/tools/assemble-shared-repo.ts  builds the shared config repo tree
 backend/personal-config/kilo.jsonc     personal config template (copied to ~/.config/kilo/)
 backend/installer/                     bootstrap installer (install.sh, install.ps1 + Node helper)
 backend/tools/check-fr11.mjs           lint

@@ -20,6 +20,7 @@ function fixture(opts: {
   validator?: string;
   installer?: string;
   installerFiles?: Record<string, string>;
+  tools?: string;
 }) {
   const root = mkdtempSync(join(tmpdir(), "fr11-"));
   mkdirSync(join(root, "plugin"));
@@ -39,6 +40,10 @@ function fixture(opts: {
     for (const [name, content] of Object.entries(opts.installerFiles)) {
       writeFileSync(join(root, "installer", name), content);
     }
+  }
+  if (opts.tools !== undefined) {
+    mkdirSync(join(root, "tools"), { recursive: true });
+    writeFileSync(join(root, "tools", "x.ts"), opts.tools);
   }
   return root;
 }
@@ -159,4 +164,23 @@ test("installer: rule 7 rejects NODE_OPTIONS in installer/x.sh (including commen
   const r = runOn({ installerFiles: { "x.sh": "#!/bin/sh\n# NODE_OPTIONS seam\n" } });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /forbidden test switch "NODE_OPTIONS" in installer\/x\.sh/);
+});
+
+test("tools: node: imports pass", () => {
+  const r = runOn({ tools: 'import { a } from "node:fs";\nexport { a };\n' });
+  assert.equal(r.status, 0, r.stderr);
+});
+
+for (const spec of ["./y.ts", "left-pad", "../plugin/azdo-remote-config.ts"]) {
+  test(`tools: import "${spec}" fails`, () => {
+    const r = runOn({ tools: `import x from "${spec}";\nexport default x;\n` });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /tools\/x\.ts/);
+  });
+}
+
+test("tools: require fails", () => {
+  const r = runOn({ tools: 'const x = require("node:fs");\nexport default x;\n' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /require.*tools\/x\.ts/);
 });
