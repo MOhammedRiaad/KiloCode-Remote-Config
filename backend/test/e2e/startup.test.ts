@@ -17,6 +17,7 @@ import type { FakeAnswer, FakeScenario, RunInstallOptions, RunResult } from "../
 import {
   assertNoLeaks,
   BASH_SKIP,
+  DEFAULT_BINDING,
   expectedCache,
   parseShared,
   probeFetch,
@@ -187,6 +188,31 @@ test("T4 AC-4/FR-10: AzDO unreachable without a cache keeps local config", OPTS,
       ),
     ]);
     assert.equal(existsSync(sb.cacheFile), false);
+  });
+});
+
+test("T3b T-013: a cache from another branch is not applied", OPTS, () => {
+  withE2eSandbox((sb) => {
+    assert.equal(install(sb).status, 0);
+    const shared = parseShared();
+    start(sb, { azdo: azdoOk(sharedConfigText()) });
+    assert.deepEqual(readJson(sb.cacheFile), expectedCache(shared));
+    const cacheBytes = hex(sb.cacheFile);
+    assert.equal(install(sb, ["--branch", "release"]).status, 0);
+    const offline = start(sb, { azdo: { mode: "throw", message: THROW_CANARY } });
+    assert.deepEqual(offline.result.config, offline.result.initialConfig);
+    assert.deepEqual(offline.result.logs, [
+      rec(
+        "error",
+        "Remote config unavailable (network) and no usable cache (cache-mismatch); continuing with local config only.",
+      ),
+    ]);
+    assert.equal(hex(sb.cacheFile), cacheBytes);
+    const logsText = JSON.stringify(offline.result.logs);
+    assert.ok(!logsText.includes("release") && !logsText.includes("acme"));
+    const online = start(sb, { azdo: azdoOk(sharedConfigText()) });
+    assert.equal(online.requests[0]?.url, expectedItemsUrl("acme", "proj", "cfg", "/kilo.jsonc", "release"));
+    assert.deepEqual(readJson(sb.cacheFile), expectedCache(shared, { ...DEFAULT_BINDING, branch: "release" }));
   });
 });
 

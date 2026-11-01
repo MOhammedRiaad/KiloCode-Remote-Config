@@ -38,6 +38,18 @@ function seedCache(home: string, value: unknown): string {
   return file;
 }
 
+const BOUND = { org: "o", project: "p", repo: "r", path: "/kilo.jsonc", branch: "main" };
+const FORMAT = "kilo-azdo-cache-v1";
+
+function envelope(config: unknown, binding: unknown = BOUND, format: unknown = FORMAT) {
+  return { format, binding, config };
+}
+
+// Writes the 0.8.0 cache envelope (ADR-0018); raw seedCache stays for corrupt and legacy files.
+function seedBoundCache(home: string, config: unknown, binding: unknown = BOUND): string {
+  return seedCache(home, envelope(config, binding));
+}
+
 // A class instance with a prototype method, like the generated Kilo SDK client.
 function makeInput(behaviour: (arg: unknown) => unknown = () => undefined) {
   const logs: unknown[] = [];
@@ -151,7 +163,13 @@ test("AC2 success writes a sanitised unresolved cache atomically with an info lo
   });
   const file = cacheFile(home);
   const text = realFs.readFileSync(file, "utf8");
-  assert.deepEqual(JSON.parse(text), { model: "m", note: "{env:X}", provider: { b: { u: "https://x" } } });
+  const parsed = JSON.parse(text);
+  assert.deepEqual(parsed, envelope({ model: "m", note: "{env:X}", provider: { b: { u: "https://x" } } }));
+  assert.deepEqual(Object.keys(parsed), ["format", "binding", "config"]);
+  assert.deepEqual(Object.keys(parsed.binding as object), ["org", "project", "repo", "path", "branch"]);
+  assert.ok(!text.includes(PAT));
+  assert.ok(!text.includes(Buffer.from(`:${PAT}`).toString("base64")));
+  assert.ok(!text.includes("timeoutMs") && !text.includes('"mode"') && !text.includes('"pat"'));
   assert.ok(!text.includes("resolved-secret-x"));
   assert.ok(!text.includes("sk-bf-shared"));
   const write = calls.find(([n]) => n === "writeFileSync")!;
@@ -176,7 +194,7 @@ const FETCH_FAILURES: Array<[string, () => { fetch: unknown; options?: unknown }
 for (const [code, make] of FETCH_FAILURES) {
   test(`AC3 ${code} falls back to the cache without touching it`, async () => {
     const home = makeHome();
-    const file = seedCache(home, { model: "cached", extra: "{env:SECRET_VAR}" });
+    const file = seedBoundCache(home, { model: "cached", extra: "{env:SECRET_VAR}" });
     const before = realFs.readFileSync(file);
     const mtime = realFs.statSync(file).mtimeMs;
     const { fetch, options } = make();
@@ -229,28 +247,51 @@ test("AC4 oversized cache is unreadable", async () => {
   assert.match(messages(logs)[0]!, /\(cache-unreadable\)/);
 });
 
-test("AC5 missing settings skip fetch and az, then use the cache", async () => {
-  const home = makeHome();
-  seedCache(home, { model: "cached" });
-  const fetchSpy = okFetch("{}");
-  const azCalls: unknown[] = [];
-  const cfg: Record<string, unknown> = {};
-  const { logs } = await run({
-    home,
-    config: cfg,
-    fetch: fetchSpy.fn,
-    options: { project: "p", repo: "r" },
-    extra: { runAz: () => azCalls.push(1) },
+const L_NONE_SKIPPED =
+  "Remote config unavailable (missing-settings) and no usable cache (cache-skipped); continuing with local config only.";
+
+const MISSING_CASES: Array<[string, string[], Record<string, string>]> = [
+  ["org", ["org"], { project: "p", repo: "r" }],
+  ["project", ["project"], { org: "o", repo: "r" }],
+  ["repo", ["repo"], { org: "o", project: "p" }],
+  ["org, project, repo", ["org", "project", "repo"], {}],
+];
+
+for (const [label, names, options] of MISSING_CASES) {
+  test(`T013 AC5 missing ${label} skips fetch, az and the cache entirely`, async () => {
+    const home = makeHome();
+    const file = seedBoundCache(home, { model: "cached" });
+    const before = realFs.readFileSync(file);
+    const fetchSpy = okFetch("{}");
+    const azCalls: unknown[] = [];
+    const fsCalls: string[] = [];
+    const spyFs: Record<string, unknown> = {};
+    for (const name of ["mkdirSync", "writeFileSync", "renameSync", "unlinkSync", "statSync", "readFileSync"] as const) {
+      spyFs[name] = (...args: unknown[]) => {
+        fsCalls.push(name);
+        return (realFs[name] as (...a: unknown[]) => unknown)(...args);
+      };
+    }
+    const cfg: Record<string, unknown> = {};
+    const { logs } = await run({
+      home,
+      config: cfg,
+      fetch: fetchSpy.fn,
+      options,
+      extra: { runAz: () => azCalls.push(1), fs: spyFs },
+    });
+    assert.equal(fetchSpy.calls.length, 0);
+    assert.equal(azCalls.length, 0);
+    assert.deepEqual(fsCalls, []);
+    assert.deepEqual(cfg, {});
+    assert.deepEqual(messages(logs), [
+      `Remote config skipped: missing required settings: ${names.join(", ")}.`,
+      L_NONE_SKIPPED,
+    ]);
+    assert.equal((logs[1] as LogArg).body.level, "error");
+    assert.deepEqual(realFs.readFileSync(file), before);
   });
-  assert.equal(fetchSpy.calls.length, 0);
-  assert.equal(azCalls.length, 0);
-  assert.deepEqual(messages(logs), [
-    "Remote config skipped: missing required settings: org.",
-    "Remote config unavailable (missing-settings); using cached config.",
-    "Applied shared config from cache in defaults mode.",
-  ]);
-  assert.equal(cfg.model, "cached");
-});
+}
 
 test("AC5 an invalid option logs its warning text", async () => {
   const home = makeHome();
@@ -282,7 +323,7 @@ for (const [text, reason] of INVALID_FETCHED) {
 
 test("AC5 invalid fetched content keeps an existing cache and uses it", async () => {
   const home = makeHome();
-  const file = seedCache(home, { model: "cached" });
+  const file = seedBoundCache(home, { model: "cached" });
   const before = realFs.readFileSync(file);
   const cfg: Record<string, unknown> = {};
   const { logs } = await run({ home, config: cfg, fetch: okFetch("[]").fn });
@@ -341,9 +382,16 @@ test("AC7 no log argument contains a secret on success, fallback, az and excepti
   all.push(...success.logs);
 
   const home = makeHome();
-  seedCache(home, JSON.parse(shared));
+  seedBoundCache(home, JSON.parse(shared));
   const fallback = await run({ home, fetch: failingFetch("s3cr3t-value"), env });
+  assert.equal(messages(fallback.logs).at(-1), "Applied shared config from cache in defaults mode.");
   all.push(...fallback.logs);
+
+  const mismatchHome = makeHome();
+  seedBoundCache(mismatchHome, JSON.parse(shared), { ...BOUND, branch: "other" });
+  const mismatch = await run({ home: mismatchHome, fetch: failingFetch("s3cr3t-value"), env });
+  assert.match(messages(mismatch.logs)[0]!, /\(cache-mismatch\)/);
+  all.push(...mismatch.logs);
 
   const azRun = await run({
     home: makeHome(),
@@ -570,4 +618,168 @@ test("AC8 server hook resolves for a non-object config without any I/O", async (
   const { default: plugin } = await import("../../plugin/azdo-remote-config.ts");
   const hooks = await plugin.server({}, { org: "o" });
   await hooks.config(null as never);
+});
+
+// ---- T-013: the cache is bound to the settings that produced it (ADR-0018) ----
+
+const A = { org: "orgSentA", project: "projSentA", repo: "repoSentA", path: "/sentA.jsonc", branch: "brSentA" };
+const B = { org: "orgSentB", project: "projSentB", repo: "repoSentB", path: "/sentB.jsonc", branch: "brSentB" };
+const A_VALUES = Object.values(A);
+const B_VALUES = Object.values(B);
+const L_NETWORK_MISMATCH =
+  "Remote config unavailable (network) and no usable cache (cache-mismatch); continuing with local config only.";
+const L_CACHE_NETWORK = "Remote config unavailable (network); using cached config.";
+
+function noneLine(code: string, reason = "network"): string {
+  return `Remote config unavailable (${reason}) and no usable cache (${code}); continuing with local config only.`;
+}
+
+async function writeRealCache(home: string, options: Record<string, unknown>, shared = '{"model":"cached"}') {
+  await run({ home, options, fetch: okFetch(shared).fn });
+  return cacheFile(home);
+}
+
+test("T013 AC1 a cache written for other settings is not applied, one field at a time", async () => {
+  for (const field of Object.keys(A) as Array<keyof typeof A>) {
+    const home = makeHome();
+    const file = await writeRealCache(home, { ...A, pat: PAT });
+    const before = realFs.readFileSync(file);
+    const mtime = realFs.statSync(file).mtimeMs;
+    const cfg = localConfig();
+    const options = { ...A, [field]: B[field], pat: PAT };
+    const { logs } = await run({ home, config: cfg, options, fetch: failingFetch("n") });
+    assert.deepEqual(cfg, localConfig(), field);
+    assert.deepEqual(messages(logs), [L_NETWORK_MISMATCH], field);
+    assert.equal((logs[0] as LogArg).body.level, "error");
+    const dump = JSON.stringify(logs);
+    for (const value of [...A_VALUES, ...B_VALUES]) assert.ok(!dump.includes(value), `${field}: ${value}`);
+    assert.deepEqual(realFs.readFileSync(file), before);
+    assert.equal(realFs.statSync(file).mtimeMs, mtime);
+  }
+});
+
+test("T013 AC2 a cache written for the same settings is applied; mode is not bound", async () => {
+  for (const mode of ["defaults", "enforce"]) {
+    const home = makeHome();
+    await writeRealCache(home, { ...A, pat: PAT, mode: "defaults" }, '{"model":"cached","x":1}');
+    const cfg = { model: "local" } as Record<string, unknown>;
+    const { logs } = await run({ home, config: cfg, options: { ...A, pat: PAT, mode }, fetch: failingFetch("n") });
+    assert.deepEqual(messages(logs), [L_CACHE_NETWORK, `Applied shared config from cache in ${mode} mode.`]);
+    assert.equal(cfg.x, 1);
+    assert.equal(cfg.model, mode === "enforce" ? "cached" : "local");
+  }
+});
+
+interface CredentialCase {
+  options: Record<string, unknown>;
+  env: Record<string, string>;
+  extra: Record<string, unknown>;
+}
+
+const AZ_TOKEN = { runAz: () => Promise.resolve({ exitCode: 0, stdout: `${TOKEN}\n` }) };
+const CREDENTIAL_SOURCES: Array<[string, CredentialCase]> = [
+  ["pat option", { options: { ...A, pat: PAT }, env: {}, extra: {} }],
+  ["AZDO_PAT", { options: { ...A }, env: { AZDO_PAT: PAT }, extra: {} }],
+  ["KILO_AZDO_PAT", { options: { ...A }, env: { KILO_AZDO_PAT: PAT }, extra: {} }],
+  ["AZURE_DEVOPS_EXT_PAT", { options: { ...A }, env: { AZURE_DEVOPS_EXT_PAT: PAT }, extra: {} }],
+  ["az token", { options: { ...A }, env: {}, extra: AZ_TOKEN }],
+];
+
+for (const [source, c] of CREDENTIAL_SOURCES) {
+  test(`T013 AC3 the cache bytes hold no credential (${source})`, async () => {
+    const home = makeHome();
+    await run({ home, options: c.options, env: c.env, extra: c.extra, fetch: okFetch('{"model":"m"}').fn });
+    const text = realFs.readFileSync(cacheFile(home), "utf8");
+    const basic = Buffer.from(`:${PAT}`).toString("base64");
+    for (const secret of [PAT, TOKEN, basic, "Bearer", "Basic ", '"pat"', '"mode"', "timeoutMs"]) {
+      assert.ok(!text.includes(secret), `${source}: ${secret}`);
+    }
+    const parsed = JSON.parse(text);
+    assert.deepEqual(Object.keys(parsed.binding), ["org", "project", "repo", "path", "branch"]);
+    assert.deepEqual(parsed.binding, A);
+  });
+}
+
+const OUTDATED: Array<[string, unknown]> = [
+  ["legacy bare config", { model: "cached" }],
+  ["empty object", {}],
+  ["format v0", envelope({ model: "cached" }, BOUND, "kilo-azdo-cache-v0")],
+  ["format number", envelope({ model: "cached" }, BOUND, 1)],
+  ["format null", envelope({ model: "cached" }, BOUND, null)],
+];
+
+for (const [label, value] of OUTDATED) {
+  test(`T013 AC4 ${label} is cache-outdated and not applied`, async () => {
+    const home = makeHome();
+    const file = seedCache(home, value);
+    const before = realFs.readFileSync(file);
+    const cfg = localConfig();
+    const { logs } = await run({ home, config: cfg, fetch: failingFetch("n") });
+    assert.deepEqual(cfg, localConfig());
+    assert.deepEqual(messages(logs), [noneLine("cache-outdated")]);
+    assert.deepEqual(realFs.readFileSync(file), before);
+  });
+}
+
+const { org: _org, ...NO_ORG } = BOUND;
+const MALFORMED: Array<[string, unknown]> = [
+  ["binding missing a field", envelope({ a: 1 }, NO_ORG)],
+  ["binding with an extra field", envelope({ a: 1 }, { ...BOUND, extra: "x" })],
+  ["binding number value", envelope({ a: 1 }, { ...BOUND, org: 5 })],
+  ["binding null value", envelope({ a: 1 }, { ...BOUND, repo: null })],
+  ["binding array", envelope({ a: 1 }, [])],
+  ["binding null", envelope({ a: 1 }, null)],
+  ["binding missing", { format: FORMAT, config: { a: 1 } }],
+  ["config array", envelope([])],
+  ["config missing", { format: FORMAT, binding: BOUND }],
+  ["config string", envelope("x")],
+  ["extra top-level key", { ...envelope({ a: 1 }), extra: 1 }],
+  ["malformed binding with different values", envelope({ a: 1 }, { ...B, extra: "x" })],
+  ["config with a container at level 64", envelope(JSON.parse('{"a":'.repeat(65) + "1" + "}".repeat(65)))],
+];
+
+for (const [label, value] of MALFORMED) {
+  test(`T013 AC4 ${label} is cache-invalid and not applied`, async () => {
+    const home = makeHome();
+    const file = seedCache(home, value);
+    const before = realFs.readFileSync(file);
+    const cfg = localConfig();
+    const { logs } = await run({ home, config: cfg, fetch: failingFetch("n") });
+    assert.deepEqual(cfg, localConfig());
+    assert.deepEqual(messages(logs), [noneLine("cache-invalid")]);
+    assert.deepEqual(realFs.readFileSync(file), before);
+  });
+}
+
+test("T013 AC4 config with containers down to level 63 is still applied", async () => {
+  const home = makeHome();
+  seedBoundCache(home, JSON.parse('{"a":'.repeat(64) + "1" + "}".repeat(64)));
+  const cfg: Record<string, unknown> = {};
+  const { logs } = await run({ home, config: cfg, fetch: failingFetch("n") });
+  assert.equal(messages(logs).at(-1), "Applied shared config from cache in defaults mode.");
+  assert.ok("a" in cfg);
+});
+
+test("T013 AC4 a successful fetch rewrites a legacy cache in the bound format", async () => {
+  const home = makeHome();
+  seedCache(home, { model: "cached" });
+  await run({ home, fetch: okFetch('{"model":"fresh"}').fn });
+  assert.deepEqual(JSON.parse(realFs.readFileSync(cacheFile(home), "utf8")), envelope({ model: "fresh" }));
+});
+
+test("T013 AC6 comparison uses normalised settings, case-sensitively, without trimming stored values", async () => {
+  const applied = async (stored: unknown, options: Record<string, unknown>, env: Record<string, string> = {}) => {
+    const home = makeHome();
+    seedBoundCache(home, { model: "cached" }, stored);
+    const { logs } = await run({ home, options, env, fetch: failingFetch("n") });
+    return messages(logs);
+  };
+  const ok = [L_CACHE_NETWORK, "Applied shared config from cache in defaults mode."];
+  assert.deepEqual(await applied(BOUND, { ...OPTIONS, org: " o " }), ok);
+  assert.deepEqual(await applied(BOUND, { ...OPTIONS, org: "O" }), [L_NETWORK_MISMATCH]);
+  assert.deepEqual(await applied(BOUND, { ...OPTIONS, path: "kilo.jsonc" }), ok);
+  assert.deepEqual(await applied(BOUND, { ...OPTIONS, branch: undefined }), ok);
+  assert.deepEqual(await applied({ ...BOUND, org: " o" }, OPTIONS), [L_NETWORK_MISMATCH]);
+  const fromEnv = { KILO_AZDO_ORG: "o", KILO_AZDO_PROJECT: "p", KILO_AZDO_REPO: "r" };
+  assert.deepEqual(await applied(BOUND, { pat: PAT }, fromEnv), ok);
 });

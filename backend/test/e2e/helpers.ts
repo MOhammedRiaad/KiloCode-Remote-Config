@@ -163,9 +163,29 @@ function stripApiKeys(value: unknown): unknown {
   return value;
 }
 
-export function expectedCache(shared: Record<string, unknown>): Record<string, unknown> {
-  const copy = stripApiKeys(structuredClone(shared)) as Record<string, unknown>;
-  delete copy["$schema"];
-  delete copy["plugin"];
-  return copy;
+export interface CacheBindingValues {
+  org: string;
+  project: string;
+  repo: string;
+  path: string;
+  branch: string;
+}
+
+export const DEFAULT_BINDING: CacheBindingValues = {
+  org: "acme",
+  project: "proj",
+  repo: "cfg",
+  path: "/kilo.jsonc",
+  branch: "main",
+};
+
+// The cache envelope of contract plugin-interface 0.8.0 (ADR-0018): format, binding, sanitised config.
+export function expectedCache(
+  shared: Record<string, unknown>,
+  binding: CacheBindingValues = DEFAULT_BINDING,
+): Record<string, unknown> {
+  const config = stripApiKeys(structuredClone(shared)) as Record<string, unknown>;
+  delete config["$schema"];
+  delete config["plugin"];
+  return { format: "kilo-azdo-cache-v1", binding: { ...binding }, config };
 }

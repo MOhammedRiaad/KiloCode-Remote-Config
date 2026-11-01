@@ -53,7 +53,7 @@ scope for the installers.
 - `backend/plugin/azdo-remote-config.ts`: the plugin (Kilo v1 module shape, supported Kilo range `>=7.2.0 <8.0.0`). Its `config` hook loads and merges the shared config; `server` itself does no I/O.
 - Settings: the 8 plugin settings (`org`, `project`, `repo`, `path`, `branch`, `mode`, `pat`, `timeoutMs`) come from the global plugin options, then `KILO_AZDO_*` environment variables, then defaults. Project-level configs are not a settings source (trust boundary, ADR-0009).
 - Fetch: one HTTPS GET to the Azure DevOps Items API using a PAT (plugin option or `KILO_AZDO_PAT`, `AZDO_PAT`, `AZURE_DEVOPS_EXT_PAT`) or an `az` Entra token, with a timeout and a 1 MiB response cap.
-- Cache and fallback: a validated fetch is written to `~/.cache/kilo-azdo/remote-config.json` (file mode 0600, atomic write). If the fetch fails, the validated cache is used instead.
+- Cache and fallback: a validated fetch is written to `~/.cache/kilo-azdo/remote-config.json` (file mode 0600, atomic write). The cache records the `org`, `project`, `repo`, `path` and `branch` it was fetched for. If the fetch fails, the validated cache is used instead, but only for those same settings; otherwise it is ignored.
 - Parsing and placeholders: JSONC (comments, trailing commas); `{env:NAME}` and `{file:path}` placeholders are resolved at merge time and never stored in the cache.
 - Merge: `defaults` or `enforce` mode, never overwriting a local `apiKey` and never applying a shared one; transactional, so Kilo's config is either unchanged or fully merged.
 - Logging: fixed messages with service `azdo-remote-config` via Kilo's logger; never values, URLs or secrets. See the [user guide](docs/user-guide.md#troubleshooting-log-messages).

@@ -1,8 +1,9 @@
 // azdo-remote-config: Kilo plugin that applies a remote Azure DevOps config.
 // Single file, zero runtime dependencies (FR-11). See docs/architecture/ADR-0001-tech-stack.md
 // and ADR-0002-plugin-module-shape.md, ADR-0003 .. ADR-0009. The config hook (runConfigHook) resolves
-// the settings, fetches the shared config from Azure DevOps, caches it, falls back to the cache, merges
-// it into the Kilo config transactionally and logs fixed messages. It never throws or rejects.
+// the settings, fetches the shared config from Azure DevOps, caches it bound to the settings that produced
+// it (ADR-0018), falls back to that cache only when the settings match, merges it into the Kilo config
+// transactionally and logs fixed messages. It never throws or rejects.
 
 import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -1071,13 +1072,30 @@ interface CacheFs {
 
 type SharedCheck = { ok: true; value: Record<string, unknown> } | { ok: false; error: "invalid-jsonc" | "invalid-shape" };
 type CacheWriteCode = "cache-unavailable" | "cache-too-large" | "cache-write-failed";
-type CacheReadCode = "cache-unavailable" | "cache-missing" | "cache-unreadable" | "cache-invalid";
+type CacheReadCode =
+  | "cache-unavailable"
+  | "cache-missing"
+  | "cache-unreadable"
+  | "cache-invalid"
+  | "cache-outdated"
+  | "cache-mismatch";
 type CacheWrite = { ok: true } | { ok: false; error: CacheWriteCode };
 type CacheRead = { ok: true; value: Record<string, unknown> } | { ok: false; error: CacheReadCode };
 type Acquired = { ok: true; value: Record<string, unknown> } | { ok: false; reason: string };
 type HookLog = (level: LogLevel, message: string) => void;
 type HookDeps = Record<string, unknown>;
 
+interface CacheBinding {
+  org: string;
+  project: string;
+  repo: string;
+  path: string;
+  branch: string;
+}
+
+const CACHE_FORMAT = "kilo-azdo-cache-v1";
+const CACHE_BINDING_KEYS = ["org", "project", "repo", "path", "branch"] as const;
+const CACHE_ROOT_KEYS = ["format", "binding", "config"] as const;
 const MAX_CACHE_BYTES = 2 * 1024 * 1024;
 const MAX_LOGGED_PLACEHOLDERS = 20;
 const MAX_LOGGED_NAME_CHARS = 200;
@@ -1087,6 +1105,8 @@ const REAL_FS: CacheFs = { mkdirSync, writeFileSync, renameSync, unlinkSync, sta
 const LOG_REMOTE = "Loaded shared config from Azure DevOps.";
 const LOG_MERGE = "Could not apply the shared config; local config left unchanged.";
 const LOG_BADCONFIG = "Shared config not applied: the Kilo config is not an object.";
+const LOG_NO_SETTINGS =
+  "Remote config unavailable (missing-settings) and no usable cache (cache-skipped); continuing with local config only.";
 const LOG_UNEXPECTED = "Remote config failed unexpectedly; continuing with local config only.";
 
 let cacheCounter = 0;
@@ -1151,13 +1171,67 @@ function removeTemp(fs: CacheFs, tmp: string | undefined): void {
   }
 }
 
-function writeCache(shared: Record<string, unknown>, homeFn: unknown, rawFs: unknown): CacheWrite {
+// Built field by field (never spread or serialised from settings); undefined unless all five are strings.
+function cacheBindingOf(settings: Settings): CacheBinding | undefined {
+  const { org, project, repo, path, branch } = settings;
+  if (typeof org !== "string" || typeof project !== "string" || typeof repo !== "string") return undefined;
+  if (typeof path !== "string" || typeof branch !== "string") return undefined;
+  return { org, project, repo, path, branch };
+}
+
+function hasExactKeys(node: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(node).length === keys.length && keys.every((key) => Object.hasOwn(node, key));
+}
+
+function isStringBinding(node: unknown): node is Record<string, string> {
+  return (
+    isPlainObject(node) &&
+    hasExactKeys(node, CACHE_BINDING_KEYS) &&
+    CACHE_BINDING_KEYS.every((key) => typeof readOwn(node, key) === "string")
+  );
+}
+
+function matchesBinding(stored: Record<string, string>, current: CacheBinding): boolean {
+  return CACHE_BINDING_KEYS.every((key) => readOwn(stored, key) === current[key]);
+}
+
+// Shape checks come before the comparison; every failure is fail-closed.
+function checkCacheEnvelope(text: string, current: CacheBinding): CacheRead {
+  let root: unknown;
+  try {
+    root = parseJsonc(text);
+  } catch {
+    return { ok: false, error: "cache-invalid" };
+  }
+  if (!isPlainObject(root)) return { ok: false, error: "cache-invalid" };
+  if (readOwn(root, "format") !== CACHE_FORMAT) return { ok: false, error: "cache-outdated" };
+  if (!hasExactKeys(root, CACHE_ROOT_KEYS)) return { ok: false, error: "cache-invalid" };
+  const binding = readOwn(root, "binding");
+  const config = readOwn(root, "config");
+  if (!isStringBinding(binding)) return { ok: false, error: "cache-invalid" };
+  if (!isPlainObject(config) || exceedsDepth(config, 0)) return { ok: false, error: "cache-invalid" };
+  if (!matchesBinding(binding, current)) return { ok: false, error: "cache-mismatch" };
+  return { ok: true, value: config };
+}
+
+function bindingCopy(binding: CacheBinding): CacheBinding {
+  const { org, project, repo, path, branch } = binding;
+  return { org, project, repo, path, branch };
+}
+
+function writeCache(
+  shared: Record<string, unknown>,
+  binding: CacheBinding,
+  homeFn: unknown,
+  rawFs: unknown,
+): CacheWrite {
   const location = cacheLocation(homeFn);
   const fs = selectFs(rawFs);
   if (location === undefined || fs === undefined) return { ok: false, error: "cache-unavailable" };
   let tmp: string | undefined;
   try {
-    const data = `${JSON.stringify(sanitizeShared(shared), null, 2)}\n`;
+    const envelope = { format: CACHE_FORMAT, binding: bindingCopy(binding), config: sanitizeShared(shared) };
+    const data = `${JSON.stringify(envelope, null, 2)}\n`;
     if (Buffer.byteLength(data, "utf8") > MAX_CACHE_BYTES) return { ok: false, error: "cache-too-large" };
     fs.mkdirSync(location.dir, { recursive: true, mode: 0o700 });
     const candidate = nextTempPath(location.file);
@@ -1171,7 +1245,7 @@ function writeCache(shared: Record<string, unknown>, homeFn: unknown, rawFs: unk
   }
 }
 
-function readCache(homeFn: unknown, rawFs: unknown): CacheRead {
+function readCache(binding: CacheBinding, homeFn: unknown, rawFs: unknown): CacheRead {
   const location = cacheLocation(homeFn);
   const fs = selectFs(rawFs);
   if (location === undefined || fs === undefined) return { ok: false, error: "cache-unavailable" };
@@ -1185,8 +1259,7 @@ function readCache(homeFn: unknown, rawFs: unknown): CacheRead {
     return { ok: false, error: code === "ENOENT" ? "cache-missing" : "cache-unreadable" };
   }
   if (typeof text !== "string") return { ok: false, error: "cache-unreadable" };
-  const checked = validateShared(text);
-  return checked.ok ? checked : { ok: false, error: "cache-invalid" };
+  return checkCacheEnvelope(text, binding);
 }
 
 // ---- logging ----
@@ -1265,24 +1338,24 @@ async function executeHook(log: HookLog, options: unknown, config: unknown, deps
   }
   const { settings, missing, warnings } = resolveSettings(options, pickDeps(deps, ["env"]));
   for (const warning of warnings) log("warn", warning);
-  let remote: Acquired;
-  if (missing.length > 0) {
-    log("warn", `Remote config skipped: missing required settings: ${missing.join(", ")}.`);
-    remote = { ok: false, reason: "missing-settings" };
-  } else {
-    remote = await acquireRemote(settings, deps);
+  const binding = cacheBindingOf(settings);
+  if (missing.length > 0 || binding === undefined) {
+    if (missing.length > 0) log("warn", `Remote config skipped: missing required settings: ${missing.join(", ")}.`);
+    log("error", LOG_NO_SETTINGS);
+    return;
   }
+  const remote = await acquireRemote(settings, deps);
   const home = deps.homedir ?? homedir;
   let shared: Record<string, unknown>;
   let source: "remote" | "cache";
   if (remote.ok) {
     log("info", LOG_REMOTE);
-    const written = writeCache(remote.value, home, deps.fs);
+    const written = writeCache(remote.value, binding, home, deps.fs);
     if (!written.ok) log("warn", `Could not update the config cache (${written.error}).`);
     shared = remote.value;
     source = "remote";
   } else {
-    const cached = readCache(home, deps.fs);
+    const cached = readCache(binding, home, deps.fs);
     if (!cached.ok) {
       log(
         "error",

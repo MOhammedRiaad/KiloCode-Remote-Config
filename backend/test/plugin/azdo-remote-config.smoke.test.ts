@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import plugin, * as mod from "../../plugin/azdo-remote-config.ts";
@@ -47,6 +47,10 @@ test("default wiring in a child process: no settings means a skipped fetch and a
     }
     env.HOME = home;
     env.USERPROFILE = home;
+    const legacyFile = join(home, ".cache", "kilo-azdo", "remote-config.json");
+    mkdirSync(dirname(legacyFile), { recursive: true });
+    writeFileSync(legacyFile, '{"model":"legacy-cached"}', "utf8");
+    const legacyBytes = readFileSync(legacyFile);
     const script = [
       `const mod = await import(${JSON.stringify(pathToFileURL(PLUGIN_PATH).href)});`,
       "const logs = [];",
@@ -65,10 +69,10 @@ test("default wiring in a child process: no settings means a skipped fetch and a
       result.logs.map((l) => l.message),
       [
         "Remote config skipped: missing required settings: org, project, repo.",
-        "Remote config unavailable (missing-settings) and no usable cache (cache-missing); continuing with local config only.",
+        "Remote config unavailable (missing-settings) and no usable cache (cache-skipped); continuing with local config only.",
       ],
     );
-    assert.equal(existsSync(join(home, ".cache")), false);
+    assert.deepEqual(readFileSync(legacyFile), legacyBytes);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

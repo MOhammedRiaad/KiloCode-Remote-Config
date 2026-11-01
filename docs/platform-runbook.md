@@ -99,7 +99,7 @@ To roll out a model, provider or setting change to all engineers:
 
    See [Validating the shared config](user-guide.md#validating-the-shared-config-platform-engineers) for all validator rules and exit codes.
 3. Open a pull request targeting `main`, ensure the PR validation pipeline passes, obtain platform-team review, and merge.
-4. Engineers receive the updated configuration automatically on their next Kilo start. If Azure DevOps is unreachable at startup, the plugin falls back to `~/.cache/kilo-azdo/remote-config.json`.
+4. Engineers receive the updated configuration automatically on their next Kilo start. If Azure DevOps is unreachable at startup, the plugin falls back to `~/.cache/kilo-azdo/remote-config.json`, but only if that cache was saved for the same `org`, `project`, `repo`, `path` and `branch` the engineer has configured.
 
 ## Upgrading Kilo or the plugin
 

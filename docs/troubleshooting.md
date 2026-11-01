@@ -40,8 +40,11 @@ We recommend authenticating with `az login` via the Azure CLI so you do not need
 
 After every successful, validated fetch from Azure DevOps, the plugin writes the shared config to `~/.cache/kilo-azdo/remote-config.json` (under `%USERPROFILE%\.cache\kilo-azdo\remote-config.json` on Windows).
 
-- **When the cache is used**: the cache is read only when fetching or validating the remote config from Azure DevOps fails (for example, when you are offline or Azure DevOps is unreachable).
-- **Safe to delete**: `~/.cache/kilo-azdo/remote-config.json` stores only the shared configuration with unresolved `{env:...}` and `{file:...}` placeholders—it never contains your virtual key or any resolved secret. If you suspect a corrupt or stale cache (`cache-invalid` or `cache-unreadable`), delete `~/.cache/kilo-azdo/remote-config.json` and restart Kilo.
+- **When the cache is used**: the cache is read only when fetching or validating the remote config from Azure DevOps fails (for example, when you are offline or Azure DevOps is unreachable), and only if it was saved for your current `org`, `project`, `repo`, `path` and `branch` (exact, case-sensitive match).
+- **`cache-outdated`**: the cache was written by an older plugin version and has no settings binding, so it is not used. This happens once. Reconnect (fix whatever made the fetch fail, such as network or credentials) and restart Kilo; the next successful fetch rewrites the cache in the new format.
+- **`cache-mismatch`**: the cache was saved for different settings than the ones in use now (for example you changed `org`, `project`, `repo`, `path` or `branch`, or the case differs). It is not applied. Either correct the settings to the intended values, or reconnect so a successful fetch replaces the cache. Deleting the file also works.
+- **`cache-skipped`**: `org`, `project` or `repo` is missing, so the plugin did not try the cache or the network. It is logged together with a `Remote config skipped: missing required settings` warning that names the missing settings. Set them in the plugin options or `KILO_AZDO_*` variables (see [Plugin settings](user-guide.md#plugin-settings)) and restart Kilo.
+- **Safe to delete**: `~/.cache/kilo-azdo/remote-config.json` stores only the shared configuration with unresolved `{env:...}` and `{file:...}` placeholders—it never contains your virtual key, your PAT or any resolved secret (the file also records which `org`, `project`, `repo`, `path` and `branch` it belongs to). If you suspect a corrupt or stale cache (`cache-invalid` or `cache-unreadable`), delete `~/.cache/kilo-azdo/remote-config.json` and restart Kilo.
 
 ## Installer exit codes
 

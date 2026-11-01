@@ -1,6 +1,9 @@
 # Contract: `azdo-remote-config` plugin interface
 
-- Version: 0.7.0 (F-006, cycle-0008: `__internals.runConfigHook`, new section 2f, section 3 hook
+- Version: 0.8.0 (T-013, cycle-0019: section 2f cache file is a bound envelope (2f-C), cache applied
+  only on an exact settings match, missing settings no longer use the cache, new read codes
+  `cache-outdated` / `cache-mismatch` / `cache-skipped`; ADR-0018. No change to exports or
+  `__internals` keys; 0.7.0 was F-006, cycle-0008: `__internals.runConfigHook`, new section 2f, section 3 hook
   behaviour normative, section 5 cache and logs normative, trust boundary ADR-0009; 0.6.0 was F-005, cycle-0007: `__internals.fetchRemoteConfig`, new section 2e, section 2d
   amended (well-formed UTF-16 rule), sections 4 and 5 normative for the fetch; 0.5.0 was F-004,
   cycle-0006: `__internals.resolveSettings`, section 2d, section 4 now normative; 0.4.0 was F-003, cycle-0005: `__internals.mergeConfig`, section 2c; 0.3.1 was F-002
@@ -58,8 +61,9 @@ No other named exports: the runtime named exports are exactly `PLUGIN_ID`, `SUPP
 and `__internals` (plus `default`). No named export may be a function. Helpers inside
 `__internals` are module-local functions (not exported by name). Their helper types (e.g.
 `PlaceholderDeps`, `PlaceholderResult`, `Settings`, `SettingsDeps`, `SettingsResult`, `FetchDeps`,
-`FetchResult`, `AzRunner`, `HookDeps`, `CacheFs`, `SharedCheck`) and constants (e.g. `MAX_MERGE_DEPTH`, `DEFAULT_TIMEOUT_MS`,
-`MAX_RESPONSE_BYTES`, `AZ_TOKEN_ARGS`, `MAX_CACHE_BYTES`, `MAX_LOGGED_PLACEHOLDERS`) are module-local too
+`FetchResult`, `AzRunner`, `HookDeps`, `CacheFs`, `SharedCheck`, `CacheBinding`) and constants (e.g. `MAX_MERGE_DEPTH`, `DEFAULT_TIMEOUT_MS`,
+`MAX_RESPONSE_BYTES`, `AZ_TOKEN_ARGS`, `MAX_CACHE_BYTES`, `MAX_LOGGED_PLACEHOLDERS`, `CACHE_FORMAT`,
+`CACHE_BINDING_KEYS`) are module-local too
 and are not exported.
 
 Imports (FR-11, ADR-0001, ADR-0004): the plugin file may import only `node:` built-ins. Since
@@ -262,9 +266,9 @@ Access: `await __internals.fetchRemoteConfig(resolveSettings(opts).settings, { f
 | 8. Size | `content-length` header made of ASCII digits only and > 1048576 -> `too-large` without reading. Body read through `response.body.getReader()` (missing -> `bad-response`; non-`Uint8Array` chunk -> `bad-response`); running total > 1048576 -> reader cancelled, `too-large`. Read error -> `network` (`timeout` if the deadline fired). Cap applies before decoding and parsing. |
 | 9. Body | `TextDecoder("utf-8", { fatal: true })`; decode error, `JSON.parse` error, parsed value not record-like, or own `content` not a string -> `bad-response`. Else `{ ok: true, text: content }` (exact string, not trimmed, not parsed). |
 | Default runAz | `execFile` from `node:child_process`, never `shell: true`, options `{ timeout: timeoutMs, maxBuffer: 65536, windowsHide: true, encoding: "utf8", cwd: homedir() }`. POSIX: file `az`, args as given. Windows (`process.platform === "win32"`): file = own absolute `process.env.ComSpec` or `"cmd.exe"`, args `["/d", "/s", "/c", "az " + args.join(" ")]` (args are the constant `AZ_TOKEN_ARGS`; no input ever reaches the command line). Callback: no error -> `{ exitCode: 0, stdout }`; numeric `error.code` -> `{ exitCode: code, stdout: "" }`; other error -> `{ exitCode: null, stdout: "" }`. Wrapped so it never rejects with data. Not covered by tests (no real az). |
-| Wiring | Since F-006 called by `runConfigHook` (2f) when `missing` is empty; an error code is logged verbatim as `<reason>` (L-CACHE / L-NONE), then the cache fallback applies. |
+| Wiring | Since F-006 called by `runConfigHook` (2f) when `missing` is empty; an error code is logged verbatim as `<reason>` (L-CACHE / L-NONE), then the cache fallback applies (since 0.8.0 only on an exact binding match, 2f-C). |
 
-## 2f. `__internals.runConfigHook` (F-006, FR-6, FR-7, FR-9, FR-10, ADR-0008, ADR-0009)
+## 2f. `__internals.runConfigHook` (F-006, FR-6, FR-7, FR-9, FR-10, ADR-0008, ADR-0009; cache binding T-013, ADR-0018)
 
 ```ts
 interface CacheFs {                                       // module-local; methods called unbound
@@ -284,8 +288,19 @@ interface HookDeps {                                      // module-local; all o
   fs?: CacheFs;                                           // default: real node:fs sync functions
 }
 type SharedCheck = { ok: true; value: Record<string, unknown> } | { ok: false; error: "invalid-jsonc" | "invalid-shape" };
-const MAX_CACHE_BYTES = 2 * 1024 * 1024;                  // exactly 2 MiB allowed
+interface CacheBinding { org: string; project: string; repo: string; path: string; branch: string } // since 0.8.0
+const CACHE_FORMAT = "kilo-azdo-cache-v1";                // since 0.8.0
+const CACHE_BINDING_KEYS = ["org", "project", "repo", "path", "branch"] as const;  // since 0.8.0
+const MAX_CACHE_BYTES = 2 * 1024 * 1024;                  // exactly 2 MiB allowed (whole envelope)
 const MAX_LOGGED_PLACEHOLDERS = 20; const MAX_LOGGED_NAME_CHARS = 200;
+
+// Module-local cache helpers (since 0.8.0 signatures; not reachable from tests except through runConfigHook):
+function cacheBindingOf(settings: Settings): CacheBinding | undefined;  // undefined unless all five are strings
+function writeCache(shared: Record<string, unknown>, binding: CacheBinding, homeFn: unknown, rawFs: unknown):
+  { ok: true } | { ok: false; error: "cache-unavailable" | "cache-too-large" | "cache-write-failed" };
+function readCache(binding: CacheBinding, homeFn: unknown, rawFs: unknown):
+  { ok: true; value: Record<string, unknown> }
+  | { ok: false; error: "cache-unavailable" | "cache-missing" | "cache-unreadable" | "cache-invalid" | "cache-outdated" | "cache-mismatch" };
 
 async function runConfigHook(input: unknown, options: unknown, config: unknown, deps?: unknown): Promise<void>;
 ```
@@ -297,17 +312,46 @@ The default export's hook is exactly `(config) => runConfigHook(input, options, 
 |---|---|
 | Never rejects | For any arguments (including `null`, primitives, frozen or proxied objects, throwing / rejecting / hanging-logger fakes). Outer `try` / `catch` without binding -> L-UNEXPECTED. |
 | Deps | Read with `readOwn`; non-record-like `deps` -> `{}`. Absent key -> each helper's default. `homedir` present but not a function, or `fs` present but not record-like -> cache unavailable (never the real home / fs). A missing or non-function `fs` method -> that operation fails. `env`, `fetch`, `runAz`, `setTimeout`, `clearTimeout`, `readFile` passed through (each helper's own rules, 2b / 2d / 2e). Only non-`undefined` keys are passed on. |
-| Order | 0 logger; 1 `config` not a plain object -> L-BADCONFIG, return; 2 `resolveSettings(options, {env})`, each warning -> L-SET; 3 `missing` non-empty -> L-MISSING, reason `missing-settings`, **no fetch, no runAz**; else `fetchRemoteConfig(settings, {fetch, env, runAz, setTimeout, clearTimeout})`, then `validateShared(text)`; 4 remote ok -> L-REMOTE, write cache (failure -> L-CACHE-WRITE); otherwise read cache: ok -> L-CACHE, else L-NONE and return; 5 `resolvePlaceholders(shared, {env, homedir, readFile})`, unresolved -> L-UNRESOLVED; 6 transactional merge with `settings.mode` -> L-APPLIED or L-MERGE (ADR-0008 section 2). |
-| Reasons | `<reason>` = a `FetchErrorCode` (2e) \| `missing-settings` \| `invalid-jsonc` \| `invalid-shape`. |
+| Order | 0 logger; 1 `config` not a plain object -> L-BADCONFIG, return; 2 `resolveSettings(options, {env})`, each warning -> L-SET; `binding = cacheBindingOf(settings)`; 3 (since 0.8.0) `missing` non-empty or `binding === undefined` -> L-MISSING (only when `missing` is non-empty), then L-NONE with reason `missing-settings` and read code `cache-skipped`, return: **no fetch, no runAz, no cache read, no fs call**; else `fetchRemoteConfig(settings, {fetch, env, runAz, setTimeout, clearTimeout})`, then `validateShared(text)`; 4 remote ok -> L-REMOTE, `writeCache(shared, binding, ...)` (failure -> L-CACHE-WRITE); otherwise `readCache(binding, ...)`: ok -> L-CACHE, else L-NONE and return; 5 `resolvePlaceholders(shared, {env, homedir, readFile})`, unresolved -> L-UNRESOLVED; 6 transactional merge with `settings.mode` -> L-APPLIED or L-MERGE (ADR-0008 section 2, ADR-0018 section 5). |
+| Reasons | `<reason>` = a `FetchErrorCode` (2e) \| `missing-settings` \| `invalid-jsonc` \| `invalid-shape`. Since 0.8.0 `missing-settings` appears only in L-NONE (always with `cache-skipped`), never in L-CACHE. |
+| Missing settings (since 0.8.0) | The cache is **not** applied when `org`, `project` or `repo` is unset (no binding can be verified; PO decision cycle 0019). `config` stays unchanged; the hook resolves. Before 0.8.0 the cache was used. |
 | Validation | `validateShared(text)`: non-string or `parseJsonc` throws -> `invalid-jsonc`; root not a plain object, or a container at level >= 64 (root 0) -> `invalid-shape`. Applied to fetched text and to cache text alike. Invalid content is never cached, never merged. |
 | Cache path | `join(homedir(), ".cache", "kilo-azdo", "remote-config.json")`. `homedir` throws / non-string / empty / not `isAbsolute` -> `cache-unavailable`, no fs call. |
-| Cache content | `JSON.stringify(sanitizeShared(shared), null, 2) + "\n"` of the validated **unresolved** shared config (2c phase 1: no `apiKey`, no prototype keys, no top-level `$schema` / `plugin`). Never contains a resolved placeholder value. Serialised size > `MAX_CACHE_BYTES` (UTF-8 bytes) -> `cache-too-large`, not written. |
+| Cache content | Since 0.8.0 the bound envelope of 2f-C: `JSON.stringify({ format: CACHE_FORMAT, binding, config: sanitizeShared(shared) }, null, 2) + "\n"`, where `config` is the validated **unresolved** shared config (2c phase 1: no `apiKey`, no prototype keys, no top-level `$schema` / `plugin`). Never contains a resolved placeholder value, the PAT, an `Authorization` value or the az token. Serialised size of the whole envelope > `MAX_CACHE_BYTES` (UTF-8 bytes) -> `cache-too-large`, not written. |
 | Cache write | Only after a validated fetch. `mkdirSync(dir, {recursive: true, mode: 0o700})`; `writeFileSync(tmp, data, {encoding: "utf8", mode: 0o600, flag: "wx"})` with `tmp = file + "." + pid + "-" + Date.now() + "-" + counter + ".tmp"` in the same directory; `renameSync(tmp, file)`. Any throw -> guarded `unlinkSync(tmp)` (if the temp write was attempted), `cache-write-failed`. Never writes to `file` directly. POSIX mode 0600. |
-| Cache read | Only on the fallback path. `statSync(file)` throw with `code === "ENOENT"` -> `cache-missing`, other throw -> `cache-unreadable`; not `isFile()` or `size > MAX_CACHE_BYTES` -> `cache-unreadable`; `readFileSync(file, "utf8")` throw / non-string -> `cache-unreadable`; `validateShared` fails -> `cache-invalid`. The cache is never modified on this path. |
+| Cache read | Only on the fallback path with all settings present. `statSync(file)` throw with `code === "ENOENT"` -> `cache-missing`, other throw -> `cache-unreadable`; not `isFile()` or `size > MAX_CACHE_BYTES` -> `cache-unreadable`; `readFileSync(file, "utf8")` throw / non-string -> `cache-unreadable`; then (since 0.8.0) the envelope checks and binding comparison of 2f-C -> `cache-invalid` / `cache-outdated` / `cache-mismatch`. The cache is never modified, deleted or rewritten on this path, whatever the result. |
 | Merge | `applyShared(config, resolved, settings.mode)`: sanitize, journaled phase-2 merge, on any throw roll back in reverse (`Reflect.deleteProperty` for new keys, `Reflect.defineProperty(previous)` otherwise). Result: `config` is the same reference and is either deep-equal to its original or fully merged (frozen / sealed / non-extensible / non-configurable targets). |
 | Logger | `input.client.app.log` read with ordinary property access in `try` (SDK class instances: `log` may be a prototype method); called as `log.call(app, { body: { service: "azdo-remote-config", level, message } })`; never awaited; sync throw caught; a returned thenable gets a rejection handler. Missing / non-function -> silent. **No `extra`**, no other argument. |
 | Log text | Only the fixed messages of section 2f-L below. Never a value, `err.message`, URL, path, token, PAT, or the `settings` object. |
 | Server | `server(input, options)` does no I/O and no logging; returns `{ config }`. |
+
+### 2f-C. Cache file format and binding (since 0.8.0, T-013, ADR-0018)
+
+File content (UTF-8, LF, 2-space indent, trailing newline; keys in this order):
+
+```json
+{
+  "format": "kilo-azdo-cache-v1",
+  "binding": { "org": "acme", "project": "proj", "repo": "cfg", "path": "/kilo.jsonc", "branch": "main" },
+  "config": { "model": "azure/gpt-5", "small_model": "{env:KILO_SMALL_MODEL}" }
+}
+```
+
+(Illustrative; real output is `JSON.stringify(envelope, null, 2)`, so `binding` and `config` span
+several lines. `config` is the sanitised, unresolved shared config.)
+
+| Aspect | Contract |
+|---|---|
+| `format` | Exactly `CACHE_FORMAT` = `"kilo-azdo-cache-v1"`. |
+| `binding` | Built field by field from the current run's `settings` (the values `resolveSettings` returned): `{ org, project, repo, path, branch }`, keys in that order, all strings. Never built by spreading or serialising `settings`. Never contains `mode`, `timeoutMs` or `pat`. |
+| `config` | `sanitizeShared(shared)` of the validated fetched config (unchanged content rule of 2f "Cache content"). |
+| Never in the file | The PAT (option `pat`, `KILO_AZDO_PAT`, `AZDO_PAT`, `AZURE_DEVOPS_EXT_PAT`), any `Authorization` header value (Basic or Bearer), the az access token, resolved placeholder values, `apiKey` values. |
+| Read checks, in order (after stat / size / read of 2f "Cache read") | (4) `parseJsonc(text)` throws or root not a plain object -> `cache-invalid`. (5) root has no own `format`, or its value is not exactly `CACHE_FORMAT` -> `cache-outdated` (covers every pre-0.8.0 cache: a bare shared config). (6) root own enumerable keys not exactly {`format`, `binding`, `config`} -> `cache-invalid`. (7) `binding` not a plain object, or its own enumerable keys not exactly {`org`, `project`, `repo`, `path`, `branch`}, or any of those values not a `string` -> `cache-invalid`. (8) `config` not a plain object, or a container at level >= 64 measured from `config` as level 0 -> `cache-invalid`. (9) any field not equal (comparison rule below) -> `cache-mismatch`. Otherwise the cached `config` is used. Key order is not significant on read. |
+| Comparison rule | For each of the five fields: `stored[field] === current[field]` (strict string equality on UTF-16 code units). `current` = the values as normalised by `resolveSettings` (2d): trimmed, `path` with the leading `/` added, defaults `path` `/kilo.jsonc` and `branch` `main` applied. **Case-sensitive**; no Unicode normalisation; stored values are never trimmed or transformed. Examples: option `org: " acme "` vs stored `"acme"` -> match; `path: "kilo.jsonc"` vs stored `"/kilo.jsonc"` -> match; branch unset vs stored `"main"` -> match; `org: "ACME"` vs stored `"acme"` -> `cache-mismatch`; stored `" acme"` vs current `"acme"` -> `cache-mismatch`. |
+| Missing settings | No binding can be built from missing required settings: the cache is not read at all (read code `cache-skipped`, produced by the hook, never by `readCache`). |
+| Upgrade | A pre-0.8.0 cache is unusable once (`cache-outdated`) and is overwritten in this format by the next validated fetch. |
+| Secret safety | Stored and current binding values are only compared. They never appear in a log message, a result code, a path or a URL. |
+| Not an integrity control | The binding stops reuse of a stale cache from another source. It does not authenticate the file (ADR-0009 section 3; content is still validated as untrusted). |
 
 ### 2f-L. Log messages (service `azdo-remote-config`)
 
@@ -317,8 +361,8 @@ The default export's hook is exactly `(config) => runConfigHook(input, options, 
 | L-MISSING | warn | `Remote config skipped: missing required settings: <names>.` (`missing.join(", ")`) |
 | L-REMOTE | info | `Loaded shared config from Azure DevOps.` |
 | L-CACHE-WRITE | warn | `Could not update the config cache (<writeCode>).` (`cache-unavailable` \| `cache-too-large` \| `cache-write-failed`) |
-| L-CACHE | warn | `Remote config unavailable (<reason>); using cached config.` |
-| L-NONE | error | `Remote config unavailable (<reason>) and no usable cache (<readCode>); continuing with local config only.` (`cache-unavailable` \| `cache-missing` \| `cache-unreadable` \| `cache-invalid`) |
+| L-CACHE | warn | `Remote config unavailable (<reason>); using cached config.` (since 0.8.0 `<reason>` is never `missing-settings`) |
+| L-NONE | error | `Remote config unavailable (<reason>) and no usable cache (<readCode>); continuing with local config only.` (`cache-unavailable` \| `cache-missing` \| `cache-unreadable` \| `cache-invalid` \| `cache-outdated` \| `cache-mismatch` \| `cache-skipped`; the last three since 0.8.0) |
 | L-UNRESOLVED | warn | `Unresolved placeholders: <names>.` |
 | L-APPLIED | info | `Applied shared config from <remote\|cache> in <defaults\|enforce> mode.` |
 | L-MERGE | error | `Could not apply the shared config; local config left unchanged.` |
@@ -332,7 +376,9 @@ replaced by `?`, cut to 200 code units; at most 20 entries joined with `", "`, t
 Example sequences:
 - success, defaults: L-REMOTE, L-APPLIED (`Applied shared config from remote in defaults mode.`)
 - fetch `timeout`, valid cache: L-CACHE (`Remote config unavailable (timeout); using cached config.`), L-APPLIED (`... from cache ...`)
-- missing `org`, no cache: L-MISSING (`Remote config skipped: missing required settings: org.`), L-NONE (`Remote config unavailable (missing-settings) and no usable cache (cache-missing); continuing with local config only.`)
+- missing `org`, with or without a cache (since 0.8.0): L-MISSING (`Remote config skipped: missing required settings: org.`), L-NONE (`Remote config unavailable (missing-settings) and no usable cache (cache-skipped); continuing with local config only.`); no fs call
+- fetch `network`, cache written for another repo or branch: L-NONE (`Remote config unavailable (network) and no usable cache (cache-mismatch); continuing with local config only.`); `config` unchanged, cache file unchanged
+- fetch `network`, cache from a plugin before 0.8.0: L-NONE (`... no usable cache (cache-outdated) ...`)
 
 ## 3. Behaviour contract
 
@@ -377,7 +423,9 @@ Example sequences:
   command line on Windows), cwd = home directory, bounded by the same deadline.
 - **Cache file** `~/.cache/kilo-azdo/remote-config.json` (FR-7), normative since 0.7.0: section 2f
   (sanitised unresolved shared config, dir 0700, file 0600 on POSIX, temp file + rename, read and
-  validated only on the fallback path).
+  validated only on the fallback path). Since 0.8.0 a bound envelope (section 2f-C): applied only
+  when its org / project / repo / path / branch equal the current settings exactly; never contains
+  the PAT or any token.
 - **Logs** only via `input.client.app.log` with `service: "azdo-remote-config"`, normative since
   0.7.0: fixed messages of section 2f-L, no `extra`, fire and forget; never secret values (FR-9).
 - **Trust boundary** (ADR-0009): settings only from the global Kilo config's plugin options and

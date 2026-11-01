@@ -17,7 +17,8 @@ Supported Kilo version range (pinned): `>=7.2.0 <8.0.0`.
 1. Settings are read (see "Plugin settings"). If `org`, `project` or `repo` is missing, no request is made.
 2. The shared file is fetched from Azure DevOps (see "Fetching the shared config") and validated: it must
    be valid JSONC with an object at the top and be nested fewer than 64 levels.
-3. A valid result is saved to the cache. If the fetch or validation fails, the cache is used instead.
+3. A valid result is saved to the cache. If the fetch or validation fails, the cache is used instead,
+   but only if it was saved for the same settings (see "Cache").
 4. Placeholders are resolved and the shared config is merged into your Kilo config in `defaults` or
    `enforce` mode. The merge is all or nothing: on an error your config is left unchanged.
 
@@ -30,6 +31,22 @@ with mode 0700 and the file with mode 0600 on POSIX systems, and it is replaced 
 then rename). It holds the last valid shared config, still containing placeholders such as `{env:NAME}`
 (never their values) and without any `apiKey`. It is written only after a successful, validated fetch, and
 is at most 2 MiB. It is read only when the fetch fails. To reset it, delete the file.
+
+The cache is bound to the settings that produced it. The file is an envelope with a format marker
+(`kilo-azdo-cache-v1`), a binding of the five fields `org`, `project`, `repo`, `path` and `branch`, and the
+config. On a failed fetch the cache is applied only if all five binding fields exactly match your current
+settings (case-sensitive, after the values are normalised as described in "Plugin settings"). `mode`,
+`timeoutMs` and `pat` are never stored in the cache. If you change `org`, `project`, `repo`, `path` or
+`branch`, the old cache is not used for the new settings; it is replaced after the next successful fetch.
+
+If `org`, `project` or `repo` is missing, the cache is not used at all: the plugin logs the missing-settings
+warning and the `cache-skipped` error, and makes no request.
+
+A cache written by an older version of the plugin has no binding. It is unusable once (`cache-outdated`)
+until the next successful fetch rewrites it in the new format.
+
+The binding only keeps a cache from being applied to the wrong settings. It is not an integrity check: it
+does not detect someone editing the file.
 
 ## Trust boundary
 
@@ -54,7 +71,8 @@ never contain setting values, URLs, paths, PATs or tokens. `<reason>` is a fetch
 | warn | `Could not update the config cache (<code>).` | Code is `cache-unavailable`, `cache-too-large` or `cache-write-failed`. The fetched config is still applied. |
 | warn | `Unresolved placeholders: <names>.` | `{env:}` or `{file:}` entries that could not be resolved (names only). |
 | warn | (a setting warning) | An invalid option or variable was ignored; see "Plugin settings". |
-| error | `Remote config unavailable (<reason>) and no usable cache (<code>); continuing with local config only.` | Code is `cache-unavailable`, `cache-missing`, `cache-unreadable` or `cache-invalid`. Fix the cause of `<reason>`. |
+| error | `Remote config unavailable (<reason>) and no usable cache (<code>); continuing with local config only.` | Code is `cache-unavailable`, `cache-missing`, `cache-unreadable`, `cache-invalid`, `cache-outdated` or `cache-mismatch`. Fix the cause of `<reason>`. See [Troubleshooting](troubleshooting.md#stale-or-missing-shared-config-and-cache). |
+| error | `Remote config unavailable (missing-settings) and no usable cache (cache-skipped); continuing with local config only.` | `org`, `project` or `repo` is missing, so the cache was not tried. Logged together with the missing-settings warning above. Set the named settings. |
 | error | `Could not apply the shared config; local config left unchanged.` | The merge failed and was rolled back. |
 | error | `Shared config not applied: the Kilo config is not an object.` | Unexpected Kilo config. |
 | error | `Remote config failed unexpectedly; continuing with local config only.` | Internal error, caught. |

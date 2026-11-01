@@ -83,6 +83,12 @@ POSIX, atomic replace, ADR-0008). Only the user (or something already running as
 write it. It is still validated exactly like fetched content, because it may be corrupt, truncated
 by an old version, or edited by hand.
 
+Since ADR-0018 (cycle-0019, T-013) the file also records the non-secret settings it was fetched
+with (org, project, repo, path, branch) and is applied only on an exact match with the current
+settings. That binding prevents reuse of a stale cache from another source; it is not an integrity
+control (anything that can write the user's home can forge it), so the content validation above
+still applies in full.
+
 ## Consequences
 
 - The security engineer and docs writer have a stated boundary: configure the plugin only in the

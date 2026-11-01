@@ -1,6 +1,8 @@
 # Contract: end-to-end startup harness (TEST ONLY)
 
-- Version: 1.0.0 (cycle-0016, F-014). Decision record: ADR-0016.
+- Version: 1.0.1 (cycle-0019, T-013: `expectedCache` returns the bound cache envelope of
+  plugin-interface 0.8.0 section 2f-C, `DEFAULT_BINDING` added; ADR-0018). 1.0.0 was cycle-0016,
+  F-014. Decision record: ADR-0016.
 - Files: `backend/test/e2e/fixtures/kilo-start-simulator.ts` (simulator CLI),
   `backend/test/e2e/helpers.ts` (harness API), `backend/test/e2e/startup.test.ts` (suite),
   `backend/test/installer/fixtures/fake-network.ts` (preload; `auth` answer added in this version).
@@ -97,6 +99,12 @@ export interface StartRun {
 export function runStart(sb: E2eSandbox, scenario: FakeScenario, env?: { AZDO_PAT?: string }): StartRun;
 export function probeFetch(sb: E2eSandbox, scenario: FakeScenario, url: string): { status: number | null; stdout: string; stderr: string };
 export function assertNoLeaks(label: string, text: string, secrets: readonly string[]): void;
+// Since 1.0.1 (cycle-0019, T-013): the expected bound cache envelope (plugin-interface.md 2f-C).
+export const DEFAULT_BINDING: { org: "acme"; project: "proj"; repo: "cfg"; path: "/kilo.jsonc"; branch: "main" };
+export function expectedCache(
+  shared: Record<string, unknown>,
+  binding?: { org: string; project: string; repo: string; path: string; branch: string }, // default DEFAULT_BINDING
+): Record<string, unknown>; // { format: "kilo-azdo-cache-v1", binding: { ...binding }, config: <shared without apiKey, $schema, plugin> }
 ```
 
 - `runStart` numbers starts per sandbox (`start-1`, `start-2`, ...): scenario file

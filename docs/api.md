@@ -286,16 +286,34 @@ Signature: `runConfigHook(input, options, config, deps?): Promise<void>`. It nev
 Order of work:
 1. `config` must be a plain object, otherwise log and return.
 2. `resolveSettings(options, { env })`; each warning is logged.
-3. If required settings are missing (`org`, `project`, `repo`), log and skip the fetch (no network, no `az`).
+3. If required settings are missing (`org`, `project`, `repo`), log the missing-settings warning and the
+   `cache-skipped` error, and return with `config` untouched. No network, no `az`, no file system access:
+   the cache is not used.
 4. `fetchRemoteConfig`, then validate the text (valid JSONC, root is an object, nesting below 64 levels).
-   On success, write the cache (a failure to write only logs a warning).
-5. If the fetch or validation fails, read and validate the cache. If there is no usable cache, log and
+   On success, write the cache envelope bound to the current settings (a failure to write only logs a warning).
+5. If the fetch or validation fails, read and validate the cache, and apply it only if its binding equals the
+   current settings. If there is no usable cache (including `cache-outdated` and `cache-mismatch`), log and
    return with `config` untouched.
 6. Resolve placeholders, then merge into `config` in `settings.mode`, transactionally: on any error `config`
    is rolled back, so it is either unchanged or fully merged. Same object reference.
 
-Cache: `~/.cache/kilo-azdo/remote-config.json`. Content is the sanitised, unresolved shared config
-(no `apiKey`, no top-level `$schema` or `plugin`, no resolved placeholder values), pretty-printed JSON, at most
+Cache: `~/.cache/kilo-azdo/remote-config.json`. Content is an envelope (contract 0.8.0 section 2f-C, ADR-0018):
+
+```json
+{
+  "format": "kilo-azdo-cache-v1",
+  "binding": { "org": "acme", "project": "p", "repo": "cfg", "path": "/kilo.jsonc", "branch": "main" },
+  "config": { }
+}
+```
+
+`config` is the sanitised, unresolved shared config
+(no `apiKey`, no top-level `$schema` or `plugin`, no resolved placeholder values). The cache is applied on a failed
+fetch only if all five `binding` fields exactly equal the current resolved settings (case-sensitive, after
+`resolveSettings` normalisation). `mode`, `timeoutMs` and `pat` are never stored. A file without the
+`kilo-azdo-cache-v1` format (the old format) is unusable (`cache-outdated`) until the next successful fetch rewrites it;
+a binding that differs is `cache-mismatch`. Both are reported in the "no usable cache" error line with fixed text and
+never log setting values. The binding is not an integrity check (ADR-0009 section 3). The file is pretty-printed JSON, at most
 2 MiB. Written only after a validated fetch, to a temp file in the same directory and then renamed; directory mode
 0700 and file mode 0600 on POSIX. Read only on the fallback path and never modified there.
 
@@ -319,4 +337,4 @@ await __internals.runConfigHook(
 Trust boundary (ADR-0009): settings come only from the global plugin options, the process environment and
 `az`; the fetched and cached content is treated as untrusted and validated before it is cached or merged.
 
-Authoritative contract: `docs/architecture/contracts/plugin-interface.md` (v0.7.0), ADR-0008 (`docs/architecture/ADR-0008-config-hook-wiring-cache-logging.md`), ADR-0009 (`docs/architecture/ADR-0009-settings-and-content-trust-boundary.md`), ADR-0007 (`docs/architecture/ADR-0007-azdo-fetch-and-auth.md`), ADR-0006 (`docs/architecture/ADR-0006-settings-resolution.md`), ADR-0002, ADR-0003 (`docs/architecture/ADR-0003-jsonc-parser.md`), ADR-0004 (`docs/architecture/ADR-0004-placeholder-resolution.md`) and ADR-0005 (`docs/architecture/ADR-0005-config-merge.md`).
+Authoritative contract: `docs/architecture/contracts/plugin-interface.md` (v0.8.0), ADR-0018 (cache binding), ADR-0008 (`docs/architecture/ADR-0008-config-hook-wiring-cache-logging.md`), ADR-0009 (`docs/architecture/ADR-0009-settings-and-content-trust-boundary.md`), ADR-0007 (`docs/architecture/ADR-0007-azdo-fetch-and-auth.md`), ADR-0006 (`docs/architecture/ADR-0006-settings-resolution.md`), ADR-0002, ADR-0003 (`docs/architecture/ADR-0003-jsonc-parser.md`), ADR-0004 (`docs/architecture/ADR-0004-placeholder-resolution.md`) and ADR-0005 (`docs/architecture/ADR-0005-config-merge.md`).

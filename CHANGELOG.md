@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.14.1] - 2026-11-01
+
+### Security
+- T-013: the cache is now bound to the settings that produced it (org, project, repo, path, branch) using the envelope format `kilo-azdo-cache-v1`; a cache written for other settings is never served.
+
+### Changed
+- T-013: BEHAVIOUR CHANGE: a missing org, project or repo no longer falls back to the cache.
+- T-013: UPGRADE NOTE: existing caches are unusable once (`cache-outdated`) until the next successful fetch rewrites them in the new envelope.
+- T-013: new codes `cache-outdated`, `cache-mismatch` and `cache-skipped`; plugin contract bumped to 0.8.0.
+
 ## [0.14.0] - 2026-10-31
 
 ### Added

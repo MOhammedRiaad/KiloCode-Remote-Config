@@ -1,5 +1,6 @@
 # ADR-0008: Config hook wiring, cache, fallback, logging and never-crash (`runConfigHook`)
-- Status: accepted
+- Status: accepted; sections 2 (missing-settings fallback), 4 (cache content and read) and 5
+  (read codes) amended by ADR-0018 (cycle-0019, T-013: cache bound to its settings)
 - Date: 2026-10-31
 - Cycle / item: cycle-0008 / F-006
 

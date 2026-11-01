@@ -1,6 +1,6 @@
 # Architecture overview - Kilo Shared Config
 
-Last updated: cycle-0018 (F-016). Stack: ADR-0001. Plugin module shape: ADR-0002.
+Last updated: cycle-0019 (T-013). Stack: ADR-0001. Plugin module shape: ADR-0002.
 JSONC parser: ADR-0003. Placeholder resolution: ADR-0004. Config merge: ADR-0005.
 Settings resolution: ADR-0006. Azure DevOps fetch and auth: ADR-0007.
 Hook wiring, cache, logging, never-crash: ADR-0008. Trust boundary: ADR-0009.
@@ -10,6 +10,7 @@ Windows bootstrap installer (install.ps1): ADR-0014.
 Shared config repo template, PR pipeline and branch-policy script: ADR-0015.
 End-to-end simulated startup harness (test only): ADR-0016.
 User/operator docs structure and the automated docs check: ADR-0017.
+Config cache bound to the settings that produced it: ADR-0018.
 Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`,
 `contracts/personal-config-template.md`, `contracts/installer-cli.md`,
 `contracts/shared-config-repo.md`, `contracts/e2e-harness.md` (test only),
@@ -20,7 +21,7 @@ Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`,
 | ID | Component | Source in this repo | Deployed to | Status |
 |---|---|---|---|---|
 | C1 | Shared config repo: example config + validation (PR gate) | `backend/shared-config/` (kilo.jsonc, azure-pipelines.yml, set-branch-policies.sh, package.json, .gitattributes), `backend/validator/`, `backend/tools/assemble-shared-repo.ts` | Azure DevOps `kilo-config` repo, its PR pipeline and `main` branch policies | **example config + validator CLI (F-007)** + **repo template, assemble tool, PR pipeline, branch-policy script (F-008, ADR-0015)** |
-| C2 | Remote config plugin (single file, FR-11) | `backend/plugin/azdo-remote-config.ts` | `~/.config/kilo/azdo/azdo-remote-config.ts` | **stub (T-001) + JSONC parser (F-001) + placeholder resolver (F-002) + merge (F-003) + settings resolution (F-004) + AzDO fetch/auth (F-005) + hook wiring, cache, fallback, logging (F-006)** |
+| C2 | Remote config plugin (single file, FR-11) | `backend/plugin/azdo-remote-config.ts` | `~/.config/kilo/azdo/azdo-remote-config.ts` | **stub (T-001) + JSONC parser (F-001) + placeholder resolver (F-002) + merge (F-003) + settings resolution (F-004) + AzDO fetch/auth (F-005) + hook wiring, cache, fallback, logging (F-006) + cache bound to settings (T-013, ADR-0018)** |
 | C3 | Personal config template | `backend/personal-config/kilo.jsonc` | `~/.config/kilo/kilo.jsonc` | **template + tests (F-009)**; copied by installers (F-010/F-011) |
 | C4 | Bifrost gateway | external, not in repo | - | external |
 | C5 | Bootstrap installer | `backend/installer/` (`install.sh` + `install.ps1` front ends; `install-helper.ts` + `personal-config-edit.ts` + `smoke.ts`) | engineer runs it from a checkout that keeps `installer/`, `plugin/`, `personal-config/` side by side | **install.sh (F-010, ADR-0012) + smoke test (F-019, ADR-0013) + install.ps1 (F-011, ADR-0014)** |
@@ -39,14 +40,19 @@ Kilo start
            settings (ADR-0006: opts > KILO_AZDO_* env > defaults; trusted layers only, ADR-0009;
            returns {settings, missing, warnings}; pat non-enumerable; never throws)
            -> each warning logged at warn
-           -> missing org/project/repo: log names only, skip fetch (no az), go to cache fallback
+           -> missing org/project/repo: log names only, skip fetch (no az) AND skip the cache
+              (no binding to verify; log error "... (missing-settings) ... (cache-skipped) ..."), stop
            -> fetchRemoteConfig (ADR-0007): PAT (Basic) | az token (Bearer); fixed host; one
               deadline; 1 MiB cap; returns {ok,text} or a fixed error code; never throws
            -> validateShared: parseJsonc, root plain object, depth < 64 (untrusted, ADR-0009)
               ok:   log info "Loaded shared config from Azure DevOps."
-                    write cache ~/.cache/kilo-azdo/remote-config.json = sanitised, UNRESOLVED
-                    shared config (dir 0700, file 0600, temp file "wx" + rename; 2 MiB cap)
-              fail: read cache (stat regular file <= 2 MiB, read, validateShared)
+                    write cache ~/.cache/kilo-azdo/remote-config.json = envelope {format
+                    "kilo-azdo-cache-v1", binding {org,project,repo,path,branch}, config =
+                    sanitised, UNRESOLVED shared config} (no PAT/token; dir 0700, file 0600,
+                    temp file "wx" + rename; 2 MiB cap) (ADR-0018)
+              fail: read cache (stat regular file <= 2 MiB, read, parse, format -> else
+                    cache-outdated, envelope shape -> else cache-invalid, config depth,
+                    binding === current settings exactly -> else cache-mismatch)
                     ok   -> log warn "Remote config unavailable (<code>); using cached config."
                     none -> log error "... no usable cache (<code>) ...", config untouched, stop
            -> resolvePlaceholders {env:}/{file:} (ADR-0004) every run; log unresolved NAMES only
