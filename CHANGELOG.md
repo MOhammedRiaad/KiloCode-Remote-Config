@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.16.0] - 2026-11-01
+
+BEHAVIOUR CHANGE: a rejected plugin fetch used to be reported with the code `network`; it is now reported as `network-unreachable`. This affects the log/diagnostic code only. Cache fallback behaviour is unchanged. Anything matching on the old `network` code must be updated.
+
+### Added
+- F-021: the plugin classifies firewall and network failures of its single authenticated remote fetch, with new codes `network-unreachable` and `network-blocked`.
+- F-021: fixed network and credentials hint log lines give an actionable next step.
+- F-021: ADR-0020.
+
+### Changed
+- F-021: plugin contract bumped to 0.9.0; installer-cli bumped to 1.3.1.
+- F-021: BEHAVIOUR CHANGE: a rejected fetch is now `network-unreachable` instead of `network` (log/diagnostic code only; cache fallback unchanged).
+- F-022 (docs only): plugin network classification codes and hints documented.
+
 ## [0.15.0] - 2026-11-01
 
 ### Added

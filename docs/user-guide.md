@@ -68,6 +68,8 @@ never contain setting values, URLs, paths, PATs or tokens. `<reason>` is a fetch
 | info | `Applied shared config from <remote or cache> in <defaults or enforce> mode.` | The merge finished. |
 | warn | `Remote config skipped: missing required settings: <names>.` | Set the named settings (`org`, `project`, `repo`). |
 | warn | `Remote config unavailable (<reason>); using cached config.` | Fetch failed; the cache was used. For example `http-401` means a bad or expired PAT. |
+| warn | `Azure DevOps could not be reached from this network: connect to the corporate VPN or ask the platform team to allow your public IP address, then restart Kilo.` | Network hint. Logged once, right after the `Remote config unavailable (<reason>)` line, when `<reason>` is `network-unreachable`, `network-blocked` or `timeout`. |
+| warn | `Azure DevOps credentials are missing or were rejected: run az login or replace your PAT and check your access to the shared config repository; if your organisation restricts Azure DevOps by IP address, also connect to the corporate VPN.` | Credentials hint. Logged once, right after the `Remote config unavailable (<reason>)` line, when `<reason>` is `http-401`, `http-403` or `auth-unavailable`. |
 | warn | `Could not update the config cache (<code>).` | Code is `cache-unavailable`, `cache-too-large` or `cache-write-failed`. The fetched config is still applied. |
 | warn | `Unresolved placeholders: <names>.` | `{env:}` or `{file:}` entries that could not be resolved (names only). |
 | warn | (a setting warning) | An invalid option or variable was ignored; see "Plugin settings". |
@@ -189,8 +191,25 @@ Limits: the whole operation (az, request and reading the body) must finish withi
 (default 5000 ms), and the response body may be at most 1 MiB.
 
 Failures are reported as one fixed code, never with values, URLs or secrets: `invalid-settings`,
-`auth-unavailable`, `timeout`, `too-large`, `bad-response`, `network`, or `http-<status>` (for
-example `http-401`). See [API](api.md) for details.
+`auth-unavailable`, `network-unreachable`, `network-blocked`, `timeout`, `too-large`, `bad-response`,
+`network`, or `http-<status>` (for example `http-401`). See [API](api.md) for details. The plugin makes
+one authenticated request per start and does not probe the network first.
+
+| Code | Meaning |
+|------|---------|
+| `network-unreachable` | The request failed before the deadline: DNS failure, refused or reset connection, or private DNS that only resolves on the VPN. |
+| `network-blocked` | HTTP 407, or HTTP 403 whose `Content-Type` is not JSON (for example an HTML firewall, WAF or Front Door block page). |
+| `timeout` | The deadline was reached. A firewall that silently drops packets shows up as a timeout. |
+| `http-401` | Azure DevOps rejected the credential. |
+| `http-403` | A JSON 403: a real Azure DevOps permission or IP-policy answer. |
+| `network` | Catch-all: no usable `fetch`, an internal error or a failed body read. Before this version every rejected request was reported as `network`. |
+
+After the `Remote config unavailable (<reason>) ...` error line the plugin logs at most one fixed warn
+hint (exact texts in the log table above): the network hint for `network-unreachable`, `network-blocked`
+and `timeout`; the credentials hint for `http-401`, `http-403` and `auth-unavailable`; no hint for any
+other reason. When a valid cache exists, the order is: the `using cached config` warn, the hint, then the
+`Applied shared config` info line. Kilo keeps using the bound cached config while the network is blocked.
+See [Troubleshooting](troubleshooting.md#plugin-cannot-reach-azure-devops-network-codes-and-hints).
 
 ## Validating the shared config (platform engineers)
 

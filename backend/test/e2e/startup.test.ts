@@ -51,6 +51,9 @@ const bifrostAuth = (k: string): FakeAnswer => ({
   answer: { status: 200, body: '{"object":"list","data":[]}' },
 });
 const rec = (level: string, message: string) => ({ body: { service: SVC, level, message } });
+// The exact hint text of contract 0.9.0 section 2f-L; repeated here on purpose (not exported by the plugin).
+const HINT_NETWORK =
+  "Azure DevOps could not be reached from this network: connect to the corporate VPN or ask the platform team to allow your public IP address, then restart Kilo.";
 
 // Parsed JSON is untyped by nature; the tests navigate it by path.
 type Obj = Record<string, any>;
@@ -158,15 +161,16 @@ test("T3 AC-3: AzDO unreachable with a cache falls back to the cache", OPTS, () 
     assert.equal(install(sb).status, 0);
     const first = start(sb, { azdo: azdoOk(sharedConfigText()) });
     const cacheBytes = hex(sb.cacheFile);
-    const cases: [FakeAnswer, string][] = [
-      [{ mode: "throw", message: THROW_CANARY }, "network"],
-      [{ status: 500, body: BODY_CANARY }, "http-500"],
+    const cases: [FakeAnswer, string, boolean][] = [
+      [{ mode: "throw", message: THROW_CANARY }, "network-unreachable", true],
+      [{ status: 500, body: BODY_CANARY }, "http-500", false],
     ];
-    for (const [azdo, reason] of cases) {
+    for (const [azdo, reason, hinted] of cases) {
       const run = start(sb, { azdo });
       assert.deepEqual(run.result.config, first.result.config);
       assert.deepEqual(run.result.logs, [
         rec("warn", `Remote config unavailable (${reason}); using cached config.`),
+        ...(hinted ? [rec("warn", HINT_NETWORK)] : []),
         rec("info", "Applied shared config from cache in defaults mode."),
       ]);
       assert.equal(hex(sb.cacheFile), cacheBytes);
@@ -184,8 +188,9 @@ test("T4 AC-4/FR-10: AzDO unreachable without a cache keeps local config", OPTS,
     assert.deepEqual(run.result.logs, [
       rec(
         "error",
-        "Remote config unavailable (network) and no usable cache (cache-missing); continuing with local config only.",
+        "Remote config unavailable (network-unreachable) and no usable cache (cache-missing); continuing with local config only.",
       ),
+      rec("warn", HINT_NETWORK),
     ]);
     assert.equal(existsSync(sb.cacheFile), false);
   });
@@ -204,8 +209,9 @@ test("T3b T-013: a cache from another branch is not applied", OPTS, () => {
     assert.deepEqual(offline.result.logs, [
       rec(
         "error",
-        "Remote config unavailable (network) and no usable cache (cache-mismatch); continuing with local config only.",
+        "Remote config unavailable (network-unreachable) and no usable cache (cache-mismatch); continuing with local config only.",
       ),
+      rec("warn", HINT_NETWORK),
     ]);
     assert.equal(hex(sb.cacheFile), cacheBytes);
     const logsText = JSON.stringify(offline.result.logs);

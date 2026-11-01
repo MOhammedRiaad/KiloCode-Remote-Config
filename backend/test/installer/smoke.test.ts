@@ -698,7 +698,7 @@ test("runSmoke enforces KILO_AZDO_TIMEOUT_MS deadline on hanging authenticated A
   assertNoLeak(r2);
 });
 
-test("runSmoke maps throwing authenticated fetch to network without leaking error messages", async () => {
+test("runSmoke maps throwing authenticated fetch to network-unreachable (azdo) and network (bifrost) without leaking error messages", async () => {
   const azdoThrow = makeFetch(({ url }) => {
     if (isProbeUrl(url)) return new Response("", { status: 404 });
     throw new Error(`${ERR_CANARY} ${PAT}`);
@@ -706,7 +706,7 @@ test("runSmoke maps throwing authenticated fetch to network without leaking erro
   const r1 = await runSmoke(VALUES, KEY, { env: { AZDO_PAT: PAT }, fetch: azdoThrow.fn });
   assert.deepEqual(r1, {
     network: PASS_NET,
-    azdo: { status: "fail", code: "network" },
+    azdo: { status: "fail", code: "network-unreachable" },
     bifrost: { status: "skipped", code: "azdo-failed" },
   });
   assertNoLeak(r1);
@@ -836,4 +836,25 @@ test("formatSmoke names the front end in the no-key hint", () => {
     formatSmoke(noKeyReport, "install.sh")[3],
     "Smoke test: set KILO_BIFROST_KEY and re-run install.sh to check your Bifrost virtual key.",
   );
+});
+
+test("F-021 AC-7a: a plugin-side network failure after a passing pre-flight prints no network hint", async () => {
+  const cases: Array<[() => unknown, string]> = [
+    [() => Promise.reject(new Error(`${ERR_CANARY} ${PAT}`)), "network-unreachable"],
+    [
+      () => new Response(`<html>${BODY_CANARY}</html>`, { status: 403, headers: { "content-type": "text/html" } }),
+      "network-blocked",
+    ],
+  ];
+  for (const [items, code] of cases) {
+    const fake = makeFetch(({ url }) => (isProbeUrl(url) ? new Response("", { status: 302 }) : items()));
+    const report = await runSmoke(VALUES, KEY, { env: { AZDO_PAT: PAT }, fetch: fake.fn });
+    assert.deepEqual(formatSmoke(report), [
+      "smoke network: pass",
+      `smoke azdo: fail ${code}`,
+      "smoke bifrost: skipped azdo-failed",
+    ]);
+    assert.equal(smokeFailed(report), true);
+    assertNoLeak(report);
+  }
 });

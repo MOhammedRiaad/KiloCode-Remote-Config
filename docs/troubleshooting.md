@@ -36,6 +36,36 @@ We recommend authenticating with `az login` via the Azure CLI so you do not need
 - **`http-401` / `http-403`**: your Entra token or PAT was rejected or lacks permission to read the shared config repository. Re-run `az login` or replace your expired PAT, and confirm your account has read access to the Azure DevOps project and repository.
 - **`http-404`**: the configured `org`, `project`, `repo`, `path` or `branch` does not exist in Azure DevOps. Check the plugin options in `~/.config/kilo/kilo.jsonc` against [Plugin settings](user-guide.md#plugin-settings).
 
+## Plugin cannot reach Azure DevOps: network codes and hints
+
+When Kilo starts behind the Azure IP firewall, the plugin makes one authenticated request to `dev.azure.com` and classifies a failure. After the `Remote config unavailable (<code>) ...` error line it logs one fixed warn hint.
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `network-unreachable` | request failed before the deadline: DNS failure, refused or reset connection, private DNS off the VPN | Connect to the corporate VPN, then restart Kilo |
+| `network-blocked` | HTTP 407, or HTTP 403 with a non-JSON body (HTML firewall, WAF or Front Door block page) | Connect to the VPN or ask the platform team to allow your public IP address, then restart Kilo |
+| `timeout` | deadline reached; a firewall that silently drops packets shows up as a timeout | Same as above; `KILO_AZDO_TIMEOUT_MS` (default 5000) only helps on a slow link |
+| `http-401` / `http-403` | Azure DevOps answered in JSON: the credential is missing or rejected, or you lack permission | `az login` or replace your PAT; check access to the shared config repository |
+| `network` | catch-all: no usable `fetch`, internal error, or a body read failure | Restart Kilo; report it if it repeats |
+
+Exact hint lines (network codes `network-unreachable`, `network-blocked`, `timeout`):
+
+```
+Azure DevOps could not be reached from this network: connect to the corporate VPN or ask the platform team to allow your public IP address, then restart Kilo.
+```
+
+Exact hint line (`http-401`, `http-403`, `auth-unavailable`):
+
+```
+Azure DevOps credentials are missing or were rejected: run az login or replace your PAT and check your access to the shared config repository; if your organisation restricts Azure DevOps by IP address, also connect to the corporate VPN.
+```
+
+How to tell them apart: a JSON 401/403 is a credential or permission problem (or an Azure DevOps organisation IP policy). A 407 or a 403 that is not JSON is a firewall or proxy block. Limits: an organisation IP conditional-access policy answers JSON 401/403, so you see the credentials hint (it mentions the VPN); a JSON 403 from a TLS-inspecting proxy reads as `http-403`; Azure Firewall HTTP 470 and HTML sign-in pages answered with 203 are not classified.
+
+Kilo keeps using the bound cached config while the network is blocked: with a valid cache the log order is the `using cached config` warn, the hint, then `Applied shared config`. Older versions reported a rejected request as `network`; it is now `network-unreachable`.
+
+Run the [curl self-check](#network-blocked-azure-firewall-or-vpn) to confirm the network path. The installer's pre-flight probe goes to the origin `/` of the Bifrost `baseURL`, so path-routed gateways can give a false blocked or reachable verdict. `smoke azdo: skipped network-blocked` means the pre-flight failed and your credential was never sent; `smoke azdo: fail network-unreachable` or `fail network-blocked` means the authenticated request failed after the probe found the host reachable. See the [platform runbook](platform-runbook.md#telling-block-types-apart).
+
 ## Stale or missing shared config and cache
 
 After every successful, validated fetch from Azure DevOps, the plugin writes the shared config to `~/.cache/kilo-azdo/remote-config.json` (under `%USERPROFILE%\.cache\kilo-azdo\remote-config.json` on Windows).

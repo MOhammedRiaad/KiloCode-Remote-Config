@@ -22,7 +22,7 @@ Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`,
 | ID | Component | Source in this repo | Deployed to | Status |
 |---|---|---|---|---|
 | C1 | Shared config repo: example config + validation (PR gate) | `backend/shared-config/` (kilo.jsonc, azure-pipelines.yml, set-branch-policies.sh, package.json, .gitattributes), `backend/validator/`, `backend/tools/assemble-shared-repo.ts` | Azure DevOps `kilo-config` repo, its PR pipeline and `main` branch policies | **example config + validator CLI (F-007)** + **repo template, assemble tool, PR pipeline, branch-policy script (F-008, ADR-0015)** |
-| C2 | Remote config plugin (single file, FR-11) | `backend/plugin/azdo-remote-config.ts` | `~/.config/kilo/azdo/azdo-remote-config.ts` | **stub (T-001) + JSONC parser (F-001) + placeholder resolver (F-002) + merge (F-003) + settings resolution (F-004) + AzDO fetch/auth (F-005) + hook wiring, cache, fallback, logging (F-006) + cache bound to settings (T-013, ADR-0018)** |
+| C2 | Remote config plugin (single file, FR-11) | `backend/plugin/azdo-remote-config.ts` | `~/.config/kilo/azdo/azdo-remote-config.ts` | **stub (T-001) + JSONC parser (F-001) + placeholder resolver (F-002) + merge (F-003) + settings resolution (F-004) + AzDO fetch/auth (F-005) + hook wiring, cache, fallback, logging (F-006) + cache bound to settings (T-013, ADR-0018) + firewall / network failure classification and log hints (F-021, ADR-0020)** |
 | C3 | Personal config template | `backend/personal-config/kilo.jsonc` | `~/.config/kilo/kilo.jsonc` | **template + tests (F-009)**; copied by installers (F-010/F-011) |
 | C4 | Bifrost gateway | external, not in repo | - | external |
 | C5 | Bootstrap installer | `backend/installer/` (`install.sh` + `install.ps1` front ends; `install-helper.ts` + `personal-config-edit.ts` + `smoke.ts` + `fs-guard.ts`) | engineer runs it from a checkout that keeps `installer/`, `plugin/`, `personal-config/` side by side | **install.sh (F-010, ADR-0012) + smoke test (F-019, ADR-0013) + install.ps1 (F-011, ADR-0014)** |
@@ -56,6 +56,12 @@ Kilo start
                     binding === current settings exactly -> else cache-mismatch)
                     ok   -> log warn "Remote config unavailable (<code>); using cached config."
                     none -> log error "... no usable cache (<code>) ...", config untouched, stop
+                    either way, right after that line, at most one fixed warn hint (ADR-0020):
+                    network-unreachable | network-blocked | timeout -> VPN / allow-list hint;
+                    http-401 | http-403 | auth-unavailable -> az login / PAT hint; else none
+              (fetch codes, ADR-0020: fetch call fails before deadline -> network-unreachable;
+               407, or 403 without JSON Content-Type -> network-blocked; JSON 403 -> http-403;
+               body never read on non-2xx; still exactly one request, no probe)
            -> resolvePlaceholders {env:}/{file:} (ADR-0004) every run; log unresolved NAMES only
            -> applyShared: mergeConfig rules (ADR-0005) with a write journal; on any throw
               (e.g. frozen config) roll back -> config unchanged, log error

@@ -640,6 +640,8 @@ type FetchErrorCode =
   | "too-large"
   | "bad-response"
   | "network"
+  | "network-unreachable"
+  | "network-blocked"
   | `http-${number}`;
 
 type FetchResult = { ok: true; text: string } | { ok: false; error: FetchErrorCode };
@@ -874,8 +876,9 @@ async function resolveAuthorization(
   return pat !== undefined ? basicHeader(pat) : azAuthorization(deps, deadline, timeoutMs);
 }
 
-function codeForInterrupted(outcome: Outcome, deadline: Deadline): FetchErrorCode {
-  return outcome.state === "deadline" || deadline.timedOut() ? "timeout" : "network";
+// The deadline wins over any failure; otherwise the caller says which code a failed operation gets.
+function codeForInterrupted(outcome: Outcome, deadline: Deadline, failed: FetchErrorCode): FetchErrorCode {
+  return outcome.state === "deadline" || deadline.timedOut() ? "timeout" : failed;
 }
 
 // Guarded and never awaited: a failing cancel must not change the result.
@@ -894,6 +897,32 @@ function declaredTooLarge(response: unknown): boolean {
     (response as { headers: { get: (name: string) => unknown } }).headers.get("content-length"),
   );
   return typeof header === "string" && isDigitString(header) && Number(header) > MAX_RESPONSE_BYTES;
+}
+
+// Only a primitive string is returned; any throw (header getter, get) counts as absent.
+function readContentType(response: unknown): string | undefined {
+  const value = attempt(() =>
+    (response as { headers: { get: (name: string) => unknown } }).headers.get("content-type"),
+  );
+  return typeof value === "string" ? value : undefined;
+}
+
+// application/json or type/subtype+json (one slash, non-empty subtype prefix); parameters are ignored.
+function isJsonMediaType(raw: string | undefined): boolean {
+  if (raw === undefined) return false;
+  const semicolon = raw.indexOf(";");
+  const media = (semicolon === -1 ? raw : raw.slice(0, semicolon)).trim().toLowerCase();
+  if (media === "application/json") return true;
+  const slash = media.indexOf("/");
+  if (slash < 1 || media.indexOf("/", slash + 1) !== -1) return false;
+  return media.endsWith("+json") && media.length - slash - 1 > "+json".length;
+}
+
+// 407 and a 403 that is not JSON mean a network intermediary refused the request; the body is never read.
+function codeForStatus(status: number, response: unknown): FetchErrorCode {
+  if (status === 407) return "network-blocked";
+  if (status === 403 && !isJsonMediaType(readContentType(response))) return "network-blocked";
+  return `http-${status}` as const;
 }
 
 function readStatus(response: unknown): number | undefined {
@@ -933,7 +962,7 @@ async function readCappedBody(response: unknown, deadline: Deadline): Promise<Ui
     const outcome = await deadline.race(() => reader.read());
     if (outcome.state !== "value") {
       discard(() => reader.cancel());
-      return codeForInterrupted(outcome, deadline);
+      return codeForInterrupted(outcome, deadline, "network");
     }
     const step = outcome.value as { done?: unknown; value?: unknown } | null;
     if (attempt(() => step?.done) === true) return joinChunks(chunks, total);
@@ -967,8 +996,9 @@ async function handleResponse(response: unknown, deadline: Deadline): Promise<Fe
     return failure("bad-response");
   }
   if (status < 200 || status > 299) {
+    const code = codeForStatus(status, response);
     discardBody(response);
-    return failure(`http-${status}` as const);
+    return failure(code);
   }
   if (declaredTooLarge(response)) {
     discardBody(response);
@@ -992,7 +1022,7 @@ async function performRequest(
     signal: controller.signal,
   };
   const outcome = await deadline.race(() => fetchFn(url, init));
-  if (outcome.state !== "value") return failure(codeForInterrupted(outcome, deadline));
+  if (outcome.state !== "value") return failure(codeForInterrupted(outcome, deadline, "network-unreachable"));
   return handleResponse(outcome.value, deadline);
 }
 
@@ -1109,7 +1139,28 @@ const LOG_NO_SETTINGS =
   "Remote config unavailable (missing-settings) and no usable cache (cache-skipped); continuing with local config only.";
 const LOG_UNEXPECTED = "Remote config failed unexpectedly; continuing with local config only.";
 
+const LOG_HINT_NETWORK =
+  "Azure DevOps could not be reached from this network: connect to the corporate VPN or ask the platform team to allow your public IP address, then restart Kilo.";
+const LOG_HINT_CREDENTIALS =
+  "Azure DevOps credentials are missing or were rejected: run az login or replace your PAT and check your access to the shared config repository; if your organisation restricts Azure DevOps by IP address, also connect to the corporate VPN.";
+
 let cacheCounter = 0;
+
+// One fixed hint per failure reason, or none; the text never contains a value.
+function hintFor(reason: string): string | undefined {
+  if (reason === "network-unreachable" || reason === "network-blocked" || reason === "timeout") {
+    return LOG_HINT_NETWORK;
+  }
+  if (reason === "http-401" || reason === "http-403" || reason === "auth-unavailable") {
+    return LOG_HINT_CREDENTIALS;
+  }
+  return undefined;
+}
+
+function logHint(log: HookLog, reason: string): void {
+  const hint = hintFor(reason);
+  if (hint !== undefined) log("warn", hint);
+}
 
 // A container at nesting level 64 or deeper (root = level 0).
 function exceedsDepth(node: unknown, depth: number): boolean {
@@ -1361,9 +1412,11 @@ async function executeHook(log: HookLog, options: unknown, config: unknown, deps
         "error",
         `Remote config unavailable (${remote.reason}) and no usable cache (${cached.error}); continuing with local config only.`,
       );
+      logHint(log, remote.reason);
       return;
     }
     log("warn", `Remote config unavailable (${remote.reason}); using cached config.`);
+    logHint(log, remote.reason);
     shared = cached.value;
     source = "cache";
   }

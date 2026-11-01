@@ -1,6 +1,9 @@
 # Contract: bootstrap installers (`install.sh`, `install.ps1`) and install helper
 
-- Version: 1.3.0 (cycle-0022, F-020: the smoke test starts each target with an unauthenticated
+- Version: 1.3.1 (cycle-0023, F-021: section 9.1 lists the plugin codes `network-unreachable`
+  and `network-blocked` (plugin-interface 0.9.0, ADR-0020) that `smoke azdo: fail <c>` passes
+  through verbatim. Informative only: no change to `smoke.ts`, inputs, lines, hints or exit codes.)
+  1.3.0: cycle-0022, F-020: the smoke test starts each target with an unauthenticated
   network pre-flight probe and prints a first line `smoke network: ...`, a new skip code
   `network-blocked` and a fixed VPN / allow-list hint (sections 7 and 9.0); time bound
   `4 x timeoutMs` (9.3). No new input, flag, record or exit code. Decision record: ADR-0019.)
@@ -308,7 +311,7 @@ Only evaluated when the azdo probe is reachable; otherwise `smoke azdo: skipped 
 
 | Condition | Line |
 |---|---|
-| `fetchRemoteConfig` returns `ok: false` with code `c` | `smoke azdo: fail <c>`, `c` in `invalid-settings`, `auth-unavailable`, `timeout`, `too-large`, `bad-response`, `network`, `http-<status>` (e.g. `http-404`) |
+| `fetchRemoteConfig` returns `ok: false` with code `c` | `smoke azdo: fail <c>`, `c` in `invalid-settings`, `auth-unavailable`, `timeout`, `too-large`, `bad-response`, `network`, `network-unreachable`, `network-blocked` (both since 1.3.1, plugin-interface 0.9.0 row 6 / 7a), `http-<status>` (e.g. `http-404`). Because the azdo probe ran first and was reachable, `fail network-unreachable` / `fail network-blocked` mean the authenticated request itself was refused or blocked (e.g. a WAF rule on the API path). Not to be confused with `skipped network-blocked` (9.0, probe verdict). These codes do not add the section 7 network hint (that hint is tied to `smoke network: fail ...` only). |
 | text does not parse with `__internals.parseJsonc` | `smoke azdo: fail invalid-jsonc` |
 | root is not a plain object | `smoke azdo: fail invalid-shape` |
 | unexpected exception | `smoke azdo: fail internal` |

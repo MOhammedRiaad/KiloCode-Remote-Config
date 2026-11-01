@@ -102,6 +102,11 @@ fake network scenario also answers the anonymous probes of `https://dev.azure.co
 origin `/` (403/407, connection error, hang until the deadline). `smoke.test.ts` and
 `install-smoke.test.ts` cover the `smoke network:` line, the `skipped network-blocked` rows, the hint
 line, exit 4 and that no credential is sent to a blocked target.
+F-021 (ADR-0020, contract plugin-interface.md 0.9.0 sections 2e and 2f-L) classifies plugin fetch failures.
+New test blocks: `backend/test/plugin/fetch.test.ts` (F-021 AC-1 to AC-3: `network-unreachable`, `timeout`,
+`network-blocked`, JSON 403 and 401, `network` catch-all), `backend/test/plugin/hook.test.ts` (F-021 AC4 to AC6:
+hint lines and their order with and without a cache, no leaks), `smoke.test.ts` and `install-smoke.test.ts`
+(authenticated-request failure after a passing pre-flight exits 4 with no network hint) and `e2e/startup.test.ts`.
 Lint rule 7 (`check-fr11.mjs`, ADR-0013) forbids any file directly in `backend/installer/` from
 mentioning test switches such as the fake-network preload, so product code can never enable it.
 

@@ -18,6 +18,11 @@ const TOKEN = "tok.SENTINEL-4242";
 const PLUGIN_PATH = fileURLToPath(new URL("../../plugin/azdo-remote-config.ts", import.meta.url));
 const OPTIONS ={ org: "o", project: "p", repo: "r", pat: PAT };
 const L_REMOTE = "Loaded shared config from Azure DevOps.";
+// The exact hint texts of contract 0.9.0 section 2f-L, repeated here on purpose (they are not exported).
+const HINT_NETWORK =
+  "Azure DevOps could not be reached from this network: connect to the corporate VPN or ask the platform team to allow your public IP address, then restart Kilo.";
+const HINT_CREDENTIALS =
+  "Azure DevOps credentials are missing or were rejected: run az login or replace your PAT and check your access to the shared config repository; if your organisation restricts Azure DevOps by IP address, also connect to the corporate VPN.";
 
 interface LogArg {
   body: { service: string; level: string; message: string };
@@ -186,7 +191,7 @@ test("AC2 success writes a sanitised unresolved cache atomically with an info lo
 });
 
 const FETCH_FAILURES: Array<[string, () => { fetch: unknown; options?: unknown }]> = [
-  ["network", () => ({ fetch: failingFetch("net") })],
+  ["network-unreachable", () => ({ fetch: failingFetch("net") })],
   ["http-500", () => ({ fetch: () => Promise.resolve(new Response("x", { status: 500 })) })],
   ["timeout", () => ({ fetch: () => new Promise(() => {}), options: { ...OPTIONS, timeoutMs: 20 } })],
 ];
@@ -203,11 +208,14 @@ for (const [code, make] of FETCH_FAILURES) {
     assert.deepEqual(cfg, { other: 1, model: "cached", extra: "v" });
     assert.deepEqual(realFs.readFileSync(file), before);
     assert.equal(realFs.statSync(file).mtimeMs, mtime);
+    const hinted = code === "network-unreachable" || code === "timeout";
     assert.deepEqual(messages(logs), [
       `Remote config unavailable (${code}); using cached config.`,
+      ...(hinted ? [HINT_NETWORK] : []),
       "Applied shared config from cache in defaults mode.",
     ]);
     assert.equal((logs[0] as LogArg).body.level, "warn");
+    if (hinted) assert.equal((logs[1] as LogArg).body.level, "warn");
     noLeak(logs);
   });
 }
@@ -222,9 +230,11 @@ for (const bad of BAD_CACHES) {
     const { logs } = await run({ home, config: cfg, fetch: failingFetch("x") });
     assert.deepEqual(cfg, localConfig());
     assert.deepEqual(messages(logs), [
-      "Remote config unavailable (network) and no usable cache (cache-invalid); continuing with local config only.",
+      "Remote config unavailable (network-unreachable) and no usable cache (cache-invalid); continuing with local config only.",
+      HINT_NETWORK,
     ]);
     assert.equal((logs[0] as LogArg).body.level, "error");
+    assert.equal((logs[1] as LogArg).body.level, "warn");
   });
 }
 
@@ -627,10 +637,10 @@ const B = { org: "orgSentB", project: "projSentB", repo: "repoSentB", path: "/se
 const A_VALUES = Object.values(A);
 const B_VALUES = Object.values(B);
 const L_NETWORK_MISMATCH =
-  "Remote config unavailable (network) and no usable cache (cache-mismatch); continuing with local config only.";
-const L_CACHE_NETWORK = "Remote config unavailable (network); using cached config.";
+  "Remote config unavailable (network-unreachable) and no usable cache (cache-mismatch); continuing with local config only.";
+const L_CACHE_NETWORK = "Remote config unavailable (network-unreachable); using cached config.";
 
-function noneLine(code: string, reason = "network"): string {
+function noneLine(code: string, reason = "network-unreachable"): string {
   return `Remote config unavailable (${reason}) and no usable cache (${code}); continuing with local config only.`;
 }
 
@@ -649,7 +659,7 @@ test("T013 AC1 a cache written for other settings is not applied, one field at a
     const options = { ...A, [field]: B[field], pat: PAT };
     const { logs } = await run({ home, config: cfg, options, fetch: failingFetch("n") });
     assert.deepEqual(cfg, localConfig(), field);
-    assert.deepEqual(messages(logs), [L_NETWORK_MISMATCH], field);
+    assert.deepEqual(messages(logs), [L_NETWORK_MISMATCH, HINT_NETWORK], field);
     assert.equal((logs[0] as LogArg).body.level, "error");
     const dump = JSON.stringify(logs);
     for (const value of [...A_VALUES, ...B_VALUES]) assert.ok(!dump.includes(value), `${field}: ${value}`);
@@ -664,7 +674,11 @@ test("T013 AC2 a cache written for the same settings is applied; mode is not bou
     await writeRealCache(home, { ...A, pat: PAT, mode: "defaults" }, '{"model":"cached","x":1}');
     const cfg = { model: "local" } as Record<string, unknown>;
     const { logs } = await run({ home, config: cfg, options: { ...A, pat: PAT, mode }, fetch: failingFetch("n") });
-    assert.deepEqual(messages(logs), [L_CACHE_NETWORK, `Applied shared config from cache in ${mode} mode.`]);
+    assert.deepEqual(messages(logs), [
+      L_CACHE_NETWORK,
+      HINT_NETWORK,
+      `Applied shared config from cache in ${mode} mode.`,
+    ]);
     assert.equal(cfg.x, 1);
     assert.equal(cfg.model, mode === "enforce" ? "cached" : "local");
   }
@@ -716,7 +730,7 @@ for (const [label, value] of OUTDATED) {
     const cfg = localConfig();
     const { logs } = await run({ home, config: cfg, fetch: failingFetch("n") });
     assert.deepEqual(cfg, localConfig());
-    assert.deepEqual(messages(logs), [noneLine("cache-outdated")]);
+    assert.deepEqual(messages(logs), [noneLine("cache-outdated"), HINT_NETWORK]);
     assert.deepEqual(realFs.readFileSync(file), before);
   });
 }
@@ -746,7 +760,7 @@ for (const [label, value] of MALFORMED) {
     const cfg = localConfig();
     const { logs } = await run({ home, config: cfg, fetch: failingFetch("n") });
     assert.deepEqual(cfg, localConfig());
-    assert.deepEqual(messages(logs), [noneLine("cache-invalid")]);
+    assert.deepEqual(messages(logs), [noneLine("cache-invalid"), HINT_NETWORK]);
     assert.deepEqual(realFs.readFileSync(file), before);
   });
 }
@@ -774,12 +788,212 @@ test("T013 AC6 comparison uses normalised settings, case-sensitively, without tr
     const { logs } = await run({ home, options, env, fetch: failingFetch("n") });
     return messages(logs);
   };
-  const ok = [L_CACHE_NETWORK, "Applied shared config from cache in defaults mode."];
+  const ok = [L_CACHE_NETWORK, HINT_NETWORK, "Applied shared config from cache in defaults mode."];
   assert.deepEqual(await applied(BOUND, { ...OPTIONS, org: " o " }), ok);
-  assert.deepEqual(await applied(BOUND, { ...OPTIONS, org: "O" }), [L_NETWORK_MISMATCH]);
+  assert.deepEqual(await applied(BOUND, { ...OPTIONS, org: "O" }), [L_NETWORK_MISMATCH, HINT_NETWORK]);
   assert.deepEqual(await applied(BOUND, { ...OPTIONS, path: "kilo.jsonc" }), ok);
   assert.deepEqual(await applied(BOUND, { ...OPTIONS, branch: undefined }), ok);
-  assert.deepEqual(await applied({ ...BOUND, org: " o" }, OPTIONS), [L_NETWORK_MISMATCH]);
+  assert.deepEqual(await applied({ ...BOUND, org: " o" }, OPTIONS), [L_NETWORK_MISMATCH, HINT_NETWORK]);
   const fromEnv = { KILO_AZDO_ORG: "o", KILO_AZDO_PROJECT: "p", KILO_AZDO_REPO: "r" };
   assert.deepEqual(await applied(BOUND, { pat: PAT }, fromEnv), ok);
+});
+
+// ---- F-021: classified failures and the actionable hint (ADR-0020) ----
+
+const L_APPLIED_CACHE = "Applied shared config from cache in defaults mode.";
+const NO_PAT_OPTIONS = { org: "o", project: "p", repo: "r" };
+const AZ_FAILS = { runAz: () => Promise.resolve({ exitCode: 1, stdout: "" }) };
+
+function respond(status: number, body = "x", contentType?: string): () => Promise<Response> {
+  return () =>
+    Promise.resolve(
+      new Response(body, { status, headers: contentType === undefined ? {} : { "content-type": contentType } }),
+    );
+}
+
+function oversized(): () => Promise<unknown> {
+  return () =>
+    Promise.resolve({
+      status: 200,
+      headers: { get: (name: string) => (name === "content-length" ? "2000000" : null) },
+      body: { cancel: () => Promise.resolve() },
+    });
+}
+
+function streamErrors(): () => Promise<Response> {
+  return () => {
+    const failing = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error("LEAK-stream"));
+      },
+    });
+    return Promise.resolve(new Response(failing, { status: 200 }));
+  };
+}
+
+interface HintCase {
+  reason: string;
+  hint: string | undefined;
+  fetch: unknown;
+  options?: Record<string, unknown>;
+  extra?: Record<string, unknown>;
+}
+
+const HINT_CASES: HintCase[] = [
+  { reason: "network-unreachable", hint: HINT_NETWORK, fetch: failingFetch("a") },
+  { reason: "network-blocked", hint: HINT_NETWORK, fetch: respond(403, "<html>blocked</html>", "text/html") },
+  { reason: "network-blocked", hint: HINT_NETWORK, fetch: respond(407, "x", "text/html") },
+  { reason: "timeout", hint: HINT_NETWORK, fetch: () => new Promise(() => {}), options: { ...OPTIONS, timeoutMs: 20 } },
+  { reason: "http-401", hint: HINT_CREDENTIALS, fetch: respond(401, "x", "text/html") },
+  { reason: "http-403", hint: HINT_CREDENTIALS, fetch: respond(403, "{}", "application/json") },
+  { reason: "auth-unavailable", hint: HINT_CREDENTIALS, fetch: respond(200), options: NO_PAT_OPTIONS, extra: AZ_FAILS },
+  { reason: "http-404", hint: undefined, fetch: respond(404) },
+  { reason: "http-500", hint: undefined, fetch: respond(500) },
+  { reason: "http-503", hint: undefined, fetch: respond(503) },
+  { reason: "too-large", hint: undefined, fetch: oversized() },
+  { reason: "bad-response", hint: undefined, fetch: respond(200, "not json") },
+  { reason: "network", hint: undefined, fetch: streamErrors() },
+  { reason: "network", hint: undefined, fetch: 5 },
+  { reason: "invalid-jsonc", hint: undefined, fetch: respond(200, JSON.stringify({ content: "{" })) },
+  { reason: "invalid-shape", hint: undefined, fetch: respond(200, JSON.stringify({ content: "[]" })) },
+];
+
+for (const [index, c] of HINT_CASES.entries()) {
+  const label = `case ${index} ${c.reason}`;
+  test(`F-021 AC4 ${label} without a cache logs the none line then at most one hint`, async () => {
+    const home = makeHome();
+    const cfg = localConfig();
+    const { logs } = await run({ home, config: cfg, fetch: c.fetch, options: c.options ?? OPTIONS, extra: c.extra });
+    assert.deepEqual(cfg, localConfig());
+    const expected = [noneLine("cache-missing", c.reason), ...(c.hint === undefined ? [] : [c.hint])];
+    assert.deepEqual(messages(logs), expected);
+    assert.deepEqual(
+      logs.map((l) => (l as LogArg).body.level),
+      c.hint === undefined ? ["error"] : ["error", "warn"],
+    );
+    noLeak(logs);
+  });
+
+  test(`F-021 AC4 ${label} with a bound cache logs the cache line, then at most one hint, then applied`, async () => {
+    const home = makeHome();
+    seedBoundCache(home, { model: "cached" });
+    const cfg: Record<string, unknown> = {};
+    const { logs } = await run({ home, config: cfg, fetch: c.fetch, options: c.options ?? OPTIONS, extra: c.extra });
+    assert.deepEqual(cfg, { model: "cached" });
+    const expected = [
+      `Remote config unavailable (${c.reason}); using cached config.`,
+      ...(c.hint === undefined ? [] : [c.hint]),
+      L_APPLIED_CACHE,
+    ];
+    assert.deepEqual(messages(logs), expected);
+    assert.deepEqual(
+      logs.map((l) => (l as LogArg).body.level),
+      c.hint === undefined ? ["warn", "info"] : ["warn", "warn", "info"],
+    );
+    noLeak(logs);
+  });
+}
+
+test("F-021 AC4 missing settings still log exactly the two fixed lines and no hint", async () => {
+  const home = makeHome();
+  const { logs } = await run({ home, options: {}, fetch: failingFetch("m") });
+  assert.deepEqual(messages(logs), [
+    "Remote config skipped: missing required settings: org, project, repo.",
+    L_NONE_SKIPPED,
+  ]);
+});
+
+test("F-021 AC4 a successful run logs no hint", async () => {
+  const home = makeHome();
+  const { logs } = await run({ home, fetch: okFetch('{"model":"m"}').fn });
+  const all = messages(logs);
+  assert.equal(all.includes(HINT_NETWORK), false);
+  assert.equal(all.includes(HINT_CREDENTIALS), false);
+});
+
+test("F-021 AC5 a bound cache survives network-unreachable and network-blocked after exactly one fetch", async () => {
+  for (const make of [failingFetch("c"), respond(403, "<html></html>", "text/html"), respond(407)]) {
+    const home = makeHome();
+    const file = seedBoundCache(home, { model: "cached", extra: 1 });
+    const before = realFs.readFileSync(file);
+    const mtime = realFs.statSync(file).mtimeMs;
+    let calls = 0;
+    const counted = (): unknown => {
+      calls++;
+      return make();
+    };
+    const cfg: Record<string, unknown> = { other: 1 };
+    const { logs } = await run({ home, config: cfg, fetch: counted });
+    assert.deepEqual(cfg, { other: 1, model: "cached", extra: 1 });
+    assert.equal(calls, 1);
+    assert.equal(messages(logs).length, 3);
+    assert.equal(messages(logs)[1], HINT_NETWORK);
+    assert.equal(messages(logs)[2], L_APPLIED_CACHE);
+    assert.deepEqual(realFs.readFileSync(file), before);
+    assert.equal(realFs.statSync(file).mtimeMs, mtime);
+  }
+});
+
+test("F-021 AC5 a cache bound to other settings is not applied after network-blocked", async () => {
+  const home = makeHome();
+  seedBoundCache(home, { model: "cached" }, { ...BOUND, branch: "other" });
+  const cfg = localConfig();
+  const { logs } = await run({ home, config: cfg, fetch: respond(403, "<html></html>", "text/html") });
+  assert.deepEqual(cfg, localConfig());
+  assert.deepEqual(messages(logs), [noneLine("cache-mismatch", "network-blocked"), HINT_NETWORK]);
+  assert.deepEqual(
+    logs.map((l) => (l as LogArg).body.level),
+    ["error", "warn"],
+  );
+});
+
+test("F-021 AC6 no canary, secret, host or setting value reaches any log argument", async () => {
+  const CANARY = "BODYCANARY";
+  const HEADER_CANARY = "CTCANARY";
+  const pat = "PATCANARY-1234";
+  const token = "tok.AZCANARY-5678";
+  const basic = Buffer.from(`:${pat}`).toString("base64");
+  const values = ["orgCanary", "projCanary", "repoCanary", "/pathCanary.jsonc", "branchCanary"];
+  const options = { org: values[0], project: values[1], repo: values[2], path: values[3], branch: values[4] };
+  const hostile = (status: number): unknown => ({
+    status,
+    get headers(): never {
+      throw new Error(`LEAK-${HEADER_CANARY}`);
+    },
+    body: { cancel: () => Promise.resolve() },
+  });
+  const fetches: unknown[] = [
+    respond(403, `<html>${CANARY}</html>`, `text/html; ${HEADER_CANARY}`),
+    respond(401, `{"m":"${CANARY}"}`, `application/json; ${HEADER_CANARY}`),
+    respond(403, `{"m":"${CANARY}"}`, `application/json; ${HEADER_CANARY}`),
+    respond(407, CANARY, `text/html; ${HEADER_CANARY}`),
+    respond(500, CANARY),
+    () => Promise.reject(new Error(`LEAK-${CANARY} ${pat} ${token}`)),
+    () => Promise.resolve(hostile(403)),
+    () => Promise.resolve(hostile(500)),
+    () => Promise.resolve(new Response(CANARY, { status: 403, headers: { "x-canary": HEADER_CANARY } })),
+  ];
+  for (const behaviour of [undefined, (): never => { throw new Error("sink"); }, () => Promise.reject(new Error("sink"))]) {
+    for (const fetch of fetches) {
+      for (const auth of ["pat", "az"] as const) {
+        const home = makeHome();
+        const run1 = await run({
+          home,
+          fetch,
+          behaviour,
+          options: auth === "pat" ? { ...options, pat } : options,
+          extra: auth === "az" ? { runAz: () => Promise.resolve({ exitCode: 0, stdout: `${token}\n` }) } : {},
+        });
+        const dumps = [JSON.stringify(run1.logs), inspect(run1.logs, { depth: 10 })];
+        for (const dump of dumps) {
+          for (const secret of [pat, token, basic, `Basic ${basic}`, `Bearer ${token}`, "dev.azure.com", "https://"]) {
+            assert.equal(dump.includes(secret), false, secret);
+          }
+          for (const value of [...values, CANARY, HEADER_CANARY, "LEAK-"]) {
+            assert.equal(dump.includes(value), false, value);
+          }
+        }
+      }
+    }
+  }
 });

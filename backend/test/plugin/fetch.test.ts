@@ -418,14 +418,14 @@ test("AC-4: the timer is cleared on failure paths too", async () => {
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
   });
-  assert.deepEqual(out, { ok: false, error: "network" });
+  assert.deepEqual(out, { ok: false, error: "network-unreachable" });
   assert.equal(timers.state.cleared, 1);
 });
 
 // ---- AC-5: error codes without secrets ----
 
 test("AC-5: http status codes map to http-<status> without secrets", async () => {
-  for (const status of [401, 404, 500, 302, 403, 503]) {
+  for (const status of [401, 404, 500, 302, 503]) {
     const fake = recordingFetch(() => new Response(`${PAT} ${TOKEN} boom`, { status }));
     const out = await fetchRemoteConfig(patSettings(), { fetch: fake.fn, env: {} });
     assert.deepEqual(out, { ok: false, error: `http-${status}` });
@@ -433,12 +433,25 @@ test("AC-5: http status codes map to http-<status> without secrets", async () =>
   }
 });
 
-test("AC-5: a rejecting or throwing fetch gives network without secrets", async () => {
+test("AC-5: a JSON 403 gives http-403 and a text 403 gives network-blocked, without secrets", async () => {
+  const json = recordingFetch(
+    () => new Response(`${PAT} ${TOKEN} boom`, { status: 403, headers: { "content-type": "application/json" } }),
+  );
+  const jsonOut = await fetchRemoteConfig(patSettings(), { fetch: json.fn, env: {} });
+  assert.deepEqual(jsonOut, { ok: false, error: "http-403" });
+  assertNoLeak(jsonOut);
+  const text = recordingFetch(() => new Response(`${PAT} ${TOKEN} boom`, { status: 403 }));
+  const textOut = await fetchRemoteConfig(patSettings(), { fetch: text.fn, env: {} });
+  assert.deepEqual(textOut, { ok: false, error: "network-blocked" });
+  assertNoLeak(textOut);
+});
+
+test("AC-5: a rejecting or throwing fetch gives network-unreachable without secrets", async () => {
   const rejecting = await fetchRemoteConfig(patSettings(), {
     fetch: () => Promise.reject(new Error(`boom ${PAT}`)),
     env: {},
   });
-  assert.deepEqual(rejecting, { ok: false, error: "network" });
+  assert.deepEqual(rejecting, { ok: false, error: "network-unreachable" });
   assertNoLeak(rejecting);
   const throwing = await fetchRemoteConfig(patSettings(), {
     fetch: () => {
@@ -446,7 +459,7 @@ test("AC-5: a rejecting or throwing fetch gives network without secrets", async 
     },
     env: {},
   });
-  assert.deepEqual(throwing, { ok: false, error: "network" });
+  assert.deepEqual(throwing, { ok: false, error: "network-unreachable" });
   assertNoLeak(throwing);
 });
 
@@ -735,7 +748,7 @@ test("AC-8: odd fetch return values resolve to bad-response or network", async (
     assert.deepEqual(out, { ok: false, error: "bad-response" }, String(value));
   }
   const rejects = await guarded(fetchRemoteConfig(patSettings(), { fetch: () => Promise.reject(undefined), env: {} }));
-  assert.deepEqual(rejects, { ok: false, error: "network" });
+  assert.deepEqual(rejects, { ok: false, error: "network-unreachable" });
 });
 
 test("AC-8: a response whose headers.get or status getter throws still resolves", async () => {
@@ -815,4 +828,223 @@ test("AC-8: results are fresh objects on every call", async () => {
   const second = await fetchRemoteConfig(patSettings(), deps);
   assert.notEqual(first, second);
   assert.deepEqual(first, second);
+});
+
+// ---- F-021: network classification (ADR-0020) ----
+
+interface Spied {
+  response: unknown;
+  names: string[];
+  state: { getReader: number; cancel: number };
+}
+
+// A response whose body is only ever cancelled, never read; `typeGet` decides the content-type result.
+function spiedResponse(status: number, typeGet: () => unknown, headers: "ok" | "throws" | "missing" = "ok"): Spied {
+  const names: string[] = [];
+  const state = { getReader: 0, cancel: 0 };
+  const body = {
+    getReader: (): never => {
+      state.getReader++;
+      throw new Error("body must not be read");
+    },
+    cancel: (): Promise<void> => {
+      state.cancel++;
+      return Promise.resolve();
+    },
+  };
+  const get = (name: string): unknown => {
+    names.push(name);
+    return name === "content-type" ? typeGet() : null;
+  };
+  const response: Record<string, unknown> = { status, body };
+  if (headers === "ok") response.headers = { get };
+  if (headers === "throws") {
+    Object.defineProperty(response, "headers", {
+      get: (): never => {
+        throw new Error("headers CTCANARY");
+      },
+    });
+  }
+  return { response, names, state };
+}
+
+async function classify(response: unknown): Promise<unknown> {
+  return guarded(fetchRemoteConfig(patSettings(), { fetch: () => response, env: {} }));
+}
+
+test("F-021 AC-1: a rejection before the deadline gives network-unreachable with a PAT and with an az token", async () => {
+  const withPat = await guarded(
+    fetchRemoteConfig(patSettings(), { fetch: () => Promise.reject(new Error("x")), env: {} }),
+  );
+  assert.deepEqual(withPat, { ok: false, error: "network-unreachable" });
+  const az = azSpy({ exitCode: 0, stdout: TOKEN });
+  const withAz = await guarded(
+    fetchRemoteConfig({ ...BASE }, { fetch: () => Promise.reject(new Error("x")), runAz: az.fn, env: NO_PAT_ENV }),
+  );
+  assert.deepEqual(withAz, { ok: false, error: "network-unreachable" });
+  assert.equal(az.calls.length, 1);
+});
+
+test("F-021 AC-1: a synchronous throw of fetch gives network-unreachable", async () => {
+  const out = await guarded(
+    fetchRemoteConfig(patSettings(), {
+      fetch: () => {
+        throw new Error("sync");
+      },
+      env: {},
+    }),
+  );
+  assert.deepEqual(out, { ok: false, error: "network-unreachable" });
+});
+
+test("F-021 AC-1: a never-settling fetch fired by the deadline gives timeout, not network-unreachable", async () => {
+  let fire: (() => void) | undefined;
+  const pending = fetchRemoteConfig(patSettings(), {
+    fetch: () => new Promise(() => {}),
+    env: {},
+    setTimeout: (cb: () => void): number => {
+      fire = cb;
+      return 1;
+    },
+    clearTimeout: (): void => {},
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(fire);
+  fire();
+  assert.deepEqual(await guarded(pending), { ok: false, error: "timeout" });
+});
+
+test("F-021 AC-1: a fetch that rejects only when the signal aborts gives timeout", async () => {
+  let fire: (() => void) | undefined;
+  const pending = fetchRemoteConfig(patSettings(), {
+    fetch: (_url: string, init: Init) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(new Error("aborted")));
+      }),
+    env: {},
+    setTimeout: (cb: () => void): number => {
+      fire = cb;
+      return 1;
+    },
+    clearTimeout: (): void => {},
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(fire);
+  fire();
+  assert.deepEqual(await guarded(pending), { ok: false, error: "timeout" });
+});
+
+test("F-021 AC-1: no usable fetch, a throwing setTimeout and a failing body stream still give network", async () => {
+  const unavailable = await fetchRemoteConfig(patSettings(), { fetch: null, env: {} });
+  assert.deepEqual(unavailable, { ok: false, error: "network" });
+  const thrower = (): never => {
+    throw new Error("timer");
+  };
+  const timer = await guarded(
+    fetchRemoteConfig(patSettings(), { fetch: () => okJson("x"), env: {}, setTimeout: thrower }),
+  );
+  assert.deepEqual(timer, { ok: false, error: "network" });
+  const failing = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(new Error("stream"));
+    },
+  });
+  const stream = await classify(new Response(failing, { status: 200 }));
+  assert.deepEqual(stream, { ok: false, error: "network" });
+});
+
+test("F-021 AC-2: a 407 is network-blocked whatever the content type, and headers are not read", async () => {
+  for (const type of ["text/html", "application/json", null]) {
+    const spied = spiedResponse(407, () => type);
+    assert.deepEqual(await classify(spied.response), { ok: false, error: "network-blocked" }, String(type));
+    assert.deepEqual(spied.names, [], String(type));
+    assert.deepEqual(spied.state, { getReader: 0, cancel: 1 }, String(type));
+  }
+});
+
+test("F-021 AC-2: a 403 without a JSON content type is network-blocked and the body stays unread", async () => {
+  const toStringSpy = { called: 0 };
+  const hostile = {
+    toString: (): string => {
+      toStringSpy.called++;
+      throw new Error("toString must not run");
+    },
+  };
+  const throwing = (): never => {
+    throw new Error("get CTCANARY");
+  };
+  const cases: Array<[string, () => unknown, ("ok" | "throws" | "missing")?]> = [
+    ["absent", () => null],
+    ["undefined", () => undefined],
+    ["html", () => "text/html; charset=utf-8"],
+    ["plain", () => "text/plain"],
+    ["get throws", throwing],
+    ["number", () => 5],
+    ["String object", () => new String("application/json")],
+    ["hostile toString", () => hostile],
+    ["headers getter throws", () => "application/json", "throws"],
+    ["headers missing", () => "application/json", "missing"],
+    ["text/json", () => "text/json"],
+    ["application/json5", () => "application/json5"],
+    ["+json", () => "+json"],
+    ["application/+json", () => "application/+json"],
+    ["a/b/c+json", () => "a/b/c+json"],
+    ["empty", () => ""],
+  ];
+  for (const [label, get, headers] of cases) {
+    const spied = spiedResponse(403, get, headers);
+    const out = await classify(spied.response);
+    assert.deepEqual(out, { ok: false, error: "network-blocked" }, label);
+    assert.equal(JSON.stringify(out).includes("CTCANARY"), false, label);
+    assert.deepEqual(spied.state, { getReader: 0, cancel: 1 }, label);
+  }
+  assert.equal(toStringSpy.called, 0);
+});
+
+test("F-021 AC-3: a 403 with a JSON content type stays http-403", async () => {
+  for (const type of [
+    "application/json",
+    "Application/JSON; charset=utf-8",
+    "application/problem+json",
+    " application/json ;x=y",
+  ]) {
+    const spied = spiedResponse(403, () => type);
+    assert.deepEqual(await classify(spied.response), { ok: false, error: "http-403" }, type);
+    assert.deepEqual(spied.names, ["content-type"], type);
+    assert.deepEqual(spied.state, { getReader: 0, cancel: 1 }, type);
+  }
+});
+
+test("F-021 AC-3: a 401 stays http-401 for any content type and its headers are never read", async () => {
+  for (const type of ["text/html", "application/json", null]) {
+    const spied = spiedResponse(401, () => type);
+    assert.deepEqual(await classify(spied.response), { ok: false, error: "http-401" }, String(type));
+    assert.deepEqual(spied.names, [], String(type));
+    assert.deepEqual(spied.state, { getReader: 0, cancel: 1 }, String(type));
+  }
+});
+
+test("F-021 AC-3: other statuses stay http-<status> without reading the content type", async () => {
+  for (const status of [404, 500, 503, 302]) {
+    const spied = spiedResponse(status, () => "text/html");
+    assert.deepEqual(await classify(spied.response), { ok: false, error: `http-${status}` }, String(status));
+    assert.deepEqual(spied.names, [], String(status));
+  }
+});
+
+test("F-021 AC-3: a 2xx only ever asks for content-length, never content-type", async () => {
+  const names: string[] = [];
+  const base = okJson("ok");
+  const response = {
+    status: 200,
+    body: base.body,
+    headers: {
+      get: (name: string): unknown => {
+        names.push(name);
+        return null;
+      },
+    },
+  };
+  assert.deepEqual(await classify(response), { ok: true, text: "ok" });
+  assert.deepEqual(names, ["content-length"]);
 });

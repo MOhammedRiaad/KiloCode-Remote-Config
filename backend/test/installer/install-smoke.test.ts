@@ -542,3 +542,25 @@ test("helper stdin protocol: omitted smoke record defaults to off; invalid or du
     }
   });
 });
+
+test("F-021 AC-7b: a plugin-side network failure after a reachable pre-flight exits 4 without the network hint", () => {
+  const env = { AZDO_PAT: PAT, KILO_BIFROST_KEY: KEY };
+  withSandbox((sb) => {
+    const r = runInstall(sb, REQUIRED_ARGS, env, {
+      smoke: true,
+      scenario: {
+        azdoProbe: { status: 302 },
+        azdo: { mode: "throw", message: ERR_CANARY },
+        bifrost: { status: 200, body: MODELS_BODY },
+      },
+    });
+    assert.equal(r.status, 4);
+    assert.equal(
+      r.stdout.slice(r.stdout.indexOf("smoke network:")),
+      "smoke network: pass\nsmoke azdo: fail network-unreachable\nsmoke bifrost: skipped azdo-failed\nDone.\n",
+    );
+    assertLoaded(sb);
+    assert.equal(requests(sb).length, 2);
+    assertNoSecretsOrStack(r);
+  });
+});

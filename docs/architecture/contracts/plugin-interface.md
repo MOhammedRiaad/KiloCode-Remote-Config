@@ -1,6 +1,10 @@
 # Contract: `azdo-remote-config` plugin interface
 
-- Version: 0.8.0 (T-013, cycle-0019: section 2f cache file is a bound envelope (2f-C), cache applied
+- Version: 0.9.0 (F-021, cycle-0023: section 2e new fetch error codes `network-unreachable`
+  (fetch call failed before the deadline) and `network-blocked` (407, or 403 without a JSON
+  Content-Type), section 2e row 7a; section 2f-L new hint lines L-HINT-NETWORK /
+  L-HINT-CREDENTIALS logged after L-CACHE / L-NONE; ADR-0020. No change to exports, imports or
+  `__internals` keys; 0.8.0 was T-013, cycle-0019: section 2f cache file is a bound envelope (2f-C), cache applied
   only on an exact settings match, missing settings no longer use the cache, new read codes
   `cache-outdated` / `cache-mismatch` / `cache-skipped`; ADR-0018. No change to exports or
   `__internals` keys; 0.7.0 was F-006, cycle-0008: `__internals.runConfigHook`, new section 2f, section 3 hook
@@ -220,12 +224,14 @@ Warning texts. `<src>` is `plugin option <name>` or `environment variable <ENV> 
 | W3 | `Ignored <src>: expected "defaults" or "enforce".` |
 | W4 | `Ignored <src>: expected a whole number of milliseconds from 1 to 2147483647.` |
 
-## 2e. `__internals.fetchRemoteConfig` (F-005, FR-2, FR-3, FR-8, FR-10, ADR-0007)
+## 2e. `__internals.fetchRemoteConfig` (F-005, FR-2, FR-3, FR-8, FR-10, ADR-0007; classification F-021, ADR-0020)
 
 ```ts
 type FetchErrorCode =                                    // module-local
   | "invalid-settings" | "auth-unavailable" | "timeout" | "too-large"
-  | "bad-response" | "network" | `http-${number}`;
+  | "bad-response" | "network"
+  | "network-unreachable" | "network-blocked"            // since 0.9.0 (ADR-0020)
+  | `http-${number}`;
 type FetchResult = { ok: true; text: string } | { ok: false; error: FetchErrorCode };
 interface FetchInit { method: "GET"; headers: Record<string, string>; redirect: "manual"; signal: AbortSignal }
 type FetchLike = (url: string, init: FetchInit) => Promise<Response>;
@@ -251,7 +257,7 @@ Access: `await __internals.fetchRemoteConfig(resolveSettings(opts).settings, { f
 
 | Aspect | Contract |
 |---|---|
-| Never throws | The returned promise always resolves, for any `settings` / `deps` (incl. `null`, primitives, throwing proxies, throwing or never-settling fakes). No `throw` statement. Catch-all fallback: `{ ok: false, error: "network" }`. |
+| Never throws | The returned promise always resolves, for any `settings` / `deps` (incl. `null`, primitives, throwing proxies, throwing or never-settling fakes, and since 0.9.0 responses whose `headers` getter / `headers.get` throws or returns a non-string). No `throw` statement. Catch-all fallback: `{ ok: false, error: "network" }`. |
 | Result | Fresh plain object: `{ ok: true, text }` or `{ ok: false, error }`, no other keys. `error` is exactly one fixed code; `http-<status>` uses the integer status 100..599 (non-2xx). No message, value, URL, header, PAT, token, stdout or underlying error text ever appears in a result. |
 | Purity | Never writes to `settings`, `deps`, env or globals. No logging. |
 | Reads | `settings` and `deps` keys via `readOwn` (own data properties only; getters never invoked). `settings` not record-like -> `invalid-settings`. `deps` not record-like -> `{}`. |
@@ -261,12 +267,14 @@ Access: `await __internals.fetchRemoteConfig(resolveSettings(opts).settings, { f
 | 3. Deadline | One `AbortController` + one timer (`setTimeout(cb, timeoutMs)`), started after steps 1-2, before credentials. Covers az + fetch + whole body read. Every await on runAz / fetch / `reader.read()` is raced with the deadline. Timer always cleared in `finally`. |
 | 4. Credentials | First usable of: `settings.pat`, env `AZDO_PAT`, env `AZURE_DEVOPS_EXT_PAT` (own data properties). Usable = string whose `trim()` is non-empty and only code units 0x21..0x7E; unusable values are skipped silently. Header `Basic ` + `Buffer.from(":" + pat, "utf8").toString("base64")`. With a usable PAT `runAz` is never called. |
 | 5. az | No usable PAT: `runAz(AZ_TOKEN_ARGS, { timeoutMs })` exactly once. Token accepted iff resolved value is record-like, own `exitCode === 0`, own `stdout` string, `stdout.trim()` non-empty, <= 16384 chars, chars only `A-Z a-z 0-9 - . _ ~ + /` with optional trailing `=`. Else (sync throw, rejection, deadline, non-zero/null exit, empty, bad chars) -> `auth-unavailable` and **fetch is not called**. Header `Bearer ` + trimmed token. |
-| 6. Request | Exactly one `fetch(url, init)`. `init` keys exactly: `method: "GET"`, `headers` (plain object with exactly, in order: `Accept: "application/json"`, `Authorization`, `X-TFS-FedAuthRedirect: "Suppress"`), `redirect: "manual"`, `signal`. Sync throw / rejection -> `network` (or `timeout` if the deadline fired). Deadline first -> `timeout`; the signal is aborted. |
-| 7. Status | `response.status` integer 200..299 -> continue; integer 100..599 otherwise -> `http-<status>` (3xx included, redirects are never followed); anything else -> `bad-response`. Body cancelled (guarded) on early return. |
-| 8. Size | `content-length` header made of ASCII digits only and > 1048576 -> `too-large` without reading. Body read through `response.body.getReader()` (missing -> `bad-response`; non-`Uint8Array` chunk -> `bad-response`); running total > 1048576 -> reader cancelled, `too-large`. Read error -> `network` (`timeout` if the deadline fired). Cap applies before decoding and parsing. |
+| 6. Request | Exactly one `fetch(url, init)`. `init` keys exactly: `method: "GET"`, `headers` (plain object with exactly, in order: `Accept: "application/json"`, `Authorization`, `X-TFS-FedAuthRedirect: "Suppress"`), `redirect: "manual"`, `signal`. Since 0.9.0: sync throw / rejection before the deadline -> `network-unreachable` (was `network`); a sync throw / rejection while the deadline has fired -> `timeout`. Deadline first -> `timeout`; the signal is aborted. No extra request (no probe) is ever made. |
+| 7. Status | `response.status` integer 200..299 -> continue; integer 100..599 otherwise -> the code of row 7a (3xx included, redirects are never followed); anything else -> `bad-response`. Body cancelled (guarded, not awaited) on every early return; on a non-2xx status the cancel happens **after** the classification of 7a. `getReader` is never called on a non-2xx response. |
+| 7a. Non-2xx classification (since 0.9.0) | In this order: `407` -> `network-blocked` (headers not read). `403` -> read the Content-Type once, `attempt(() => response.headers.get("content-type"))` with ordinary property access (any throw -> absent); if it is a primitive `string` whose media type is JSON (below) -> `http-403`, otherwise (absent, `null`, non-string, throw, non-JSON) -> `network-blocked`. Any other status -> `http-<status>` (`401` included, whatever its Content-Type; its header is not read). **JSON media type**: `essence` = the string before the first `;` (all of it if none), `trim()`-ed, `toLowerCase()`-ed; JSON iff `essence === "application/json"`, or `essence` contains exactly one `/` at index > 0 and ends with `+json` with at least one character between the `/` and `+json`. Examples JSON: `application/json`, `Application/JSON; charset=utf-8`, `application/problem+json`, ` application/json ;x=y`. Not JSON: absent, `""`, `text/html; charset=utf-8`, `text/plain`, `text/json`, `application/json5`, `application/xml`, `+json`, `application/+json`, `a/b/c+json`. The header value is never coerced (`String()`, template, `toString`), stored, returned or logged. The Content-Type of a 2xx response is not read. |
+| 8. Size | `content-length` header made of ASCII digits only and > 1048576 -> `too-large` without reading. Body read through `response.body.getReader()` (missing -> `bad-response`; non-`Uint8Array` chunk -> `bad-response`); running total > 1048576 -> reader cancelled, `too-large`. Read error -> `network` (`timeout` if the deadline fired); unchanged in 0.9.0 (headers already arrived, so not a network-path symptom). Cap applies before decoding and parsing. |
 | 9. Body | `TextDecoder("utf-8", { fatal: true })`; decode error, `JSON.parse` error, parsed value not record-like, or own `content` not a string -> `bad-response`. Else `{ ok: true, text: content }` (exact string, not trimmed, not parsed). |
 | Default runAz | `execFile` from `node:child_process`, never `shell: true`, options `{ timeout: timeoutMs, maxBuffer: 65536, windowsHide: true, encoding: "utf8", cwd: homedir() }`. POSIX: file `az`, args as given. Windows (`process.platform === "win32"`): file = own absolute `process.env.ComSpec` or `"cmd.exe"`, args `["/d", "/s", "/c", "az " + args.join(" ")]` (args are the constant `AZ_TOKEN_ARGS`; no input ever reaches the command line). Callback: no error -> `{ exitCode: 0, stdout }`; numeric `error.code` -> `{ exitCode: code, stdout: "" }`; other error -> `{ exitCode: null, stdout: "" }`. Wrapped so it never rejects with data. Not covered by tests (no real az). |
-| Wiring | Since F-006 called by `runConfigHook` (2f) when `missing` is empty; an error code is logged verbatim as `<reason>` (L-CACHE / L-NONE), then the cache fallback applies (since 0.8.0 only on an exact binding match, 2f-C). |
+| Code summary (since 0.9.0) | `network-unreachable`: fetch call failed before the deadline. `network-blocked`: 407, or 403 without a JSON Content-Type. `timeout`: deadline during fetch or body read, or a failure after it fired. `network`: fetch unavailable, unexpected internal throw (outer catch, e.g. a throwing `setTimeout`), body-stream read failure after a 2xx. `http-403`: 403 with a JSON Content-Type. `http-<status>`: every other non-2xx status incl. 401. |
+| Wiring | Since F-006 called by `runConfigHook` (2f) when `missing` is empty; an error code is logged verbatim as `<reason>` (L-CACHE / L-NONE), followed since 0.9.0 by at most one hint line (2f-L), then the cache fallback applies (since 0.8.0 only on an exact binding match, 2f-C). The installer smoke (`installer-cli.md` 9.1) prints the code verbatim as `smoke azdo: fail <code>`. |
 
 ## 2f. `__internals.runConfigHook` (F-006, FR-6, FR-7, FR-9, FR-10, ADR-0008, ADR-0009; cache binding T-013, ADR-0018)
 
@@ -312,7 +320,7 @@ The default export's hook is exactly `(config) => runConfigHook(input, options, 
 |---|---|
 | Never rejects | For any arguments (including `null`, primitives, frozen or proxied objects, throwing / rejecting / hanging-logger fakes). Outer `try` / `catch` without binding -> L-UNEXPECTED. |
 | Deps | Read with `readOwn`; non-record-like `deps` -> `{}`. Absent key -> each helper's default. `homedir` present but not a function, or `fs` present but not record-like -> cache unavailable (never the real home / fs). A missing or non-function `fs` method -> that operation fails. `env`, `fetch`, `runAz`, `setTimeout`, `clearTimeout`, `readFile` passed through (each helper's own rules, 2b / 2d / 2e). Only non-`undefined` keys are passed on. |
-| Order | 0 logger; 1 `config` not a plain object -> L-BADCONFIG, return; 2 `resolveSettings(options, {env})`, each warning -> L-SET; `binding = cacheBindingOf(settings)`; 3 (since 0.8.0) `missing` non-empty or `binding === undefined` -> L-MISSING (only when `missing` is non-empty), then L-NONE with reason `missing-settings` and read code `cache-skipped`, return: **no fetch, no runAz, no cache read, no fs call**; else `fetchRemoteConfig(settings, {fetch, env, runAz, setTimeout, clearTimeout})`, then `validateShared(text)`; 4 remote ok -> L-REMOTE, `writeCache(shared, binding, ...)` (failure -> L-CACHE-WRITE); otherwise `readCache(binding, ...)`: ok -> L-CACHE, else L-NONE and return; 5 `resolvePlaceholders(shared, {env, homedir, readFile})`, unresolved -> L-UNRESOLVED; 6 transactional merge with `settings.mode` -> L-APPLIED or L-MERGE (ADR-0008 section 2, ADR-0018 section 5). |
+| Order | 0 logger; 1 `config` not a plain object -> L-BADCONFIG, return; 2 `resolveSettings(options, {env})`, each warning -> L-SET; `binding = cacheBindingOf(settings)`; 3 (since 0.8.0) `missing` non-empty or `binding === undefined` -> L-MISSING (only when `missing` is non-empty), then L-NONE with reason `missing-settings` and read code `cache-skipped`, return: **no fetch, no runAz, no cache read, no fs call**; else `fetchRemoteConfig(settings, {fetch, env, runAz, setTimeout, clearTimeout})`, then `validateShared(text)`; 4 remote ok -> L-REMOTE, `writeCache(shared, binding, ...)` (failure -> L-CACHE-WRITE); otherwise `readCache(binding, ...)`: ok -> L-CACHE then the hint of `<reason>` (2f-L, since 0.9.0), else L-NONE then the hint of `<reason>` and return; 5 `resolvePlaceholders(shared, {env, homedir, readFile})`, unresolved -> L-UNRESOLVED; 6 transactional merge with `settings.mode` -> L-APPLIED or L-MERGE (ADR-0008 section 2, ADR-0018 section 5). |
 | Reasons | `<reason>` = a `FetchErrorCode` (2e) \| `missing-settings` \| `invalid-jsonc` \| `invalid-shape`. Since 0.8.0 `missing-settings` appears only in L-NONE (always with `cache-skipped`), never in L-CACHE. |
 | Missing settings (since 0.8.0) | The cache is **not** applied when `org`, `project` or `repo` is unset (no binding can be verified; PO decision cycle 0019). `config` stays unchanged; the hook resolves. Before 0.8.0 the cache was used. |
 | Validation | `validateShared(text)`: non-string or `parseJsonc` throws -> `invalid-jsonc`; root not a plain object, or a container at level >= 64 (root 0) -> `invalid-shape`. Applied to fetched text and to cache text alike. Invalid content is never cached, never merged. |
@@ -368,6 +376,24 @@ several lines. `config` is the sanitised, unresolved shared config.)
 | L-MERGE | error | `Could not apply the shared config; local config left unchanged.` |
 | L-BADCONFIG | error | `Shared config not applied: the Kilo config is not an object.` |
 | L-UNEXPECTED | error | `Remote config failed unexpectedly; continuing with local config only.` |
+| L-HINT-NETWORK (since 0.9.0) | warn | `Azure DevOps could not be reached from this network: connect to the corporate VPN or ask the platform team to allow your public IP address, then restart Kilo.` |
+| L-HINT-CREDENTIALS (since 0.9.0) | warn | `Azure DevOps credentials are missing or were rejected: run az login or replace your PAT and check your access to the shared config repository; if your organisation restricts Azure DevOps by IP address, also connect to the corporate VPN.` |
+
+Hint rule (since 0.9.0, ADR-0020 section 4). The two hint texts are module-local constants
+(`LOG_HINT_NETWORK`, `LOG_HINT_CREDENTIALS`), ASCII only, and contain no value of any kind. The
+hint is chosen from `<reason>` only:
+
+| `<reason>` | Hint |
+|---|---|
+| `network-unreachable`, `network-blocked`, `timeout` | L-HINT-NETWORK |
+| `http-401`, `http-403`, `auth-unavailable` | L-HINT-CREDENTIALS |
+| any other (`network`, `http-404`, `http-5xx` and every other `http-*`, `too-large`, `bad-response`, `invalid-settings`, `invalid-jsonc`, `invalid-shape`, `missing-settings`) | none |
+
+Placement: exactly one hint line, logged **immediately after** L-CACHE (then L-UNRESOLVED /
+L-APPLIED / L-MERGE follow as before) or **immediately after** L-NONE (then return). Never on
+the success path, never on the missing-settings path (L-MISSING + L-NONE with
+`missing-settings` / `cache-skipped` stay exactly two/one lines as before), never twice. Always
+level `warn`.
 
 `<names>` for L-UNRESOLVED: each `unresolved` entry with code units `<= 0x1F`, `0x7F`, `0x80..0x9F`
 replaced by `?`, cut to 200 code units; at most 20 entries joined with `", "`, then
@@ -375,10 +401,13 @@ replaced by `?`, cut to 200 code units; at most 20 entries joined with `", "`, t
 
 Example sequences:
 - success, defaults: L-REMOTE, L-APPLIED (`Applied shared config from remote in defaults mode.`)
-- fetch `timeout`, valid cache: L-CACHE (`Remote config unavailable (timeout); using cached config.`), L-APPLIED (`... from cache ...`)
-- missing `org`, with or without a cache (since 0.8.0): L-MISSING (`Remote config skipped: missing required settings: org.`), L-NONE (`Remote config unavailable (missing-settings) and no usable cache (cache-skipped); continuing with local config only.`); no fs call
-- fetch `network`, cache written for another repo or branch: L-NONE (`Remote config unavailable (network) and no usable cache (cache-mismatch); continuing with local config only.`); `config` unchanged, cache file unchanged
-- fetch `network`, cache from a plugin before 0.8.0: L-NONE (`... no usable cache (cache-outdated) ...`)
+- fetch `timeout`, valid cache: L-CACHE (`Remote config unavailable (timeout); using cached config.`), L-HINT-NETWORK (since 0.9.0), L-APPLIED (`... from cache ...`)
+- missing `org`, with or without a cache (since 0.8.0): L-MISSING (`Remote config skipped: missing required settings: org.`), L-NONE (`Remote config unavailable (missing-settings) and no usable cache (cache-skipped); continuing with local config only.`); no fs call, no hint
+- fetch rejected (`network-unreachable`, since 0.9.0; was `network`), cache written for another repo or branch: L-NONE (`Remote config unavailable (network-unreachable) and no usable cache (cache-mismatch); continuing with local config only.`), L-HINT-NETWORK; `config` unchanged, cache file unchanged
+- fetch `network-unreachable`, cache from a plugin before 0.8.0: L-NONE (`... (network-unreachable) and no usable cache (cache-outdated) ...`), L-HINT-NETWORK
+- HTML 403 from a WAF (`network-blocked`), valid cache: L-CACHE (`Remote config unavailable (network-blocked); using cached config.`), L-HINT-NETWORK, L-APPLIED (`... from cache ...`)
+- JSON 401 (`http-401`), no cache: L-NONE (`Remote config unavailable (http-401) and no usable cache (cache-missing); continuing with local config only.`), L-HINT-CREDENTIALS
+- `http-500` or body-stream failure (`network`), valid cache: L-CACHE, L-APPLIED (no hint)
 
 ## 3. Behaviour contract
 

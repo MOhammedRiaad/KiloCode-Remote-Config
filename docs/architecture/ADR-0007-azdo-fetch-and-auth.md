@@ -1,5 +1,6 @@
 # ADR-0007: Azure DevOps fetch and authentication (`fetchRemoteConfig`)
-- Status: accepted
+- Status: accepted; sections 1 (codes), 8 (fetch-rejection mapping) and 10 step 1 (non-2xx
+  classification) amended by ADR-0020 (cycle-0023, F-021: `network-unreachable`, `network-blocked`)
 - Date: 2026-10-30
 - Cycle / item: cycle-0007 / F-005
 
