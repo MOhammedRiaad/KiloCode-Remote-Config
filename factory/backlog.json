@@ -20,7 +20,8 @@
     "External systems (Azure DevOps, az CLI, Bifrost, Kilo) are never called for real in tests; they are faked/mocked.",
     "Cycle 0022: factory reopened by the USER with a new requirement (Azure IP firewall in front of Bifrost / Kilo-facing endpoints). Items F-020..F-022 have source 'user' and outrank the earlier ordering. F-012/F-013/F-015 remain SKIPPED; remote mode stays OFF.",
     "Cycle 0023: F-021 selected (plugin-side classification of firewall-ish failures, no plugin probe). F-022 reduced to the remaining plugin-side docs. F-012/F-013/F-015 remain SKIPPED by user decision; remote mode stays OFF.",
-    "Cycle 0024: T-035 (split from T-034, code-only) selected as the final small slice of the USER's Azure IP firewall requirement: network hint on the authenticated smoke lines and Azure Firewall HTTP 470 classified as blocked. T-034 reduced to the 203 HTML sign-in case (needs real-environment evidence). F-012/F-013/F-015 remain SKIPPED by user decision; remote mode stays OFF."
+    "Cycle 0024: T-035 (split from T-034, code-only) selected as the final small slice of the USER's Azure IP firewall requirement: network hint on the authenticated smoke lines and Azure Firewall HTTP 470 classified as blocked. T-034 reduced to the 203 HTML sign-in case (needs real-environment evidence). F-012/F-013/F-015 remain SKIPPED by user decision; remote mode stays OFF.",
+    "Cycle 0025: factory DONE again. The USER's Azure IP firewall requirement is fully delivered (F-020 v0.15.0, F-021 + F-022 v0.16.0, T-035 v0.16.1). Remaining items are priority 4-5 hardening/test nits or need a real environment (T-031 AC2 Linux CI, T-029 real Kilo, T-025 real org, T-034 203 evidence, T-036 conditional-access part). Nothing in_progress. F-012/F-013/F-015 remain SKIPPED by user decision; remote mode stays OFF."
   ],
   "items": [
     {
@@ -1358,7 +1359,8 @@
         "Given a hand-built report with a throwing getter or non-string code, When formatSmoke runs, Then it does not throw and prints `internal` for that field."
       ],
       "source": "review",
-      "cycle_done": null
+      "cycle_done": null,
+      "notes": "Cycle 0025 PO: not selected; factory declared DONE. The formatLine guard is defence-in-depth only (no real runSmoke path produces such a report; install-helper's catch keeps exit 4). The conditional-access (JSON 401/403, VS403463-style) hint needs real-environment evidence and a contract decision first. Optional extra from the cycle 0024 architect: a PowerShell child-process 470 smoke test in install-ps1-smoke.test.ts if pwsh is available on CI."
     }
   ]
 }

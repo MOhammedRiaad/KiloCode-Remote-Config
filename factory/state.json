@@ -1,6 +1,6 @@
 {
-  "status": "running",
-  "cycle": 24,
+  "status": "done",
+  "cycle": 25,
   "max_cycles": 50,
   "phase": "idle",
   "current_item": null,
