@@ -610,7 +610,7 @@
       "id": "F-017",
       "title": "Optional allowlist for {file:} and {env:} placeholders",
       "type": "security",
-      "priority": 3,
+      "priority": 4,
       "status": "todo",
       "scope": {
         "backend": true,
@@ -627,7 +627,7 @@
       ],
       "source": "security",
       "cycle_done": null,
-      "notes": "Cycle 0020 PO: kept at 3 but deferred; the shared config repo is PR-gated by Azure Pipelines and branch policy (F-008), which is the primary control for this accepted risk. Worth doing later if the shared repo gains writers outside the platform team."
+      "notes": "Cycle 0020 PO: kept at 3 but deferred; the shared config repo is PR-gated by Azure Pipelines and branch policy (F-008), which is the primary control for this accepted risk. Worth doing later if the shared repo gains writers outside the platform team. Cycle 0021 PO: lowered to 4 at factory close (DONE). It is an optional defence-in-depth control for an accepted risk, not a vision capability; first in the recommended order of later work."
     },
     {
       "id": "T-007",
@@ -798,7 +798,8 @@
         "Given docs/platform-runbook.md, When the docs check runs, Then the Phase 0 checklist contains an item to verify whether a project-level Kilo config can override the plugin options, with the expected safe outcome."
       ],
       "source": "security",
-      "cycle_done": null
+      "cycle_done": null,
+      "notes": "Cycle 0021 PO: NEEDS A HUMAN with a real Kilo install (Phase 0); cannot be closed autonomously (factory declared DONE). The doc half (runbook checklist line) can be bundled with the next docs change."
     },
     {
       "id": "T-014",
@@ -1057,7 +1058,8 @@
         "Given a documented real-org check, When performed, Then the validity-duration and creator-vote behaviour are recorded in ADR-0015 and the script/contract corrected if they differ."
       ],
       "source": "security",
-      "cycle_done": null
+      "cycle_done": null,
+      "notes": "Cycle 0021 PO: NEEDS A HUMAN with a real Azure DevOps org; cannot be closed autonomously (factory declared DONE). Do it during Phase 0 / first rollout of the shared config repo."
     },
     {
       "id": "T-026",
@@ -1161,7 +1163,8 @@
         "Given the 5 AC-3 tests, When ubuntu-latest CI runs, Then they report passed, not skipped."
       ],
       "source": "review",
-      "cycle_done": null
+      "cycle_done": null,
+      "notes": "Cycle 0021 PO: AC2 NEEDS A LINUX RUN (push/PR to GitHub so ubuntu-latest CI runs scripts/ci.sh and confirm the 5 AC-3 POSIX tests report passed). The AC1 test and doc wording are low-value follow-ups for later (factory declared DONE)."
     }
   ]
 }
