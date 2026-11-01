@@ -307,14 +307,14 @@ function resolveContainer(
 /**
  * Resolves {env:NAME} and {file:PATH} placeholders in every string of a parsed config.
  * @param input - any parsed JSON value; it is not mutated.
- * @param deps - optional seams env, homedir and readFile; the defaults are the real ones.
+ * @param deps - optional env, homedir, readFile seams; the default readFile is the guarded reader.
  * @returns the new value and the unresolved placeholders as kind:name entries, each once, in order.
  * Invariants: single pass, resolved values are never re-scanned; a string that is exactly one unresolved
  *   placeholder is dropped (key or array item omitted), one inside a longer string becomes empty; env names
  *   are own properties and empty values are unresolved; file paths must be absolute or start with ~,
- *   UNC-like paths are rejected, only regular files up to 1 MiB are read (trimmed, errors discarded). For
- *   parsed JSON it throws only at nesting depth 64 or more; hostile objects (throwing getters, proxies) in
- *   the input or an injected env can also make it throw.
+ *   UNC-like paths are rejected, the default reader reads only regular files up to 1 MiB (trimmed, errors
+ *   discarded). For parsed JSON it throws only at nesting depth 64 or more; hostile objects (throwing
+ *   getters, proxies) in the input or an injected env can also make it throw.
  * @see ADR-0004
  * @see contracts/plugin-interface.md section 2b
  */
@@ -1720,7 +1720,7 @@ async function acquireRemote(settings: unknown, deps: HookDeps): Promise<Acquire
  * @param deps - the already filtered hook seams (HookDeps).
  * Logs: L-BADCONFIG; L-SET; L-MISSING and LOG_NO_SETTINGS (L-NONE with missing-settings and cache-skipped)
  *   before any fetch or cache read; L-REMOTE and, on a failed cache write, L-CACHE-WRITE; on a failed fetch
- *   L-CACHE or L-NONE, each followed by its hint; then L-UNRESOLVED, L-APPLIED or LOG_MERGE (L-MERGE).
+ *   L-CACHE or L-NONE with its hint; then L-UNRESOLVED (if any) and L-APPLIED or LOG_MERGE (L-MERGE).
  * Invariants: at most one remote fetch per run; a validated remote config refreshes the cache and is used;
  *   the cache is read only after a failed fetch and used only when its binding equals the current settings;
  *   placeholders are resolved after the source is chosen and the merge is transactional (applyShared). It
@@ -1788,8 +1788,9 @@ async function executeHook(log: HookLog, options: unknown, config: unknown, deps
  *   L-UNRESOLVED, L-APPLIED, L-MERGE, L-BADCONFIG, L-UNEXPECTED and the two hints of contract 2f-L.
  * Invariants: never rejects (FR-10): an unexpected throw from executeHook is caught and logged as
  *   LOG_UNEXPECTED; for ordinary objects every failure leaves the config unchanged or fully merged (the
- *   rollback is best-effort); no secret, URL, host or config value appears in any log (AC-9); the only
- *   config-derived log text is the sanitised placeholder NAMES of L-UNRESOLVED, never their values.
+ *   rollback is best-effort); no secret, PAT, token, Azure DevOps URL or host, or resolved config value
+ *   appears in any log (AC-9); L-UNRESOLVED logs placeholder NAMES copied as written (sanitised, shortened)
+ *   from the shared config, which may contain paths or hosts, but never their values.
  * @see ADR-0008 section 7
  * @see contracts/plugin-interface.md section 2f
  */
