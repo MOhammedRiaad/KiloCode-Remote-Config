@@ -53,7 +53,9 @@ Both `install.sh` and `install.ps1` use the same exit codes (see [Installer exit
 - **`0`**: installed, updated, or already up to date, and the smoke test passed (or was skipped).
 - **`1`**: missing prerequisite (Node.js `< 22.18` or no Azure DevOps credentials). No files were modified.
 - **`2`**: invalid flag, missing `--org` / `--project` / `--repo`, or invalid `KILO_BIFROST_KEY`. No files were modified.
-- **`3`**: existing `kilo.jsonc` is invalid JSONC, has an unexpected root shape, or a target path is a symlink.
+- **`3`**: existing `kilo.jsonc` is invalid JSONC, has an unexpected root shape, or a target path is a symlink, or (`install.sh`) the helper file is missing. Two messages to know:
+  - `install.sh: error: installer sources are missing (expected install-helper.ts next to install.sh).`: `install-helper.ts` is not next to the script, for example after downloading only `install.sh`. Run it from a full repository checkout (`bash backend/installer/install.sh ...`). `install.ps1` prints the same wording with its own name.
+  - `<path> is not a regular file or directory (symlinks are not followed); update it manually.`: that path (config folder, `azdo` folder, plugin file or `kilo.jsonc`) is a symlink. Replace it with a real file or folder, or move it away, and re-run. Nothing is written through the link.
 - **`4`**: **exit code 4** means the plugin and personal `kilo.jsonc` were installed and kept, but the post-install smoke test (`smoke azdo:` or `smoke bifrost:`) failed.
   - On offline machines or restricted environments without network access to Azure DevOps or Bifrost, pass `--no-smoke` to `install.sh` on macOS/Linux or `-NoSmoke` to `install.ps1` on Windows.
   - For each smoke failure code (`auth-unavailable`, `timeout`, `http-<status>`, `no-base-url`, `insecure-base-url`, etc.) and how to fix it, see the [Smoke test troubleshooting table in the user guide](user-guide.md#smoke-test).

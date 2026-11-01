@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { TestContext } from "node:test";
@@ -12,6 +12,7 @@ import {
   findBash,
   installShPath,
   isWindows,
+  raceFixtureUrl,
   REQUIRED_ARGS,
   runInstall,
   snapshot,
@@ -243,12 +244,24 @@ test("AC-5 every failing prerequisite is reported", () => {
   });
 });
 
-test("AC-5 Node 22.18 and newer pass the version check", () => {
+test("T-019 AC-4 Node 22.17.1 is refused with the exact message", () => {
+  withSandbox((sb) => {
+    stubNode(sb, "22.17.1");
+    const r = runInstall(sb, REQUIRED_ARGS, withPat);
+    assert.equal(r.status, 1);
+    assert.ok(r.stderr.includes("Node.js 22.18 or later is required (found 22.17.1)."), r.stderr);
+    assert.deepEqual(snapshot(sb.home), {});
+  });
+});
+
+test("T-019 AC-4 Node 22.18 and newer pass the version check and install", () => {
   for (const version of ["22.18.0", "23.0.1"]) {
     withSandbox((sb) => {
       stubNode(sb, version);
-      const r = runInstall(sb, ["--help"]);
-      assert.equal(r.status, 0);
+      const r = runInstall(sb, REQUIRED_ARGS, withPat);
+      assert.equal(r.status, 0, r.stderr);
+      assert.doesNotMatch(r.stderr, /Node\.js 22\.18/);
+      assert.ok(statSync(join(sb.configDir, "kilo.jsonc")).isFile());
     });
   }
 });
@@ -394,3 +407,150 @@ test("AC-8 install.sh avoids eval, set -x and external commands", () => {
   const text = readFileSync(installShPath, "utf8");
   assert.doesNotMatch(text, /\beval\b|set -x|\bsed\b|\bawk\b|\bcat\b|\bdirname\b|\bmktemp\b/);
 });
+
+// ---- T-019: installer hardening ----
+
+const MISSING_HELPER =
+  "install.sh: error: installer sources are missing (expected install-helper.ts next to install.sh).\n";
+
+function msysPath(path: string): string {
+  const forward = path.replaceAll("\\", "/");
+  return isWindows ? forward.replace(/^([A-Za-z]):/, (_m, d: string) => `/${d.toLowerCase()}`) : forward;
+}
+
+test("T-019 AC-1 a CDPATH look-alike directory does not hijack the helper lookup", () => {
+  withSandbox((sb) => {
+    const decoy = join(sb.root, "decoy");
+    mkdirSync(join(decoy, "installer"), { recursive: true });
+    writeFileSync(join(decoy, "installer", "install-helper.ts"), 'console.log("DECOY");\n');
+    const r = runInstall(
+      sb,
+      REQUIRED_ARGS,
+      { ...withPat, CDPATH: msysPath(decoy) },
+      { cwd: backendRoot, script: "installer/install.sh" },
+    );
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stdout, /DECOY/);
+    assert.ok(!r.stdout.includes("decoy"), r.stdout);
+    assert.deepEqual(readFileSync(join(sb.configDir, "azdo", "azdo-remote-config.ts")), pluginSource);
+    assert.ok(statSync(join(sb.configDir, "kilo.jsonc")).isFile());
+  });
+});
+
+test("T-019 AC-2 a missing install-helper.ts exits 3 with the fixed message", () => {
+  withSandbox((sb) => {
+    stubNode(sb, undefined, { log: true });
+    const lonely = join(sb.root, "lonely");
+    mkdirSync(lonely);
+    copyFileSync(installShPath, join(lonely, "install.sh"));
+    const r = runInstall(sb, REQUIRED_ARGS, withPat, { script: msysPath(join(lonely, "install.sh")) });
+    assert.equal(r.status, 3);
+    assert.equal(r.stderr, MISSING_HELPER);
+    assert.equal(r.stdout, "");
+    const log = readFileSync(join(sb.root, "node.log"), "utf8");
+    assert.ok(!log.includes("install-helper"), log);
+    noStack(r);
+    assert.deepEqual(snapshot(sb.home), {});
+  });
+});
+
+test("T-019 AC-5 an sk-bf- key is accepted silently and never echoed", () => {
+  withSandbox((sb) => {
+    const key = `sk-bf-${FAKE_SECRET}`;
+    const r = runInstall(sb, REQUIRED_ARGS, { ...withPat, KILO_BIFROST_KEY: key });
+    assert.equal(r.status, 0, r.stderr);
+    for (const text of [r.stdout, r.stderr]) {
+      assert.ok(!text.includes(key) && !text.includes(FAKE_SECRET) && !text.includes("SECRET_TAIL"));
+    }
+    assert.doesNotMatch(r.stderr, /does not start with sk-bf-/);
+    assert.equal(parse(join(sb.configDir, "kilo.jsonc"))["provider"].bifrost.options.apiKey, key);
+  });
+});
+
+function refusal(path: string): string {
+  return `install.sh: error: ${path} is not a regular file or directory (symlinks are not followed); update it manually.\n`;
+}
+
+interface Decoys {
+  dir: string;
+  file: string;
+}
+
+function makeDecoys(sb: Sandbox): Decoys {
+  const dir = join(sb.root, "decoy-dir");
+  mkdirSync(dir);
+  writeFileSync(join(dir, "decoy.txt"), "decoy-bytes");
+  const file = join(sb.root, "decoy-file.jsonc");
+  writeFileSync(file, "{}");
+  chmodSync(dir, 0o777);
+  chmodSync(join(dir, "decoy.txt"), 0o644);
+  chmodSync(file, 0o644);
+  return { dir, file };
+}
+
+function assertDecoysUntouched(sb: Sandbox, decoys: Decoys) {
+  assert.equal(statSync(decoys.dir).mode & 0o777, 0o777);
+  assert.deepEqual(readdirSync(decoys.dir), ["decoy.txt"]);
+  assert.equal(statSync(decoys.file).mode & 0o777, 0o644);
+  assert.equal(readFileSync(decoys.file, "utf8"), "{}");
+  const names = [...readdirSync(sb.configDir), ...readdirSync(decoys.dir)];
+  assert.deepEqual(names.filter((n) => /\.tmp-|\.bak-/.test(n)), []);
+}
+
+function posixOnly(t: TestContext): boolean {
+  if (isWindows) t.skip("symlink tests need POSIX symlinks; fs-guard unit tests cover Windows");
+  return isWindows;
+}
+
+test("T-019 AC-3 a symlinked configDir or azdo dir found while planning is refused", (t) => {
+  if (posixOnly(t)) return;
+  for (const linked of ["configDir", "azdoDir"] as const) {
+    withSandbox((sb) => {
+      const decoys = makeDecoys(sb);
+      const swap = linked === "configDir" ? sb.configDir : join(sb.configDir, "azdo");
+      mkdirSync(linked === "configDir" ? join(sb.home, ".config") : sb.configDir, { recursive: true });
+      symlinkSync(decoys.dir, swap);
+      const r = runInstall(sb, REQUIRED_ARGS, withPat);
+      assert.equal(r.status, 3);
+      assert.equal(r.stderr, refusal(swap));
+      noStack(r);
+      assert.equal(statSync(decoys.dir).mode & 0o777, 0o777);
+      assert.deepEqual(readdirSync(decoys.dir), ["decoy.txt"]);
+    });
+  }
+});
+
+interface RaceCase {
+  name: string;
+  swapOf: (sb: Sandbox) => string;
+  target: (decoys: Decoys) => string;
+  unchanged: boolean;
+}
+
+const RACES: RaceCase[] = [
+  { name: "configDir", swapOf: (sb) => sb.configDir, target: (d) => d.dir, unchanged: false },
+  { name: "azdo dir", swapOf: (sb) => join(sb.configDir, "azdo"), target: (d) => d.dir, unchanged: false },
+  { name: "fresh kilo.jsonc", swapOf: (sb) => join(sb.configDir, "kilo.jsonc"), target: (d) => d.file, unchanged: false },
+  { name: "unchanged kilo.jsonc", swapOf: (sb) => join(sb.configDir, "kilo.jsonc"), target: (d) => d.file, unchanged: true },
+];
+
+for (const race of RACES) {
+  test(`T-019 AC-3 ${race.name} swapped for a symlink after mkdir is refused untouched`, (t) => {
+    if (posixOnly(t)) return;
+    withSandbox((sb) => {
+      const decoys = makeDecoys(sb);
+      const env = { ...withPat, KILO_BIFROST_KEY: FAKE_SECRET };
+      if (race.unchanged) {
+        assert.equal(runInstall(sb, REQUIRED_ARGS, env).status, 0);
+        chmodSync(join(sb.configDir, "kilo.jsonc"), 0o644);
+      }
+      const swap = race.swapOf(sb);
+      const config = JSON.stringify({ trigger: join(sb.configDir, "azdo"), swap, target: race.target(decoys) });
+      const r = runInstall(sb, REQUIRED_ARGS, { ...env, KILO_TEST_RACE: config }, { preload: [raceFixtureUrl] });
+      assert.equal(r.status, 3, r.stderr);
+      assert.equal(r.stderr, refusal(swap));
+      noStack(r);
+      assertDecoysUntouched(sb, decoys);
+    });
+  });
+}

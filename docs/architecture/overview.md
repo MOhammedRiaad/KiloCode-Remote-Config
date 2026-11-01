@@ -24,7 +24,7 @@ Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`,
 | C2 | Remote config plugin (single file, FR-11) | `backend/plugin/azdo-remote-config.ts` | `~/.config/kilo/azdo/azdo-remote-config.ts` | **stub (T-001) + JSONC parser (F-001) + placeholder resolver (F-002) + merge (F-003) + settings resolution (F-004) + AzDO fetch/auth (F-005) + hook wiring, cache, fallback, logging (F-006) + cache bound to settings (T-013, ADR-0018)** |
 | C3 | Personal config template | `backend/personal-config/kilo.jsonc` | `~/.config/kilo/kilo.jsonc` | **template + tests (F-009)**; copied by installers (F-010/F-011) |
 | C4 | Bifrost gateway | external, not in repo | - | external |
-| C5 | Bootstrap installer | `backend/installer/` (`install.sh` + `install.ps1` front ends; `install-helper.ts` + `personal-config-edit.ts` + `smoke.ts`) | engineer runs it from a checkout that keeps `installer/`, `plugin/`, `personal-config/` side by side | **install.sh (F-010, ADR-0012) + smoke test (F-019, ADR-0013) + install.ps1 (F-011, ADR-0014)** |
+| C5 | Bootstrap installer | `backend/installer/` (`install.sh` + `install.ps1` front ends; `install-helper.ts` + `personal-config-edit.ts` + `smoke.ts` + `fs-guard.ts`) | engineer runs it from a checkout that keeps `installer/`, `plugin/`, `personal-config/` side by side | **install.sh (F-010, ADR-0012) + smoke test (F-019, ADR-0013) + install.ps1 (F-011, ADR-0014)** |
 | C6 | Key provisioning | `backend/provisioning/` | platform-team tooling | **skipped by user decision** (F-012/F-013): virtual keys are issued and disabled by hand by the platform team |
 
 There is no frontend and no server process. `frontend/` is intentionally absent.
@@ -73,12 +73,15 @@ bash installer/install.sh --org O --project P --repo R [--path --branch --mode] 
   install.sh (bash builtins + node + az only, writes nothing):
     parse flags > KILO_AZDO_* env > defaults; missing org/project/repo -> exit 2
     prereqs: node >= 22.18; AZDO_PAT|AZURE_DEVOPS_EXT_PAT|KILO_AZDO_PAT set, else az account show -> exit 1
+    script dir: CDPATH= cd -- "${BASH_SOURCE[0]%/*}" && pwd; no regular install-helper.ts there -> exit 3 (T-019)
     printf "%s\0" org=.. project=.. repo=.. path=.. branch=.. mode=.. apiKey=.. smoke=on|off | node installer/install-helper.ts
   install-helper.ts (Node, imports plugin __internals.parseJsonc / resolveSettings):
     read-only phase: validate records + values, configDir = $XDG_CONFIG_HOME/kilo | homedir/.config/kilo,
       lstat targets, read plugin + template + existing kilo.jsonc (<= 1 MiB, parseJsonc, root object),
       plan: fresh = template token replacement | update = personal-config-edit rules; deep-equal -> no-op
-    write phase: mkdir 0700, copy plugin -> configDir/azdo/azdo-remote-config.ts (only if bytes differ),
+    write phase: mkdir 0700, re-lstat configDir/azdo/plugin/kilo.jsonc (fs-guard.ts; symlink -> exit 3),
+      chmod only via O_NOFOLLOW fd + fchmod (T-019),
+      copy plugin -> configDir/azdo/azdo-remote-config.ts (only if bytes differ),
       backup kilo.jsonc.bak-<UTC ts> (wx, 0600, byte-identical), write kilo.jsonc (tmp wx 0600 + rename)
     never writes configDir/plugin(s)/ (AC-12); never prints key / PAT / file content
     smoke phase (smoke=on, after a successful write; installer/smoke.ts; ADR-0013):
@@ -210,12 +213,15 @@ backend/                     # the only package (ADR-0001 section 7)
                               # F-011: install.ps1 (PowerShell front end, ASCII, LF) - ADR-0014
                               #        personal-config-edit.ts (pure edit rules) - ADR-0012
                               # F-019: smoke.ts (azdo + bifrost checks, injectable deps) - ADR-0013
+                              # T-019: fs-guard.ts (post-mkdir target re-check, injectable lstat) - ADR-0012
   test/installer/*.test.ts    # edit rules (unit) + install.sh in child bash with temp HOME, stub az (F-010)
                               # + smoke unit tests and install.sh smoke tests (F-019)
                               # + install.ps1 tests via pwsh / powershell.exe, skipped without PowerShell (F-011)
   test/installer/fixtures/fake-network.ts  # TEST ONLY: --import preload replacing globalThis.fetch
                               # (loaded via NODE_OPTIONS by tests; never imported by product code)
                               # F-014: + "auth" answer (401 unless Authorization matches)
+  test/installer/fixtures/race-after-mkdir.ts  # TEST ONLY (T-019): preload that swaps a target for a
+                              # symlink right after the helper's mkdirSync (POSIX race tests)
   test/e2e/startup.test.ts    # F-014: install.sh -> simulated Kilo starts, end to end (ADR-0016)
   test/e2e/helpers.ts         #   sandbox, runStart, probeFetch, assertNoLeaks
   test/e2e/fixtures/kilo-start-simulator.ts  # TEST ONLY: child Node stand-in for Kilo start

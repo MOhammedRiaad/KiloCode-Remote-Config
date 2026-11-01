@@ -22,6 +22,9 @@ export const installShPath = join(backendRoot, "installer", "install.sh").replac
 export const fakeNetworkUrl = pathToFileURL(
   join(backendRoot, "test", "installer", "fixtures", "fake-network.ts"),
 ).href;
+export const raceFixtureUrl = pathToFileURL(
+  join(backendRoot, "test", "installer", "fixtures", "race-after-mkdir.ts"),
+).href;
 export const isWindows = process.platform === "win32";
 export const REQUIRED_ARGS = ["--org", "acme", "--project", "proj", "--repo", "cfg"];
 
@@ -42,6 +45,9 @@ export interface RunResult {
 export interface RunInstallOptions {
   smoke?: boolean;
   scenario?: FakeScenario;
+  cwd?: string;
+  script?: string;
+  preload?: string[];
 }
 
 export type NetLogRequest = {
@@ -74,13 +80,14 @@ function writeExecutable(path: string, text: string): void {
   chmodSync(path, 0o755);
 }
 
-export function stubNode(sb: Sandbox, reportedVersion?: string): void {
+export function stubNode(sb: Sandbox, reportedVersion?: string, opts: { log?: boolean } = {}): void {
   const real = forwardSlashes(process.execPath);
+  const logLine = opts.log ? `printf '%s\\n' "$*" >> "${forwardSlashes(join(sb.root, "node.log"))}"\n` : "";
   const body =
     reportedVersion === undefined
       ? `exec "${real}" "$@"\n`
       : `if [ "$1" = "-p" ]; then echo ${reportedVersion}; exit 0; fi\nexec "${real}" "$@"\n`;
-  writeExecutable(join(sb.bin, "node"), `#!/bin/sh\n${body}`);
+  writeExecutable(join(sb.bin, "node"), `#!/bin/sh\n${logLine}${body}`);
 }
 
 export function stubAz(sb: Sandbox, mode: "ok" | "fail", token?: string): void {
@@ -187,8 +194,8 @@ export function runInstall(
   const env: Record<string, string> = {
     PATH: sb.bin,
     HOME: sb.home,
-    NODE_OPTIONS: `--import=${fakeNetworkUrl}`,
-    MSYS2_ENV_CONV_EXCL: "NODE_OPTIONS;KILO_TEST_FAKE_NET",
+    NODE_OPTIONS: [fakeNetworkUrl, ...(opts.preload ?? [])].map((url) => `--import=${url}`).join(" "),
+    MSYS2_ENV_CONV_EXCL: "NODE_OPTIONS;KILO_TEST_FAKE_NET;KILO_TEST_RACE",
     KILO_TEST_FAKE_NET: netJsonPath,
   };
   if (isWindows) {
@@ -201,8 +208,13 @@ export function runInstall(
       TMP: temp,
     });
   }
-  const spawnArgs = opts.smoke ? [installShPath, ...args] : [installShPath, "--no-smoke", ...args];
-  const result = spawnSync(findBash(), spawnArgs, { env: { ...env, ...extraEnv }, encoding: "utf8" });
+  const script = opts.script ?? installShPath;
+  const spawnArgs = opts.smoke ? [script, ...args] : [script, "--no-smoke", ...args];
+  const result = spawnSync(findBash(), spawnArgs, {
+    env: { ...env, ...extraEnv },
+    encoding: "utf8",
+    ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+  });
   if (result.error) throw result.error;
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }

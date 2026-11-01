@@ -6,6 +6,9 @@
   optional `smoke` stdin record, FR-11 lint rule 7.
 - Amended by: ADR-0014 (cycle-0014, F-011): `install.ps1` front end, optional `frontend` stdin
   record (message prefix only), Windows ACL behaviour documented.
+- Amended in place (cycle-0020, T-019; contract 1.2.1): section 2 (CDPATH-safe script dir,
+  missing-helper exit 3), section 6 (post-`mkdir` symlink re-check, `O_NOFOLLOW` + `fchmod`,
+  residual race), section 8 (race preload fixture, `fs-guard.ts` unit tests).
 
 ## Context
 
@@ -56,6 +59,15 @@ locates its inputs from `import.meta.url`:
 `../plugin/azdo-remote-config.ts` and `../personal-config/kilo.jsonc`. Distribution therefore keeps
 the three folders `installer/`, `plugin/`, `personal-config/` side by side (a checkout of this
 `backend/` tree or the same subtree published in the C1 repo).
+
+(T-019) The `cd` is written `CDPATH= cd -- "$script_dir" && pwd`: with CDPATH exported, bash
+would otherwise search CDPATH for a relative dir name such as `installer` and print the chosen
+directory, so the captured value could point at a look-alike folder or span two lines. `--`
+stops a dir name starting with `-` being read as an option. Then `[ -f "$script_dir/install-helper.ts" ]`
+must hold, else the fixed one-line message
+`install.sh: error: installer sources are missing (expected install-helper.ts next to install.sh).`
+and exit 3, mirroring `install.ps1` (ADR-0014). Both stay builtins-only (`cd`, `pwd`, `[`).
+The check runs after the prerequisite checks (same position as in `install.ps1`).
 
 ### 3. Passing inputs to the helper: NUL-separated records on stdin
 
@@ -119,6 +131,27 @@ does not touch it.
 - Symlinks: `lstat` is used. If `kilo.jsonc`, `azdo/` or `azdo/azdo-remote-config.ts` exists and is
   not a regular file / directory (for example a symlink), the helper refuses with a fixed error and
   writes nothing. Conservative: no writing through links that someone else may control.
+- (T-019) Planning-time `lstat` alone leaves a window: a path may be swapped for a link between
+  planning and the write phase, and `chmodSync` follows links. Therefore:
+  1. Right after `mkdirSync(azdoDir, { recursive: true, mode: 0o700 })` and before any other
+     write-phase call, `checkTargets` (new sibling module `installer/fs-guard.ts`, `lstat`
+     injectable) re-checks `configDir` (dir, required), `azdoDir` (dir, required), the plugin
+     destination and `kilo.jsonc` (absent or regular file). First failure -> the existing
+     `refuse(path)` (exit 3, same message). No new message or exit code.
+  2. Every mode change goes through a descriptor: `openSync(path, O_RDONLY | O_NOFOLLOW |
+     (dir ? O_DIRECTORY : O_NONBLOCK))`, `fstatSync` type check, `fchmodSync`, `closeSync`.
+     `ELOOP` / `ENOTDIR` / wrong type -> `refuse(path)`. This closes the check-then-chmod race
+     for the last path component. Temp files and backups are created with `openSync(path, "wx",
+     mode)` and `fchmod`-ed through that descriptor. POSIX only (no chmod on Windows, unchanged).
+  3. Writes already do not follow a link at the final component: temp files and backups use
+     `O_CREAT | O_EXCL` (`wx`) and `rename` replaces a link rather than writing through it.
+  Residual risk (accepted, documented in the contract): `lstat`-then-`open` is still a race for
+  the **parent** components; `mkdirSync` (no `mkdirat` in Node) can create an empty `0700`
+  `azdo/` inside a link target if `configDir` is swapped between planning and `mkdir`; Node has no
+  portable `O_NOFOLLOW` per component. Exploiting either needs write access to the parent of
+  `configDir` (the engineer's own `~/.config` or `XDG_CONFIG_HOME`), i.e. the attacker already
+  controls the account. Parents of `configDir` are deliberately not checked (dotfile managers
+  link `~/.config`).
 - Size caps: existing `kilo.jsonc` at most 1 MiB; stdin at most 64 KiB.
 
 ### 7. Prerequisites (FR-21), checked by `install.sh` before the helper runs
@@ -144,6 +177,13 @@ All failing prerequisites are reported together, then exit 1. The FR-22 smoke te
 - POSIX mode assertions are skipped on Windows with `t.skip("POSIX permissions are not enforced on
   Windows")`.
 - No network, no real `az`, no real home directory, no Kilo.
+- (T-019) The post-`mkdir` race is reproduced without any product test switch: a TEST-ONLY
+  preload `test/installer/fixtures/race-after-mkdir.ts` (added to `NODE_OPTIONS` next to
+  `fake-network.ts`) wraps `fs.mkdirSync`, calls `module.syncBuiltinESMExports()` so the helper's
+  `import { mkdirSync } from "node:fs"` sees the wrapper, and after the first real `mkdirSync`
+  swaps the configured path for a symlink. POSIX only (skipped on Windows with a reason).
+  `fs-guard.ts` is unit-tested with an injected `lstat` on every platform. `install-helper.ts`
+  keeps no exports (it runs on import); testable logic lives in sibling modules.
 
 ### 9. Lint / CI
 

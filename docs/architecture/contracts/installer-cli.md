@@ -1,13 +1,18 @@
 # Contract: bootstrap installers (`install.sh`, `install.ps1`) and install helper
 
-- Version: 1.2.0 (cycle-0014, F-011: `install.ps1` front end (section 10), optional `frontend`
-  stdin record, front-end-specific message prefix). 1.1.0: cycle-0013, F-019 (smoke test,
+- Version: 1.2.1 (cycle-0020, T-019: `install.sh` resolves its directory CDPATH-safe and exits 3
+  with a fixed message when `install-helper.ts` is missing (section 3 step 4); the helper re-checks
+  its targets for symlinks after creating directories and changes modes only through
+  `O_NOFOLLOW` descriptors (section 6). No new input, record or exit code.)
+  1.2.0: cycle-0014, F-011: `install.ps1` front end (section 10), optional `frontend`
+  stdin record, front-end-specific message prefix. 1.1.0: cycle-0013, F-019 (smoke test,
   `--no-smoke`, exit code 4, optional `smoke` stdin record). 1.0.0: cycle-0011, F-010.
-  Decision records: ADR-0012, ADR-0013, ADR-0014.
+  Decision records: ADR-0012 (amended cycle-0020), ADR-0013, ADR-0014.
 - Files: `backend/installer/install.sh` (bash front end), `backend/installer/install.ps1`
   (PowerShell front end; since 1.2.0), `backend/installer/install-helper.ts`
   (Node CLI, all file I/O), `backend/installer/personal-config-edit.ts` (pure library),
-  `backend/installer/smoke.ts` (smoke checks, injectable deps; since 1.1.0).
+  `backend/installer/smoke.ts` (smoke checks, injectable deps; since 1.1.0),
+  `backend/installer/fs-guard.ts` (target type check with injectable `lstat`; since 1.2.1).
 - Inputs read from the repo tree (relative to the helper): `../plugin/azdo-remote-config.ts`,
   `../personal-config/kilo.jsonc`. Neither file is modified.
 - Consumers: engineers (macOS, Linux: `install.sh`; Windows: `install.ps1`), tests (Linux CI,
@@ -55,13 +60,20 @@ There is deliberately **no flag for the virtual key** and no flag for a PAT.
    - `node` on PATH and `process.versions.node` >= 22.18;
    - one of `AZDO_PAT` / `AZURE_DEVOPS_EXT_PAT` / `KILO_AZDO_PAT` non-empty (then `az` is NOT run),
      otherwise `az` on PATH and `az account show --output none` exits 0 (its stdout/stderr discarded).
-4. `install.sh`: `printf '%s\0' <records> | node "<script dir>/install-helper.ts"`; its exit code is
-   the script's exit code.
+4. `install.sh`: (1.2.1) script dir = `${BASH_SOURCE[0]%/*}` (or `.` when it has no `/`),
+   made absolute with `CDPATH= cd -- "<dir>" && pwd` (CDPATH is ignored, so `cd` never searches
+   it and never prints a directory). If that fails or `<script dir>/install-helper.ts` is not a
+   regular file (`[ -f ]`): stderr exactly
+   `install.sh: error: installer sources are missing (expected install-helper.ts next to install.sh).`
+   (one line), exit 3, `node` is not started for the helper, nothing written. Otherwise
+   `printf '%s\0' <records> | node "<script dir>/install-helper.ts"`; its exit code is the
+   script's exit code.
 5. Helper, **read-only phase**: read and validate stdin records; validate values; resolve config
    dir; `lstat` targets; read source plugin and template; read, size-check and parse existing
    `kilo.jsonc`; compute the planned content. Any failure -> exit 2 (invalid input) or 3, no writes.
-6. Helper, **write phase** (only what changed): create dirs, fix dir modes, copy plugin, write
-   backup, write personal config. Failure -> exit 3, temp files removed.
+6. Helper, **write phase** (only what changed): create dirs, (1.2.1) re-check targets for
+   symlinks (section 6), fix dir modes, copy plugin, fix the mode of an unchanged `kilo.jsonc`,
+   write backup, write personal config. Failure -> exit 3, temp files removed.
 7. Helper, **smoke phase** (1.1.0; only when the write phase succeeded and the `smoke` record is
    `on`): checks `azdo` then `bifrost` (section 9). Writes nothing, never modifies or undoes the
    installation. Any check `fail` -> exit 4; otherwise exit 0.
@@ -160,6 +172,21 @@ The resulting file always contains exactly one entry that refers to azdo-remote-
 - `lstat`: existing `kilo.jsonc` or plugin destination must be a regular file, existing `azdo/` and
   `<configDir>` must be directories (not symlinks) -> else exit 3,
   `install.sh: error: <path> is not a regular file or directory (symlinks are not followed); update it manually.`
+- (1.2.1) **Re-check after `mkdir`**: immediately after creating `<configDir>/azdo/` and before
+  any chmod, temp file, backup or rename, the helper `lstat`s again, in this order:
+  `<configDir>` (must exist, directory), `<configDir>/azdo` (must exist, directory),
+  `<configDir>/azdo/azdo-remote-config.ts` and `<configDir>/kilo.jsonc` (absent or regular file).
+  The first failing path gives the same exit 3 and the same message as above; nothing is chmod-ed
+  or written, and a symlink's target is never touched.
+- (1.2.1) **Mode changes never follow a link** (POSIX): the group/other-write strip of
+  `<configDir>` and `azdo/` and the `0600` fix of an unchanged `kilo.jsonc` open the path with
+  `O_RDONLY | O_NOFOLLOW` (dirs: `| O_DIRECTORY`; file: `| O_NONBLOCK`), check the type with
+  `fstat`, and `fchmod` the descriptor. A link or wrong type found there (`ELOOP`, `ENOTDIR`, not a
+  regular file) -> the same exit 3 refusal message. New temp files and backups are `fchmod`-ed
+  through the descriptor that created them (`wx`).
+- Residual (accepted, ADR-0012 section 6): a swap of `<configDir>` between planning and `mkdir` can
+  let `mkdir` create an empty `azdo/` (mode `0700`) inside the link target before the re-check
+  refuses; parents of `<configDir>` are never checked (they may legitimately be links).
 - On Windows (`process.platform === "win32"`) no `chmod` is performed and no ACL is set (by the
   helper or `install.ps1`): new directories and files inherit the ACL of their parent. Under the
   default `%USERPROFILE%\.config\kilo` that grants access to the user, `SYSTEM` and
@@ -195,6 +222,7 @@ Fixed prerequisite messages (must contain these fixes):
 - az present, not logged in: `The Azure CLI is not logged in: run 'az login', or set AZDO_PAT to a personal access token with Code (Read) scope.`
 - `plugin/` or `plugins/` holds `azdo-remote-config.*` (warning): `<path> is auto-loaded by Kilo and would load the plugin twice; remove it.`
 - Existing invalid config: `<path> is not valid JSONC (<parser message>); fix or move it, then re-run.` (the parser message contains only line/column, ADR-0003)
+- (1.2.1) Helper missing next to `install.sh` (exit 3): `installer sources are missing (expected install-helper.ts next to install.sh).` (same wording as `install.ps1`, section 10.2 step 5)
 
 **Never printed**: the value of `KILO_BIFROST_KEY` or of the effective `apiKey`, any PAT, its
 Basic credential, any az token, any argument text of an unknown option, any content of an existing

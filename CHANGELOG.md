@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.14.2] - 2026-11-01
+
+### Security
+- T-019: `install.sh` is CDPATH-safe (no accidental directory resolution through `CDPATH`).
+- T-019: the installer re-checks for symlinks after `mkdir` and opens files with `O_NOFOLLOW` plus `fchmod`, closing a symlink/race window.
+
+### Changed
+- T-019: a missing helper now exits with code 3 and a clear message.
+- T-019: the Node version check is covered by a real test instead of a stub.
+- T-019: installer contract bumped to 1.2.1.
+
+### Notes
+- NOTE (T-019): the 5 POSIX symlink/race tests were skipped on the Windows dev host. They must be confirmed as passing on Linux CI before relying on the hardening.
+
 ## [0.14.1] - 2026-11-01
 
 ### Security

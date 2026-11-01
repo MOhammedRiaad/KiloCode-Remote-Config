@@ -136,6 +136,9 @@ case $src in
   */*) script_dir=${src%/*} ;;
   *) script_dir=. ;;
 esac
-script_dir=$(cd "$script_dir" && pwd)
+if ! script_dir=$(CDPATH= cd -- "$script_dir" 2>/dev/null && pwd) || [ ! -f "$script_dir/install-helper.ts" ]; then
+  printf 'install.sh: error: installer sources are missing (expected install-helper.ts next to install.sh).\n' >&2
+  exit 3
+fi
 
 printf '%s\0' "org=$org" "project=$project" "repo=$repo" "path=$path" "branch=$branch" "mode=$mode" "apiKey=${KILO_BIFROST_KEY:-}" "smoke=$smoke" | node "$script_dir/install-helper.ts"

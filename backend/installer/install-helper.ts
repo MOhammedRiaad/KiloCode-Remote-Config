@@ -2,9 +2,12 @@
 // Inputs arrive as NUL-terminated name=value records on stdin. Nothing sensitive is ever printed.
 import { randomBytes } from "node:crypto";
 import {
-  chmodSync,
-  lstatSync,
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -15,6 +18,7 @@ import type { Stats } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { __internals } from "../plugin/azdo-remote-config.ts";
+import { firstUnsafeTarget, lstatOrNull } from "./fs-guard.ts";
 import {
   isPlainObject,
   PLACEHOLDER_KEY,
@@ -98,16 +102,6 @@ function parseRecords(text: string): Record<string, string> {
 
 // ---- file system helpers ----
 
-function lstatOrNull(path: string): Stats | null {
-  try {
-    return lstatSync(path);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") return null;
-    throw err;
-  }
-}
-
 function refuse(path: string): InstallError {
   return failure(`${path} is not a regular file or directory (symlinks are not followed); update it manually.`);
 }
@@ -134,8 +128,7 @@ function readBounded(path: string, stat: Stats): Buffer {
 function writeAtomic(dir: string, name: string, data: string | Buffer, mode: number): void {
   const temp = join(dir, `.${name}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`);
   try {
-    writeFileSync(temp, data, { flag: "wx", mode });
-    if (!IS_WINDOWS) chmodSync(temp, mode);
+    writeNew(temp, data, mode);
     renameSync(temp, join(dir, name));
   } catch (err) {
     rmSync(temp, { force: true });
@@ -143,10 +136,49 @@ function writeAtomic(dir: string, name: string, data: string | Buffer, mode: num
   }
 }
 
+// Creates a new file exclusively and sets its mode through the descriptor that created it.
+function writeNew(path: string, data: string | Buffer, mode: number): void {
+  const fd = openSync(path, "wx", mode);
+  try {
+    writeFileSync(fd, data);
+    if (!IS_WINDOWS) fchmodSync(fd, mode);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// POSIX only: opens without following a final symlink, checks the type on the descriptor, then changes the mode.
+function adjustMode(path: string, kind: "dir" | "file", nextMode: (current: number) => number | null): void {
+  const flags =
+    kind === "dir"
+      ? constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY
+      : constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+  let fd: number;
+  try {
+    fd = openSync(path, flags);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "ENOTDIR") throw refuse(path);
+    throw err;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (kind === "dir" ? !stat.isDirectory() : !stat.isFile()) throw refuse(path);
+    const next = nextMode(stat.mode & 0o777);
+    if (next !== null) fchmodSync(fd, next);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function stripGroupOtherWrite(dir: string): void {
   if (IS_WINDOWS) return;
-  const mode = lstatSync(dir).mode & 0o777;
-  if ((mode & 0o022) !== 0) chmodSync(dir, mode & ~0o022);
+  adjustMode(dir, "dir", (mode) => ((mode & 0o022) !== 0 ? mode & ~0o022 : null));
+}
+
+function restrictConfigMode(path: string): void {
+  if (IS_WINDOWS) return;
+  adjustMode(path, "file", (mode) => (mode !== 0o600 ? 0o600 : null));
 }
 
 function utcStamp(date: Date): string {
@@ -158,12 +190,11 @@ function writeBackup(dir: string, bytes: Buffer): string {
   for (let n = 0; ; n++) {
     const path = join(dir, n === 0 ? base : `${base}-${n}`);
     try {
-      writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
+      writeNew(path, bytes, 0o600);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
       throw err;
     }
-    if (!IS_WINDOWS) chmodSync(path, 0o600);
     return path;
   }
 }
@@ -312,6 +343,13 @@ function buildPlan(values: Values, apiKey: string | undefined): Plan {
 function applyPlan(plan: Plan): string[] {
   const lines: string[] = [];
   mkdirSync(plan.azdoDir, { recursive: true, mode: 0o700 });
+  const unsafe = firstUnsafeTarget([
+    { path: plan.configDir, kind: "dir", required: true },
+    { path: plan.azdoDir, kind: "dir", required: true },
+    { path: plan.pluginPath, kind: "file", required: false },
+    { path: plan.configPath, kind: "file", required: false },
+  ]);
+  if (unsafe !== null) throw refuse(unsafe);
   stripGroupOtherWrite(plan.configDir);
   stripGroupOtherWrite(plan.azdoDir);
 
@@ -323,7 +361,7 @@ function applyPlan(plan: Plan): string[] {
   }
 
   if (plan.configText === null) {
-    if (!IS_WINDOWS && plan.configExistingMode !== 0o600) chmodSync(plan.configPath, 0o600);
+    if (plan.configExistingMode !== 0o600) restrictConfigMode(plan.configPath);
     lines.push(`Personal config already up to date: ${plan.configPath}`);
     return lines;
   }

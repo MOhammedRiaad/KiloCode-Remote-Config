@@ -81,6 +81,12 @@ node --test "test/installer/*.test.ts"
 The script tests run the real `install.sh` with `bash` against a temporary config directory, so they
 do not touch your real config. Tests that check POSIX file modes or symlinks skip themselves on
 Windows (`process.platform === "win32"`); the rest run under Git Bash.
+T-019 (installer hardening, contract 1.2.1, ADR-0012) added `fs-guard.test.ts` (unit tests of
+`backend/installer/fs-guard.ts`, the symlink/target-type check with an injectable `lstat`) and the race
+fixture `test/installer/fixtures/race-after-mkdir.ts`, which swaps a target for a symlink right after the
+folders are created. Five symlink/race tests are POSIX-only: on Windows they skip with a message, so they
+must be confirmed on Linux CI. Also covered: CDPATH-safe script directory, and exit 3 with the
+"installer sources are missing" message when `install-helper.ts` is absent.
 `npm run lint` has a sixth rule: files in `backend/installer/` may import only `node:` built-ins,
 sibling `.ts` files or the plugin file.
 

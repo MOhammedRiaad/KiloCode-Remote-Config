@@ -429,7 +429,9 @@ key provisioning is out of scope.
   accepted: `AZURE_DEVOPS_EXT_PAT`, `KILO_AZDO_PAT`) to a PAT with Code (Read) scope. If a PAT variable
   is set, `az` is not checked. The installer never prints or stores the PAT.
 - A checkout of this repository. Run the script from the checkout; it finds the plugin and template
-  relative to its own location.
+  relative to its own location. A lone downloaded `install.sh` does not work: `install-helper.ts` must
+  sit next to it (see exit code 3). A `CDPATH` set in your shell does not affect this, also when you
+  run the script by a relative path.
 
 ### Run it
 ```bash
@@ -472,8 +474,22 @@ Re-running is safe: unchanged files are not rewritten, and no backup is made whe
 | 0 | Installed, updated, or already up to date |
 | 1 | Prerequisite missing: Node.js (or too old), or no Azure DevOps credentials. Nothing written |
 | 2 | Usage or input error: unknown option, missing org/project/repo, rejected value, bad `KILO_BIFROST_KEY`, relative `XDG_CONFIG_HOME`. Nothing written |
-| 3 | Existing config or file system problem: `kilo.jsonc` is not valid JSONC, has an unexpected shape, or a target is a symlink; I/O error |
+| 3 | Existing config or file system problem: `kilo.jsonc` is not valid JSONC, has an unexpected shape, or a target is a symlink; the installer sources are missing; I/O error |
 | 4 | Installed, but the smoke test failed. The installation is kept and not changed |
+
+Exit code 3 troubleshooting:
+
+- `install.sh: error: installer sources are missing (expected install-helper.ts next to install.sh).`
+  The script was started without `install-helper.ts` in its folder (for example a single downloaded
+  `install.sh`). Run it from a full repository checkout, as `bash backend/installer/install.sh ...`.
+  Nothing is written.
+- `<path> is not a regular file or directory (symlinks are not followed); update it manually.`
+  The config folder, the `azdo` folder, the plugin file or `kilo.jsonc` is a symlink (or another
+  special entry). After creating folders, the installer checks these again and refuses to follow
+  symlinks; file modes are set only on the files it opened itself without following links. Replace
+  the symlink with a real file or folder (or move it away), then re-run. The installer does not
+  guard against another process of your own user swapping a parent folder, or a path right after
+  the check.
 
 ### Smoke test
 After a successful install, the installer runs two checks and prints one line each:

@@ -508,7 +508,7 @@
       "id": "T-002",
       "title": "Harden FR-11 lint against import evasions",
       "type": "tech-debt",
-      "priority": 3,
+      "priority": 4,
       "status": "todo",
       "scope": {
         "backend": true,
@@ -523,7 +523,8 @@
         "Given fixtures for export-from, bare import, missing/invalid package.json, missing plugin/ and --root without a value, When tests run, Then each is covered and behaves as specified."
       ],
       "source": "security",
-      "cycle_done": null
+      "cycle_done": null,
+      "notes": "Cycle 0020 PO: lowered to 4; check-fr11 is a dev-time guard against accidental dependencies, not a security boundary; evasions require a deliberate act that code review would catch."
     },
     {
       "id": "T-003",
@@ -625,7 +626,8 @@
         "Given no allowlist configured, When resolving, Then behaviour is unchanged (backwards compatible)."
       ],
       "source": "security",
-      "cycle_done": null
+      "cycle_done": null,
+      "notes": "Cycle 0020 PO: kept at 3 but deferred; the shared config repo is PR-gated by Azure Pipelines and branch policy (F-008), which is the primary control for this accepted risk. Worth doing later if the shared repo gains writers outside the platform team."
     },
     {
       "id": "T-007",
@@ -652,7 +654,7 @@
       "id": "T-008",
       "title": "CHANGELOG missing v0.3.0 (F-003) entry",
       "type": "chore",
-      "priority": 3,
+      "priority": 4,
       "status": "todo",
       "scope": {
         "backend": false,
@@ -665,7 +667,8 @@
         "Given matching sections exist, When ci.sh runs, Then the check passes."
       ],
       "source": "release",
-      "cycle_done": null
+      "cycle_done": null,
+      "notes": "Cycle 0020 PO: lowered to 4; CHANGELOG sections have matched VERSION for every release since v0.3.0, so recurrence risk is low. Cheap to fold into any future ci.sh change."
     },
     {
       "id": "T-009",
@@ -905,10 +908,10 @@
     },
     {
       "id": "T-019",
-      "title": "Installer hardening and test fixes",
+      "title": "Installer hardening: CDPATH-safe helper lookup, symlink re-check, Node version test fix",
       "type": "tech-debt",
       "priority": 3,
-      "status": "todo",
+      "status": "done",
       "scope": {
         "backend": true,
         "frontend": false
@@ -916,15 +919,18 @@
       "depends_on": [
         "F-010"
       ],
-      "description": "Cycle 0011 security+review follow-ups for backend/installer: (sec low 1) re-lstat after mkdirSync and before the no-change chmod to close the symlink TOCTOU on the config dir; (sec low 2 / review low 2) install.sh: script_dir=$(CDPATH= cd -- \"$script_dir\" && pwd) and check install-helper.ts exists before handing off, else fixed error and exit 3; (sec info 3) print only safe characters for file names found in plugin/ and plugins/; (sec info 4) docs note on deleting old backups (they hold old keys); (review low 1) the 'Node 22.18 and newer pass' test uses --help which exits before the version check: run it with required args plus AZDO_PAT and add a 22.17.x case expecting exit 1; (review info 3) run the leak test also with an sk-bf- prefixed key; (review info 4) add provider.other and provider.bifrost.options.headers to the end-to-end AC-3 fixture. Also optional: shellcheck in scripts/ci.sh when present, check-lf over backend/installer/*.sh.",
+      "description": "Cycle 0011 security+review follow-ups for backend/installer, trimmed in cycle 0020 to the items with real value. IN SCOPE: (1, review low 2 / sec low 2) install.sh resolves script_dir with `cd \"$script_dir\" && pwd`; when CDPATH is set and the script is invoked via a relative path containing '/', bash cd searches CDPATH and echoes the directory, so script_dir can be wrong or multi-line and the hand-off to install-helper.ts breaks. Fix: `script_dir=$(CDPATH= cd -- \"$script_dir\" && pwd)`, then check that \"$script_dir/install-helper.ts\" is a regular file before handing off; if missing print a fixed one-line error to stderr and exit 3 (no node invocation, no stack trace). (2, sec low 1) install-helper.ts applyPlan: after mkdirSync(azdoDir) and before any chmod/write in configDir/azdoDir (including the no-change chmod of kilo.jsonc), re-lstat configDir, azdoDir and the config file and refuse (existing fixed refusal message/exit code per installer contract) if any became a symlink, never following it. (3, review low 1) the 'Node 22.18 and newer pass the version check' test uses --help which exits before the version check: run it with required args plus AZDO_PAT so the version check really executes, and add a 22.17.x case expecting exit 1. (4, review info 3) run the existing key-leak test also with an sk-bf- prefixed KILO_BIFROST_KEY. OUT OF SCOPE (left for later / not worth a cycle): safe-character printing of plugin/ file names (sec info 3), backup-deletion docs note (sec info 4), extra e2e AC-3 fixture fields (review info 4), optional shellcheck/check-lf in ci.sh. install.ps1 is unchanged (T-022).",
       "acceptance_criteria": [
-        "Given a config dir replaced by a symlink between check and write, When the installer runs, Then it refuses without following it.",
-        "Given CDPATH set and a relative script path, When install.sh runs, Then it still finds its helper; and Given a missing helper, Then it exits 3 with a fixed message and no stack trace.",
-        "Given Node 22.17.x, When install.sh runs with valid args, Then it exits 1; given 22.18+, Then it passes the version check.",
-        "Given an sk-bf- prefixed KILO_BIFROST_KEY, When the installer runs, Then the key appears in no stdout/stderr."
+        "Given CDPATH is set to a directory that contains a subdirectory with the same relative name as the installer's directory, When install.sh is invoked via a relative path containing '/' (e.g. `bash installer/install.sh ...`) with valid args, Then it locates and runs the real install-helper.ts next to install.sh and exits 0, and stdout contains no extra directory line printed by cd.",
+        "Given install-helper.ts is absent next to install.sh (test copies install.sh alone into a temp dir), When install.sh runs with valid args and prerequisites satisfied, Then it exits 3, stderr is exactly the fixed one-line message documented in the installer contract, node is not invoked on the missing file, and no stack trace appears.",
+        "Given the config directory (or the kilo-azdo plugin directory, or kilo.jsonc) is replaced by a symlink after planning but before writing (simulated via a test hook or by pre-creating the symlink so the post-mkdir re-lstat sees it), When the installer applies its plan on POSIX, Then it refuses with the contract's fixed refusal message and exit code, and the symlink target is not created, modified or chmod-ed.",
+        "Given a fake node reporting v22.17.1, When install.sh runs with required args and AZDO_PAT set (no --help), Then it exits 1 with the documented version error; and Given fake node v22.18.0 and v23.0.1 with the same args, Then the version check passes (no version error on stderr).",
+        "Given KILO_BIFROST_KEY set to an sk-bf- prefixed test value, When install.sh runs successfully, Then that value appears in neither stdout nor stderr (it is written only to kilo.jsonc).",
+        "Given the full suite, When `bash scripts/ci.sh` runs, Then it exits 0, the installer contract documents the exit-3 missing-helper message and the post-mkdir symlink re-check, and existing installer tests (including install.ps1 tests where the platform runs them) still pass."
       ],
       "source": "security",
-      "cycle_done": null
+      "cycle_done": 20,
+      "notes": "Selected in cycle 0020. Rationale: the only remaining item with a user-facing correctness defect (installer breaks for engineers whose shell exports CDPATH) plus a test that gives false assurance (version check never executed). PO intends to declare DONE in cycle 0021 unless this cycle surfaces medium+ findings. Versioning: patch (fix)."
     },
     {
       "id": "T-020",
@@ -1015,7 +1021,7 @@
       "id": "T-024",
       "title": "Branch-policy script and assemble tool hardening",
       "type": "tech-debt",
-      "priority": 3,
+      "priority": 4,
       "status": "todo",
       "scope": {
         "backend": true,
@@ -1030,7 +1036,8 @@
         "Given a missing source file or a symlinked outdir, When assemble-shared-repo.ts runs, Then it exits per the contract with the fixed message."
       ],
       "source": "security",
-      "cycle_done": null
+      "cycle_done": null,
+      "notes": "Cycle 0020 PO: lowered to 4; set-branch-policies.sh is run by the operator with the operator's own arguments, so '@file' expansion by az is self-inflicted and not an attacker-reachable path."
     },
     {
       "id": "T-025",
@@ -1131,6 +1138,27 @@
       "acceptance_criteria": [
         "Given the plugin source and the contract, When read, Then neither claims cache text goes through validateShared.",
         "Given a cache that grows past 2 MiB between stat and read, When read, Then it is rejected (if the single-handle read is done)."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-031",
+      "title": "T-019 follow-ups: descriptor-path race test, doc wording, Linux CI confirmation",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-019"
+      ],
+      "description": "Cycle 0020 review/security follow-ups: (backend, low) the race fixture swaps right after mkdir so the re-check always refuses first - add a trigger that wraps openSync and swaps on the first O_NOFOLLOW open (after the re-check) to cover adjustMode refusal and rename-over-link in install-sh.test.ts; (backend, info) merge posixOnly with skipOnWindows (one helper with a message) and reuse fs-guard's type rule in install-helper.ts checkedFile/checkedDir; (architect, low/info) ADR-0012 section 6 calls the guard checkTargets (code: firstUnsafeTarget) and installer-cli.md section 6 'Residual' should say explicitly that a swap of configDir/azdo after the re-check redirects writes (accepted, same-user precondition, Node has no openat/renameat). NEEDS A LINUX RUN (cannot be closed on the Windows dev host): confirm the 5 POSIX symlink/race tests (AC-3) show as PASSED, not skipped, on ubuntu-latest CI; this repo's .github/workflows/ci.yml runs scripts/ci.sh there on pull_request/push to main.",
+      "acceptance_criteria": [
+        "Given a swap after the re-check, When the installer applies the plan, Then the descriptor-level O_NOFOLLOW open refuses and the target is untouched (Linux).",
+        "Given the 5 AC-3 tests, When ubuntu-latest CI runs, Then they report passed, not skipped."
       ],
       "source": "review",
       "cycle_done": null
