@@ -5,7 +5,7 @@
   "phase": "security",
   "current_item": "T-038",
   "branch": "factory/T-038-plugin-jsdoc-trim-pass-and-wording-fixes",
-  "rework_iteration": 0,
+  "rework_iteration": 1,
   "max_rework": 3,
   "consecutive_blocked": 0,
   "max_consecutive_blocked": 3,
