@@ -962,6 +962,22 @@ test("F-021 AC-2: a 407 is network-blocked whatever the content type, and header
   }
 });
 
+test("T-035 AC-5: a 470 is network-blocked whatever the content type, headers not read", async () => {
+  const throwingGet = (): never => {
+    throw new Error("get must not run");
+  };
+  for (const type of ["text/plain", "text/html", "application/json", null, throwingGet]) {
+    const spied = spiedResponse(470, typeof type === "function" ? type : () => type);
+    const label = typeof type === "function" ? "throwing get" : String(type);
+    assert.deepEqual(await classify(spied.response), { ok: false, error: "network-blocked" }, label);
+    assert.deepEqual(spied.names, [], label);
+    assert.deepEqual(spied.state, { getReader: 0, cancel: 1 }, label);
+  }
+  const real = await classify(new Response("Action: Deny", { status: 470 }));
+  assert.deepEqual(real, { ok: false, error: "network-blocked" });
+  assert.deepEqual(await classify(new Response("x", { status: 469 })), { ok: false, error: "http-469" });
+});
+
 test("F-021 AC-2: a 403 without a JSON content type is network-blocked and the body stays unread", async () => {
   const toStringSpy = { called: 0 };
   const hostile = {

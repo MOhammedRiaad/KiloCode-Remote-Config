@@ -19,7 +19,8 @@
     "FR-11: the shipped plugin must be ONE TypeScript file with zero runtime npm dependencies. Dev-only tooling (test runner, type-checker) is allowed.",
     "External systems (Azure DevOps, az CLI, Bifrost, Kilo) are never called for real in tests; they are faked/mocked.",
     "Cycle 0022: factory reopened by the USER with a new requirement (Azure IP firewall in front of Bifrost / Kilo-facing endpoints). Items F-020..F-022 have source 'user' and outrank the earlier ordering. F-012/F-013/F-015 remain SKIPPED; remote mode stays OFF.",
-    "Cycle 0023: F-021 selected (plugin-side classification of firewall-ish failures, no plugin probe). F-022 reduced to the remaining plugin-side docs. F-012/F-013/F-015 remain SKIPPED by user decision; remote mode stays OFF."
+    "Cycle 0023: F-021 selected (plugin-side classification of firewall-ish failures, no plugin probe). F-022 reduced to the remaining plugin-side docs. F-012/F-013/F-015 remain SKIPPED by user decision; remote mode stays OFF.",
+    "Cycle 0024: T-035 (split from T-034, code-only) selected as the final small slice of the USER's Azure IP firewall requirement: network hint on the authenticated smoke lines and Azure Firewall HTTP 470 classified as blocked. T-034 reduced to the 203 HTML sign-in case (needs real-environment evidence). F-012/F-013/F-015 remain SKIPPED by user decision; remote mode stays OFF."
   ],
   "items": [
     {
@@ -1292,9 +1293,9 @@
     },
     {
       "id": "T-034",
-      "title": "Classify Azure Firewall HTTP 470 and 203 HTML sign-in; smoke network hint for plugin-side codes",
+      "title": "Classify an Azure DevOps 203 HTML sign-in page (needs real-environment evidence)",
       "type": "tech-debt",
-      "priority": 4,
+      "priority": 5,
       "status": "todo",
       "scope": {
         "backend": true,
@@ -1303,12 +1304,60 @@
       "depends_on": [
         "F-021"
       ],
-      "description": "Cycle 0023 follow-ups (architect/review): (1) treat Azure Firewall's community-reported HTTP 470 as network-blocked (not in Microsoft docs - verify first in a real environment; requires a contract/ADR-0020 amendment and AC changes); (2) an Azure DevOps 203 HTML sign-in page currently yields bad-response with no hint - consider network-blocked/credentials hint; (3) the installer smoke test prints its VPN/allow-list hint only after a failed pre-flight: also print it for plugin-side `fail network-unreachable|network-blocked|timeout` on the authenticated azdo line (smoke.ts, installer-cli section 9). Needs real-environment evidence for (1) and (2); (3) is code-only.",
+      "description": "Cycle 0023 follow-up (review): an Azure DevOps 203 answer carrying an HTML sign-in page currently yields bad-response with no hint; consider the CREDENTIALS hint or network-blocked. NEEDS REAL-ENVIRONMENT EVIDENCE (what exactly Azure DevOps returns to a PAT / az token under conditional access or an expired session) before any contract change. Cycle 0024 PO split: the code-only parts of the old T-034 (HTTP 470 classification and the smoke network hint for authenticated-line network failures) moved to T-035.",
       "acceptance_criteria": [
-        "Given smoke azdo fails with network-unreachable, network-blocked or timeout after a reachable probe, When formatSmoke runs, Then the VPN/allow-list hint line is printed.",
-        "Given an HTTP 470 response (if verified), When the plugin fetches, Then the code is network-blocked."
+        "Given a captured real Azure DevOps 203 HTML sign-in response, When the plugin fetches, Then the code and hint match the evidence-backed contract decision."
       ],
       "source": "architect",
+      "cycle_done": null,
+      "notes": "Cycle 0024 PO: split; parts (1) 470 and (3) smoke hint moved to T-035. The remaining part needs real-environment evidence; do not select without it."
+    },
+    {
+      "id": "T-035",
+      "title": "Firewall hint on the authenticated smoke lines and Azure Firewall HTTP 470 classified as blocked",
+      "type": "tech-debt",
+      "priority": 2,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-020",
+        "F-021"
+      ],
+      "description": "Cycle 0024 PO, split from T-034 (code-only parts), for the USER's Azure IP firewall scenario. Two remaining gaps where an engineer who is off the VPN or not allow-listed still gets a confusing installer/plugin result. (A) The installer smoke test prints its fixed VPN / allow-list hint only when the anonymous pre-flight fails ('smoke network: fail ...'). When the origin probe passes but the authenticated request then fails for a network reason (a WAF / path rule or a drop on the API path, a proxy), the output is 'smoke network: pass' followed by 'smoke azdo: fail network-unreachable|network-blocked|timeout' or 'smoke bifrost: fail network|timeout|407|470' with NO hint (installer-cli 1.3.1 section 9.1 says these codes do not add the hint). Change formatSmoke so the SAME fixed network hint line (installer-cli section 7, text unchanged) is also printed for those authenticated-line codes, at most once per run. Bifrost 401/403/other statuses stay hint-free (key / permission problems, see troubleshooting 'Bifrost 401'). (B) Azure Firewall answers an application-rule deny (no rule matched; for HTTPS only with TLS inspection) with the non-standard HTTP 470 'Action: Deny' body (community-reported, not in Microsoft docs; relevant when an engineer's egress goes through Azure Firewall, e.g. Azure Virtual Desktop / Dev Box / forced-tunnel VPN). Today the installer probe treats 470 as reachable, so the PAT / az token / virtual key is then SENT, and the result reads 'smoke azdo: fail http-470' / 'smoke bifrost: fail 470' with no hint; the plugin logs 'http-470' with no hint. 470 is not a status Azure DevOps or Bifrost answer, so classifying it as a block has no realistic false positive: classifyProbeStatus(470) -> blocked (credential never sent, network line azdo-blocked / bifrost-blocked); the plugin fetch maps HTTP 470 (any Content-Type, body discarded unread) to network-blocked with the existing NETWORK hint. Out of scope (later items, not this cycle): 203 HTML sign-in (T-034, needs evidence); a plugin-side Bifrost reachability check at Kilo start (Kilo's own runtime model calls to Bifrost are not controlled by the plugin; documented limitation). Constraints: FR-10 never throws; FR-11 one plugin file, zero runtime deps, no new import, __internals key set unchanged; no secret or value in any log or output line; exactly one fetch per plugin hook run (no new probe); cache order (ADR-0008) and T-013 binding unchanged; hint texts unchanged. Contracts: installer-cli minor bump (sections 7 / 9.0 / 9.1: hint rule and 470 verdict), plugin-interface minor bump (470 row), ADR-0019 / ADR-0020 amendments. Docs (docs-writer): troubleshooting / runbook rows for 470 and the new hint behaviour. Versioning: patch (fix of user-facing diagnostics).",
+      "acceptance_criteria": [
+        "Given a smoke report with network pass and azdo 'fail network-unreachable', 'fail network-blocked' or 'fail timeout', When formatSmoke runs, Then the output is the network line, the azdo line, the bifrost line and then exactly one line equal to the existing fixed VPN / allow-list hint (installer-cli section 7 text, unchanged); and Given azdo fails with http-401, http-403, http-404, auth-unavailable, invalid-settings, network or bad-response, Then no network hint line is printed.",
+        "Given a smoke report with network pass, azdo pass and bifrost 'fail network', 'fail timeout', 'fail 407' or 'fail 470', When formatSmoke runs, Then exactly one network hint line is printed; and Given bifrost 'fail 401', 'fail 403', 'fail 404', 'fail 500', 'fail bad-response', 'fail invalid-key' or any skipped code, Then no network hint line is printed.",
+        "Given a report with both a failed pre-flight (network fail with a non-internal code) and a qualifying authenticated-line code, When formatSmoke runs, Then the network hint appears exactly once and the existing no-key hint behaviour is unchanged; and Given network fail with only 'internal', Then no network hint is printed (unchanged).",
+        "Given a fake probe fetch answering HTTP 470 for the Azure DevOps origin (or the Bifrost origin), When runSmoke runs, Then the network line reads 'smoke network: fail azdo-blocked' (or 'bifrost-blocked'), the corresponding check is 'skipped network-blocked', the authenticated fetch / az runner (or the GET models request) is never called so no credential or key is sent, and the installer exits with code 4; and classifyProbeStatus(470) returns 'blocked' while 200, 301, 401 and 404 stay 'reachable'.",
+        "Given a fake plugin fetch answering HTTP 470 with any Content-Type (text/plain, text/html, application/json, absent), When fetchRemoteConfig runs, Then it resolves { ok: false, error: 'network-blocked' }, the body's getReader is never called and body.cancel is invoked; and Given the config hook with that failure, Then the unchanged 'Remote config unavailable (network-blocked) ...' line is followed by exactly one NETWORK hint line, the fake fetch was called exactly once, and a valid bound cache is still applied as before.",
+        "Given failure responses carrying canary values in body and headers plus PAT / az token / virtual-key canaries, When runSmoke and the config hook run, Then no output or log line contains any credential, URL, host name, org/project/repo value, header value or body text, and neither function throws.",
+        "Given the change, When the FR-11 lint and 'bash scripts/ci.sh' run, Then the plugin is still ONE TypeScript file with zero runtime npm dependencies and no new import, the __internals key set is unchanged, existing tests change only where they pinned the old no-hint / http-470 behaviour, and CI exits 0."
+      ],
+      "source": "user",
+      "cycle_done": 24,
+      "notes": "Cycle 0024 PO: selected. Justification: the user's scenario is engineers behind an Azure IP firewall; these are the last code-only places where a firewall / VPN problem still shows without the actionable hint, or (470) where a credential is sent after a firewall deny. Small, hermetic, no real environment needed."
+    },
+    {
+      "id": "T-036",
+      "title": "Harden smoke formatLine; hint for Azure DevOps conditional-access IP blocks",
+      "type": "tech-debt",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-035"
+      ],
+      "description": "Cycle 0024 security/review follow-ups: (info) backend/installer/smoke.ts formatLine/networkLine read status/code unguarded so a hand-built report with a throwing getter or Symbol code makes formatSmoke throw (no real runSmoke path produces one; install-helper's try/catch keeps exit 4) - guard with attempt and show non-string codes as `internal`; read the network outcome fields once; (needs a contract decision first) a specific hint for Azure DevOps organisation IP conditional-access blocks (JSON 401/403), which today show the credentials hint that mentions the VPN.",
+      "acceptance_criteria": [
+        "Given a hand-built report with a throwing getter or non-string code, When formatSmoke runs, Then it does not throw and prints `internal` for that field."
+      ],
+      "source": "review",
       "cycle_done": null
     }
   ]

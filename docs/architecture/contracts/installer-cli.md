@@ -1,8 +1,15 @@
 # Contract: bootstrap installers (`install.sh`, `install.ps1`) and install helper
 
-- Version: 1.3.1 (cycle-0023, F-021: section 9.1 lists the plugin codes `network-unreachable`
+- Version: 1.3.2 (cycle-0024, T-035: (a) the fixed network hint of section 7 is also printed,
+  at most once, when the pre-flight passed but an authenticated line failed for a network
+  reason (`smoke azdo: fail network-unreachable|network-blocked|timeout`,
+  `smoke bifrost: fail network|timeout|407|470`); exact rule in section 9.4; (b) a probe answer
+  of HTTP 470 (Azure Firewall application-rule deny, community-reported) is `blocked` (section
+  9.0), so no credential is sent after it. No new input, line format, hint text, code or exit
+  code. Decision record: ADR-0019 amendment A1, ADR-0020 amendment A1.)
+  1.3.1: cycle-0023, F-021: section 9.1 lists the plugin codes `network-unreachable`
   and `network-blocked` (plugin-interface 0.9.0, ADR-0020) that `smoke azdo: fail <c>` passes
-  through verbatim. Informative only: no change to `smoke.ts`, inputs, lines, hints or exit codes.)
+  through verbatim. Informative only: no change to `smoke.ts`, inputs, lines, hints or exit codes.
   1.3.0: cycle-0022, F-020: the smoke test starts each target with an unauthenticated
   network pre-flight probe and prints a first line `smoke network: ...`, a new skip code
   `network-blocked` and a fixed VPN / allow-list hint (sections 7 and 9.0); time bound
@@ -221,7 +228,8 @@ smoke bifrost: <result>
 Smoke test: set KILO_BIFROST_KEY and re-run install.sh to check your Bifrost virtual key.
                                                  (only after "smoke bifrost: skipped no-key")
 Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run install.sh.
-                                                 (1.3.0, only when the network line is "fail" with a code other than "internal")
+                                                 (1.3.0, only when the network line is "fail" with a code other than "internal";
+                                                  1.3.2: also after a qualifying authenticated-line code; at most once; rule: section 9.4)
 Done.                                            (exit 0 and exit 4)
 ```
 stderr:
@@ -285,8 +293,8 @@ Classification:
 
 | Probe outcome | Verdict | Code |
 |---|---|---|
-| integer status 100-599 except 403 and 407 (e.g. 200, 204, 301, 302, 401, 404, 405, 500, 503) | reachable | - |
-| status 403 or 407 | blocked | `<target>-blocked` |
+| integer status 100-599 except 403, 407 and 470 (e.g. 200, 204, 301, 302, 401, 404, 405, 500, 503) | reachable | - |
+| status 403, 407 or (1.3.2) 470 | blocked | `<target>-blocked` |
 | resolved value without an integer status 100-599 | unreachable | `<target>-unreachable` |
 | rejection / throw before the deadline (DNS, refused, reset, TLS) | unreachable | `<target>-unreachable` |
 | deadline reached | timeout | `<target>-timeout` |
@@ -304,6 +312,14 @@ order azdo, bifrost, `internal` (e.g. `smoke network: fail bifrost-blocked`). An
 exit 4. When the codes include at least one code other than `internal`, the last smoke line is
 the fixed hint (section 7):
 `Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run <install.sh|install.ps1>.`
+(1.3.2) The same hint also follows a qualifying authenticated-line code; section 9.4 is the
+complete rule.
+
+(1.3.2) **HTTP 470**: Azure Firewall answers an application-rule deny (no rule matched; for
+HTTPS only with TLS inspection) with the non-standard status 470 and an `Action: Deny` text
+body. This is community-reported only (unofficial sources, not Microsoft documentation). 470 is
+not an IANA-registered status and neither Azure DevOps nor Bifrost answers it, so it is treated
+like 403 / 407: `blocked`, the body is cancelled unread, the target's credential is not sent.
 
 ### 9.1 `azdo`
 
@@ -311,7 +327,7 @@ Only evaluated when the azdo probe is reachable; otherwise `smoke azdo: skipped 
 
 | Condition | Line |
 |---|---|
-| `fetchRemoteConfig` returns `ok: false` with code `c` | `smoke azdo: fail <c>`, `c` in `invalid-settings`, `auth-unavailable`, `timeout`, `too-large`, `bad-response`, `network`, `network-unreachable`, `network-blocked` (both since 1.3.1, plugin-interface 0.9.0 row 6 / 7a), `http-<status>` (e.g. `http-404`). Because the azdo probe ran first and was reachable, `fail network-unreachable` / `fail network-blocked` mean the authenticated request itself was refused or blocked (e.g. a WAF rule on the API path). Not to be confused with `skipped network-blocked` (9.0, probe verdict). These codes do not add the section 7 network hint (that hint is tied to `smoke network: fail ...` only). |
+| `fetchRemoteConfig` returns `ok: false` with code `c` | `smoke azdo: fail <c>`, `c` in `invalid-settings`, `auth-unavailable`, `timeout`, `too-large`, `bad-response`, `network`, `network-unreachable`, `network-blocked` (both since 1.3.1, plugin-interface 0.9.0 row 6 / 7a), `http-<status>` (e.g. `http-404`). Because the azdo probe ran first and was reachable, `fail network-unreachable` / `fail network-blocked` mean the authenticated request itself was refused or blocked (e.g. a WAF rule on the API path). Not to be confused with `skipped network-blocked` (9.0, probe verdict). (1.3.2) `fail network-unreachable`, `fail network-blocked` and `fail timeout` add the section 7 network hint (once, section 9.4); every other code in this row (`invalid-settings`, `auth-unavailable`, `too-large`, `bad-response`, `network`, every `http-<status>`) adds none. An authenticated HTTP 470 is reported by the plugin as `network-blocked` (plugin-interface 0.9.1 row 7a). |
 | text does not parse with `__internals.parseJsonc` | `smoke azdo: fail invalid-jsonc` |
 | root is not a plain object | `smoke azdo: fail invalid-shape` |
 | unexpected exception | `smoke azdo: fail internal` |
@@ -348,10 +364,13 @@ Fail codes (row 8): HTTP status outside 200-299 -> the bare status number (e.g. 
 `bad-response`; declared `content-length` > 1 MiB or more than 1048576 bytes read -> `too-large`;
 deadline reached -> `timeout`; any throw / rejection -> `network`; unexpected exception ->
 `internal`. The key is never sent anywhere else (not to AzDO, not to a non-https URL); the PAT /
-az token is never sent to Bifrost.
+az token is never sent to Bifrost. (1.3.2) Row 8 codes are unchanged (an authenticated 470 still
+reads `fail 470`, a 407 `fail 407`); `network`, `timeout`, `407` and `470` add the network hint
+(section 9.4).
 
 ### 9.3 Outcome
 
+- (1.3.2) Exit codes unchanged: every line that adds the network hint is already a `fail`.
 - Any `fail` (network, azdo or bifrost) -> stderr `install.sh: error: smoke test failed; the installation was kept.`, exit 4.
 - Otherwise exit 0. `skipped` never fails the run by itself (`skipped network-blocked` always
   comes with `smoke network: fail ...`, which does).
@@ -366,6 +385,56 @@ az token is never sent to Bifrost.
   Done.
   ```
 - The smoke phase writes no file (no cache, no log) and never alters the installed files.
+
+### 9.4 Hint rule (1.3.2, T-035, ADR-0019 amendment A1)
+
+`formatSmoke(report, frontEnd)` returns, in this order: the network line, the azdo line, the
+bifrost line, then the no-key hint (only after `smoke bifrost: skipped no-key`, unchanged), then
+the network hint **at most once**, as the last line. The network hint text is the section 7 text,
+unchanged; only `<install.sh|install.ps1>` varies.
+
+The network hint is printed iff at least one of these holds (OR; never more than one line):
+
+| # | Source | Condition |
+|---|---|---|
+| N1 | network line (unchanged) | `network.status === "fail"` and `codes` contains a code other than `internal` |
+| N2 | azdo line | `azdo.status === "fail"` and `azdo.code` is exactly `network-unreachable`, `network-blocked` or `timeout` |
+| N3 | bifrost line | `bifrost.status === "fail"` and `bifrost.code` is exactly `network`, `timeout`, `407` or `470` |
+
+No network hint from the azdo or bifrost line for any other code, in particular:
+
+| Line | Codes that never add the hint |
+|---|---|
+| azdo `fail` | `http-401`, `http-403`, `http-404` and every other `http-<status>`, `auth-unavailable`, `invalid-settings`, `network`, `bad-response`, `too-large`, `invalid-jsonc`, `invalid-shape`, `internal` |
+| bifrost `fail` | `401`, `403`, `404`, `500` and every other status number, `bad-response`, `too-large`, `invalid-key`, `no-base-url`, `invalid-base-url`, `insecure-base-url`, `internal` |
+| any `skipped` | `azdo-failed`, `no-key`, `key-reference`, `network-blocked` (a `skipped network-blocked` always comes with a failing network line, so N1 already applies) |
+
+Why azdo `network` is excluded but bifrost `network` is included: azdo `network` is the plugin's
+catch-all (no fetch function, internal throw, body-stream failure after a 2xx; plugin-interface
+2e), while the plugin reports a refused / reset / DNS-failed authenticated call as
+`network-unreachable`. The smoke Bifrost request has no such split: `fail network` mainly means
+the authenticated `GET <models URL>` call itself was rejected. Bifrost `403` stays hint-free
+(more likely a key or permission problem: troubleshooting "Bifrost 401").
+
+Cases (all print the hint exactly once): network `fail` (non-internal) only; N2 or N3 only;
+N1 together with N2 or N3 (only possible for a hand-built report); N2 together with N3 (likewise).
+A network line `fail internal` alone prints no hint (unchanged); `fail internal` with N2 or N3
+prints the hint once (hand-built report only). The no-key hint is independent: a `runSmoke`
+report never combines it with the network hint (no-key means the bifrost probe was not sent and
+azdo passed), and for a hand-built report both are printed, no-key first. A malformed `network`
+value still prints `smoke network: fail internal` and adds no hint by itself. The N2 / N3 decision
+reads `status` and `code` with guarded property access (`attempt`), compares only primitive
+strings by exact equality (no coercion), and anything else counts as "no hint" (the azdo / bifrost
+line formatting itself is unchanged).
+
+Example (pre-flight reachable, the API path is blocked by a WAF rule):
+```
+smoke network: pass
+smoke azdo: fail network-blocked
+smoke bifrost: skipped azdo-failed
+Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run install.sh.
+Done.
+```
 
 ## 10. `install.ps1` (1.2.0, F-011; ADR-0014)
 

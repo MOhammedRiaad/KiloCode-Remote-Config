@@ -101,12 +101,17 @@ The plugin makes one authenticated request to `dev.azure.com` per Kilo start and
 |---|---|---|
 | `network-unreachable` | DNS failure, refused or reset connection; private DNS often only resolves on the VPN | Engineer connects to the VPN |
 | `network-blocked` | HTTP 407, or HTTP 403 with a non-JSON body: a firewall, proxy, WAF or Front Door block page | Allow the engineer's public IP on the firewall/WAF, or require the VPN |
+| `network-blocked` (HTTP 470) | Azure Firewall application-rule deny, or a TLS-inspection exemption missing for the host. Community-reported, unofficial: Microsoft does not document 470. | Add an application rule allowing `dev.azure.com` and the Bifrost host, or exempt them from TLS inspection |
 | `timeout` | Deadline reached; a firewall silently dropping packets looks like this | Check firewall drop rules for the engineer's IP |
 | `http-401` / `http-403` | Azure DevOps answered in JSON: credential, permission or Azure DevOps organisation IP policy | Check access to the shared config repository; if the organisation restricts Azure DevOps by IP, the engineer must be on the VPN |
 
 The Azure DevOps organisation IP conditional-access policy is not a WAF: it answers JSON 401/403 after login, so the credentials hint (which mentions the VPN) is shown rather than the network hint. Fix it in Azure DevOps and Entra policy, not in the firewall.
 
-Known limits: a JSON 403 from a TLS-inspecting proxy reads as `http-403`; Azure Firewall HTTP 470 and HTML sign-in pages answered with 203 are not classified.
+Known limits: a JSON 403 from a TLS-inspecting proxy reads as `http-403`; HTML sign-in pages answered with 203 are not classified.
+
+HTTP 470 is treated as blocked everywhere. If your gateway legitimately answers 470 to the installer's anonymous probe, engineers get a false `*-blocked` and can use `--no-smoke` / `-NoSmoke`.
+
+The installer also prints the VPN/allow-list hint, once and as the last line, when an authenticated line fails with a network-type code: azdo `network-unreachable`, `network-blocked` or `timeout`; bifrost `network`, `timeout`, `407` or `470`. Other codes (for example bifrost `401`, `403`, `404`, `500`) get no hint because they point to credentials or the gateway, not the network path.
 
 Installer lines differ from plugin codes. `smoke azdo: skipped network-blocked` is the pre-flight verdict (the anonymous probe failed and the credential was never sent). `smoke azdo: fail network-unreachable` or `fail network-blocked` means the authenticated request failed after the probe found the host reachable. The probe goes to the origin `/` of the Bifrost `baseURL` and to `https://dev.azure.com/`, so a path-routed gateway can give a false `blocked` or `reachable` verdict. While the network is blocked, Kilo keeps using the bound cached config.
 

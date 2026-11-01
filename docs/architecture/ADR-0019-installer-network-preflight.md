@@ -1,5 +1,6 @@
 # ADR-0019: Installer smoke test network pre-flight (Azure IP firewall / VPN) before any credential is sent
-- Status: accepted
+- Status: accepted; amended by A1 (cycle-0024, T-035: probe 470 -> blocked; network hint after
+  qualifying authenticated-line codes)
 - Date: 2026-11-01
 - Cycle / item: cycle-0022 / F-020
 - Amends: ADR-0013 (smoke test), contract `installer-cli.md` 1.2.1 -> 1.3.0 (section 9),
@@ -83,8 +84,8 @@ code.
 
 | Probe outcome | Verdict | Network code |
 |---|---|---|
-| Resolves with an integer status 100-599 other than 403 / 407 | `reachable` | (none) |
-| Resolves with status 403 or 407 | `blocked` | `<target>-blocked` |
+| Resolves with an integer status 100-599 other than 403 / 407 / 470 (A1) | `reachable` | (none) |
+| Resolves with status 403 or 407, or 470 (since A1) | `blocked` | `<target>-blocked` |
 | Resolves with something that has no integer status 100-599 | `unreachable` | `<target>-unreachable` |
 | Rejects or throws before the deadline (DNS, refused, reset, TLS, deny-all fake) | `unreachable` | `<target>-unreachable` |
 | Deadline reached (abort), or a rejection after the deadline fired | `timeout` | `<target>-timeout` |
@@ -146,10 +147,12 @@ holds one code: a failed AzDO probe means no Bifrost probe is sent.
    **always the first smoke line**.
 2. `smoke azdo: ...`, 3. `smoke bifrost: ...` (unchanged format).
 4. The no-key hint (unchanged, only after `smoke bifrost: skipped no-key`).
-5. Network hint, only when `network.status === "fail"` and at least one code is not `internal`:
+5. Network hint, only when `network.status === "fail"` and at least one code is not `internal`
+   (since A1 also after a qualifying authenticated-line code, at most once):
    `Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run <frontEnd>.`
 
-Lines 4 and 5 cannot appear together (a blocked Bifrost probe means bifrost is not `no-key`).
+Lines 4 and 5 cannot appear together in a `runSmoke` report (a blocked Bifrost probe means
+bifrost is not `no-key`; since A1 a qualifying bifrost code is a `fail`, not `skipped no-key`).
 No line contains a host name, URL, key, PAT, token, status text, error text or body.
 `smokeFailed(report)` is true when `network`, `azdo` or `bifrost` has `status: "fail"`.
 `runSmoke` still never rejects. Its last-resort catch returns
@@ -204,3 +207,66 @@ every `formatSmoke` line and maps `smokeFailed` to exit 4). With `--no-smoke` / 
   already covers the escape hatch. Rejected.
 - **Classify 401 as blocked**: an allowed client without credentials normally gets 401 (AzDO,
   Bifrost governance, APIM subscription), so this would give mass false positives. Rejected.
+
+## Amendment A1 (cycle-0024, T-035): probe 470 is `blocked`; network hint on authenticated lines
+
+Contract: `installer-cli.md` 1.3.1 -> 1.3.2 (sections 7, 9.0, 9.1, 9.2, new 9.4). Plugin side:
+ADR-0020 amendment A1. Patch release. No new input, line, code, hint text or exit code; no new
+export from `smoke.ts`.
+
+### A1.1 Probe status 470 -> `blocked`
+
+```ts
+export function classifyProbeStatus(status: number | undefined): "reachable" | "blocked" | "unreachable" {
+  if (status === undefined) return "unreachable";
+  return status === 403 || status === 407 || status === 470 ? "blocked" : "reachable";
+}
+```
+
+Azure Firewall answers an application-rule deny (no rule matched; HTTP, or HTTPS with TLS
+inspection) with the non-standard HTTP 470 and an `Action: Deny` text body. This is
+community-reported only (unofficial sources: a public GitHub gist and the http.dev status
+reference), not Microsoft-documented. It matters for engineers whose egress goes through Azure
+Firewall (Azure Virtual Desktop, Dev Box, forced-tunnel VPN). Before A1 a 470 probe answer was
+`reachable`, so the PAT / az token / virtual key was then **sent** through the denying firewall
+and the result read `fail http-470` / `fail 470` with no hint. Now the target's credential is
+withheld, the line is `skipped network-blocked`, the network line is `fail azdo-blocked` /
+`fail bifrost-blocked`, the hint is printed and the run exits 4. False-positive risk is
+negligible: 470 is not IANA-registered, `https://dev.azure.com/` never answers it, and a Bifrost
+origin answering 470 to an allowed client is not a realistic configuration; the effect of one
+would be the same as the documented 403 false positive (key withheld, `--no-smoke` escape
+hatch). If the community report is wrong, nothing changes.
+
+### A1.2 Network hint also after a qualifying authenticated-line code
+
+Problem: with a reachable origin probe but a network-type failure on the authenticated request
+(WAF / path rule on the API path, drop on the API path, proxy), the output was
+`smoke network: pass` + `smoke azdo: fail network-blocked` (or `bifrost: fail 407`) with no
+actionable hint: "network said pass, but it is still a network problem".
+
+Decision (normative table in installer-cli 9.4): the section 7 hint (text unchanged) is printed
+at most once, as the last line, when N1 (unchanged pre-flight rule) **or** N2 (azdo `fail`
+with exactly `network-unreachable`, `network-blocked` or `timeout`, the plugin's network codes,
+same set as the plugin's L-HINT-NETWORK) **or** N3 (bifrost `fail` with exactly `network`,
+`timeout`, `407` or `470`) holds. Not for azdo `network` (plugin catch-all, not a network-path
+symptom, consistent with ADR-0020 section 4), nor for any `http-*`, `auth-unavailable`,
+`invalid-settings`, `bad-response`, nor for bifrost `401` / `403` / other statuses /
+`bad-response` / `invalid-key`, nor for any `skipped` code. Bifrost `403` stays hint-free on
+purpose (key / permission problem is the likelier cause after a reachable probe; troubleshooting
+"Bifrost 401" covers it).
+
+Shape (recommendation; behaviour normative): replace the private `hasNetworkCondition(network)`
+by a private `needsNetworkHint(report)` = N1 || N2 || N3, where N2 / N3 use a private
+`failedWith(outcome, codes)` that reads `status` and `code` with `attempt(...)` and compares
+primitive strings by `===` against two module-local `readonly string[]` constants. Exports and
+types are unchanged; `runSmoke`, `smokeFailed`, `install-helper.ts`, `install.sh` and
+`install.ps1` are unchanged (every qualifying line is already a `fail`, so exit codes do not
+change).
+
+Known imprecision (accepted): bifrost `fail network` also covers a body-stream failure after a
+2xx and a non-function injected fetch; both are rare and the hint is still a sensible first
+check. Splitting the code would change the bifrost code vocabulary, which T-035 keeps stable.
+
+Tests that pinned the old behaviour are re-expected (stricter, not weaker): the F-021 AC-7a / 7b
+"no network hint" tests become "exactly one network hint" tests, and the install-smoke
+`fail timeout` scenarios now expect the hint line before `Done.`.

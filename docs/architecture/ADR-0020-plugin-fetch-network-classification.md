@@ -1,5 +1,5 @@
 # ADR-0020: Plugin fetch failure classification (`network-unreachable` / `network-blocked`) and fixed log hints
-- Status: accepted
+- Status: accepted; amended by A1 (cycle-0024, T-035: HTTP 470 -> `network-blocked`)
 - Date: 2026-11-01
 - Cycle / item: cycle-0023 / F-021
 - Amends: ADR-0007 sections 1 (error codes), 8 (deadline mapping), 10 step 1 (status handling);
@@ -160,6 +160,8 @@ credential failure as a network problem.
   two lines can only appear when the probe of `https://dev.azure.com/` was reachable but the
   authenticated request failed. Its pre-flight hint and `formatSmoke` are unchanged; a plugin-side
   network code does **not** add the smoke network hint (that hint stays tied to `smoke network:`).
+  **Superseded by amendment A1 / ADR-0019 A1 (T-035):** `network-unreachable`,
+  `network-blocked` and `timeout` on the azdo line now add the smoke network hint (once).
 
 ### 6. Secret safety (AC-9)
 
@@ -198,7 +200,7 @@ credential failure as a network problem.
 | Azure DevOps itself answering 403 without a JSON Content-Type (e.g. an edge/HTML error page) | `network-blocked` + network hint | **False positive** possible; Azure DevOps REST answers are JSON, so judged rare; the hint is still a reasonable first check. |
 | Proxy auth 407 | `network-blocked` | Correct but rare: Node's fetch uses no proxy by default and a failed CONNECT surfaces as a rejection (`network-unreachable`). |
 | Captive portal / proxy redirect (3xx) | `http-3xx`, no hint | Unchanged (redirects are never followed, ADR-0007 section 9). |
-| Azure Firewall application-rule deny of inspected traffic, community-reported as non-standard HTTP 470 (not in Microsoft docs) | `http-470`, no hint | Out of scope (AC-3 keeps every other status unchanged); proposed as a follow-up. |
+| Azure Firewall application-rule deny of inspected traffic, community-reported as non-standard HTTP 470 (not in Microsoft docs) | `http-470`, no hint (0.9.0); since amendment A1 (T-035): `network-blocked` + network hint | Out of scope in F-021; done in T-035, see amendment A1. |
 | Body stream fails after a 2xx | `network`, no hint | Deliberate: connection was open. |
 
 ## Alternatives considered
@@ -223,3 +225,44 @@ credential failure as a network problem.
   error.
 - **Cache-first order to hide the firewall at startup.** Rejected by the PO: would serve stale
   enforce-mode config.
+
+## Amendment A1 (cycle-0024, T-035): HTTP 470 is `network-blocked`; smoke hint on authenticated lines
+
+Contracts: `plugin-interface.md` 0.9.0 -> 0.9.1 (2e row 7a, code summary), `installer-cli.md`
+1.3.1 -> 1.3.2 (sections 9.0, 9.1, 9.2, new 9.4; see ADR-0019 amendment A1). Patch release.
+
+**Decision.** `codeForStatus` gains one branch, evaluated before the 403 branch and like 407:
+
+```ts
+// 407, Azure Firewall's 470 deny and a 403 that is not JSON mean a network intermediary refused the request.
+function codeForStatus(status: number, response: unknown): FetchErrorCode {
+  if (status === 407 || status === 470) return "network-blocked";
+  if (status === 403 && !isJsonMediaType(readContentType(response))) return "network-blocked";
+  return `http-${status}` as const;
+}
+```
+
+- The Content-Type is **not read** for 470 (as for 407): no `headers.get` call. The body is
+  cancelled unread by the existing `handleResponse` order; `getReader` is never called.
+- `hintFor` is unchanged: `network-blocked` already maps to L-HINT-NETWORK, so the config hook logs
+  L-CACHE / L-NONE then exactly one L-HINT-NETWORK, and the bound-cache fallback (ADR-0018) applies
+  exactly as for any other fetch failure. Exactly one `fetch` call per run, no probe.
+- No new import, no new `__internals` key, no new constant, no export change; still one file.
+
+**Why (and the honest caveat).** Azure Firewall answers an application-rule deny (no rule
+matched) of HTTP traffic, or of HTTPS traffic it TLS-inspects, with the non-standard status 470
+and a short text body starting `Action: Deny`. This behaviour is **not documented by Microsoft**;
+it is known only from unofficial community sources (a public GitHub gist and the http.dev status
+reference). Without TLS inspection an HTTPS deny is a reset, which is already
+`network-unreachable`. False-positive risk is negligible: 470 is not an IANA-registered status,
+Azure DevOps REST never answers it, and any server that did would be answering with a status no
+client understands anyway; the worst case is the VPN / allow-list hint instead of no hint, with
+the cache fallback unchanged. If the community report is wrong (no 470 is ever seen), nothing
+changes for anyone. Caveat for the plugin: the request (with the PAT / token) has already been
+sent through the TLS-inspecting firewall when 470 comes back; this classification improves the
+diagnosis only. The installer's probe (ADR-0019 A1) is what keeps credentials back.
+
+**Consequences.** New tests pin 470 for every Content-Type with `headers.get` never called,
+`getReader` never called and `cancel` called once; the hook tests gain a 470 case in the hint
+table and in the bound-cache survival test. No existing plugin test pins `http-470`, so no
+existing assertion changes in the plugin tests.

@@ -843,6 +843,11 @@ const HINT_CASES: HintCase[] = [
   { reason: "network-unreachable", hint: HINT_NETWORK, fetch: failingFetch("a") },
   { reason: "network-blocked", hint: HINT_NETWORK, fetch: respond(403, "<html>blocked</html>", "text/html") },
   { reason: "network-blocked", hint: HINT_NETWORK, fetch: respond(407, "x", "text/html") },
+  {
+    reason: "network-blocked",
+    hint: HINT_NETWORK,
+    fetch: respond(470, "Action: Deny. Reason: No rule matched.", "text/plain"),
+  },
   { reason: "timeout", hint: HINT_NETWORK, fetch: () => new Promise(() => {}), options: { ...OPTIONS, timeoutMs: 20 } },
   { reason: "http-401", hint: HINT_CREDENTIALS, fetch: respond(401, "x", "text/html") },
   { reason: "http-403", hint: HINT_CREDENTIALS, fetch: respond(403, "{}", "application/json") },
@@ -912,7 +917,7 @@ test("F-021 AC4 a successful run logs no hint", async () => {
 });
 
 test("F-021 AC5 a bound cache survives network-unreachable and network-blocked after exactly one fetch", async () => {
-  for (const make of [failingFetch("c"), respond(403, "<html></html>", "text/html"), respond(407)]) {
+  for (const make of [failingFetch("c"), respond(403, "<html></html>", "text/html"), respond(407), respond(470)]) {
     const home = makeHome();
     const file = seedBoundCache(home, { model: "cached", extra: 1 });
     const before = realFs.readFileSync(file);
@@ -947,6 +952,19 @@ test("F-021 AC5 a cache bound to other settings is not applied after network-blo
   );
 });
 
+test("T-035 AC5 a cache bound to other settings is not applied after an HTTP 470", async () => {
+  const home = makeHome();
+  seedBoundCache(home, { model: "cached" }, { ...BOUND, branch: "other" });
+  const cfg = localConfig();
+  const { logs } = await run({ home, config: cfg, fetch: respond(470, "Action: Deny", "text/plain") });
+  assert.deepEqual(cfg, localConfig());
+  assert.deepEqual(messages(logs), [noneLine("cache-mismatch", "network-blocked"), HINT_NETWORK]);
+  assert.deepEqual(
+    logs.map((l) => (l as LogArg).body.level),
+    ["error", "warn"],
+  );
+});
+
 test("F-021 AC6 no canary, secret, host or setting value reaches any log argument", async () => {
   const CANARY = "BODYCANARY";
   const HEADER_CANARY = "CTCANARY";
@@ -967,10 +985,12 @@ test("F-021 AC6 no canary, secret, host or setting value reaches any log argumen
     respond(401, `{"m":"${CANARY}"}`, `application/json; ${HEADER_CANARY}`),
     respond(403, `{"m":"${CANARY}"}`, `application/json; ${HEADER_CANARY}`),
     respond(407, CANARY, `text/html; ${HEADER_CANARY}`),
+    respond(470, CANARY, `text/plain; ${HEADER_CANARY}`),
     respond(500, CANARY),
     () => Promise.reject(new Error(`LEAK-${CANARY} ${pat} ${token}`)),
     () => Promise.resolve(hostile(403)),
     () => Promise.resolve(hostile(500)),
+    () => Promise.resolve(hostile(470)),
     () => Promise.resolve(new Response(CANARY, { status: 403, headers: { "x-canary": HEADER_CANARY } })),
   ];
   for (const behaviour of [undefined, (): never => { throw new Error("sink"); }, () => Promise.reject(new Error("sink"))]) {

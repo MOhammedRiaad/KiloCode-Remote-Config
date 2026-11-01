@@ -106,7 +106,14 @@ F-021 (ADR-0020, contract plugin-interface.md 0.9.0 sections 2e and 2f-L) classi
 New test blocks: `backend/test/plugin/fetch.test.ts` (F-021 AC-1 to AC-3: `network-unreachable`, `timeout`,
 `network-blocked`, JSON 403 and 401, `network` catch-all), `backend/test/plugin/hook.test.ts` (F-021 AC4 to AC6:
 hint lines and their order with and without a cache, no leaks), `smoke.test.ts` and `install-smoke.test.ts`
-(authenticated-request failure after a passing pre-flight exits 4 with no network hint) and `e2e/startup.test.ts`.
+(authenticated-request failure after a passing pre-flight exits 4) and `e2e/startup.test.ts`.
+T-035 (contracts installer-cli.md 1.3.2 section 9.4 and plugin-interface.md 0.9.1; ADR-0019/0020 amendment A1)
+prints the network hint at most once, as the last line, also when the authenticated azdo line fails with
+`network-unreachable`, `network-blocked` or `timeout`, or the authenticated bifrost line fails with `network`,
+`timeout`, `407` or `470`. It also classifies HTTP 470 as blocked (installer probe `azdo-blocked` /
+`bifrost-blocked`, plugin `network-blocked`). Tests: `smoke.test.ts` and `install-smoke.test.ts` (hint present or
+absent per code, hint last and once, 470 probe never sends the credential) and `backend/test/plugin/fetch.test.ts`
+(470 with any `Content-Type`, body unread).
 Lint rule 7 (`check-fr11.mjs`, ADR-0013) forbids any file directly in `backend/installer/` from
 mentioning test switches such as the fake-network preload, so product code can never enable it.
 

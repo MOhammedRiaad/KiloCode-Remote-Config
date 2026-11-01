@@ -195,7 +195,7 @@ test("AC-3 timeouts and invalid/insecure shared configs exit 4 within bounded ti
       },
     });
     assert.equal(r.status, 4);
-    assert.match(r.stdout, /\nsmoke network: pass\nsmoke azdo: fail timeout\nsmoke bifrost: skipped azdo-failed\nDone\.\n$/);
+    assert.match(r.stdout, /\nsmoke network: pass\nsmoke azdo: fail timeout\nsmoke bifrost: skipped azdo-failed\nSmoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run install\.sh\.\nDone\.\n$/);
     assertLoaded(sb);
     assert.equal(requests(sb).length, 2);
   });
@@ -230,7 +230,7 @@ test("AC-3 timeouts and invalid/insecure shared configs exit 4 within bounded ti
       },
     });
     assert.equal(r.status, 4);
-    assert.match(r.stdout, /\nsmoke network: pass\nsmoke azdo: pass\nsmoke bifrost: fail timeout\nDone\.\n$/);
+    assert.match(r.stdout, /\nsmoke network: pass\nsmoke azdo: pass\nsmoke bifrost: fail timeout\nSmoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run install\.sh\.\nDone\.\n$/);
     assertLoaded(sb);
     assert.equal(requests(sb).length, 4);
   });
@@ -543,7 +543,7 @@ test("helper stdin protocol: omitted smoke record defaults to off; invalid or du
   });
 });
 
-test("F-021 AC-7b: a plugin-side network failure after a reachable pre-flight exits 4 without the network hint", () => {
+test("F-021 AC-7b: a plugin-side network failure after a reachable pre-flight exits 4 with exactly one network hint", () => {
   const env = { AZDO_PAT: PAT, KILO_BIFROST_KEY: KEY };
   withSandbox((sb) => {
     const r = runInstall(sb, REQUIRED_ARGS, env, {
@@ -557,10 +557,34 @@ test("F-021 AC-7b: a plugin-side network failure after a reachable pre-flight ex
     assert.equal(r.status, 4);
     assert.equal(
       r.stdout.slice(r.stdout.indexOf("smoke network:")),
-      "smoke network: pass\nsmoke azdo: fail network-unreachable\nsmoke bifrost: skipped azdo-failed\nDone.\n",
+      `smoke network: pass\nsmoke azdo: fail network-unreachable\nsmoke bifrost: skipped azdo-failed\n${HINT_SH}\nDone.\n`,
     );
     assertLoaded(sb);
     assert.equal(requests(sb).length, 2);
+    assertNoSecretsOrStack(r);
+  });
+});
+
+test("T-035 AC-4: an anonymous probe answered with HTTP 470 withholds the credential and exits 4", () => {
+  const env = { AZDO_PAT: PAT, KILO_BIFROST_KEY: KEY };
+  withSandbox((sb) => {
+    const r = runInstall(sb, REQUIRED_ARGS, env, {
+      smoke: true,
+      scenario: {
+        azdoProbe: { status: 470, body: "Action: Deny" },
+        azdo: { status: 200, content: "{}" },
+        bifrost: { status: 200, body: MODELS_BODY },
+      },
+    });
+    assert.equal(r.status, 4);
+    assert.equal(
+      r.stdout.slice(r.stdout.indexOf("smoke network:")),
+      `smoke network: fail azdo-blocked\nsmoke azdo: skipped network-blocked\nsmoke bifrost: skipped azdo-failed\n${HINT_SH}\nDone.\n`,
+    );
+    const reqs = requests(sb);
+    assert.equal(reqs.length, 1);
+    assertProbeRequest(reqs[0]!, "https://dev.azure.com/");
+    assert.equal(JSON.stringify(reqs).includes(PAT), false);
     assertNoSecretsOrStack(r);
   });
 });

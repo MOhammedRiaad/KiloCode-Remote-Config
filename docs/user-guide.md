@@ -198,7 +198,7 @@ one authenticated request per start and does not probe the network first.
 | Code | Meaning |
 |------|---------|
 | `network-unreachable` | The request failed before the deadline: DNS failure, refused or reset connection, or private DNS that only resolves on the VPN. |
-| `network-blocked` | HTTP 407, or HTTP 403 whose `Content-Type` is not JSON (for example an HTML firewall, WAF or Front Door block page). |
+| `network-blocked` | HTTP 407, HTTP 470 (Azure Firewall application-rule deny; community-reported, unofficial), or HTTP 403 whose `Content-Type` is not JSON (for example an HTML firewall, WAF or Front Door block page). |
 | `timeout` | The deadline was reached. A firewall that silently drops packets shows up as a timeout. |
 | `http-401` | Azure DevOps rejected the credential. |
 | `http-403` | A JSON 403: a real Azure DevOps permission or IP-policy answer. |
@@ -526,7 +526,13 @@ smoke bifrost: pass
 Each line is `pass`, `fail <code>` or `skipped <code>`. `skipped` never causes exit 4. Bifrost is skipped
 when `azdo` failed (`azdo-failed`), when your key is still the placeholder (`no-key`; the installer
 prints a hint to set `KILO_BIFROST_KEY` and re-run), or when the key is a `{env:...}` / `{file:...}`
-reference (`key-reference`). When a network target fails, its credential check prints `skipped network-blocked` and your PAT, `az` token or virtual key is never sent to it. The installer then prints this hint and exits with code 4 (the installation is kept):
+reference (`key-reference`). When a network target fails, its credential check prints `skipped network-blocked` and your PAT, `az` token or virtual key is never sent to it. The installer then prints this hint and exits with code 4 (the installation is kept). The hint is printed at most once, as the last line, when:
+
+- the `smoke network:` line fails with any code except `internal`; or
+- the authenticated `smoke azdo:` line fails with exactly `network-unreachable`, `network-blocked` or `timeout`; or
+- the authenticated `smoke bifrost:` line fails with exactly `network`, `timeout`, `407` or `470`.
+
+No hint is printed for other azdo codes (`http-<status>`, `auth-unavailable`, `invalid-settings`, `network`, `bad-response`, `too-large`, `invalid-jsonc`, `invalid-shape`, `internal`), for other bifrost codes (`401`, `403`, `404`, `500` and other statuses, `bad-response`, `too-large`, `invalid-key`, base-URL codes, `internal`), or for any `skipped` code.
 
 ```
 Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run <install.sh|install.ps1>.
@@ -543,17 +549,17 @@ Troubleshooting by code (a `fail` or `skipped` code on the line):
 |---|---|---|
 | `invalid-settings` | azdo | org, project, repo, path or branch was rejected; check the flags |
 | `auth-unavailable` | azdo | no PAT and no usable `az login`; set `AZDO_PAT` or run `az login` |
-| `azdo-blocked`, `bifrost-blocked` | network | the anonymous request got HTTP 403 or 407: your public IP is not on the Azure firewall allow-list; connect to the VPN or ask the platform team |
+| `azdo-blocked`, `bifrost-blocked` | network | the anonymous request got HTTP 403, 407 or 470 (470 is the Azure Firewall application-rule deny status, community-reported and unofficial): your public IP or host is not allowed; connect to the VPN or ask the platform team. If a gateway legitimately answers 470, use `--no-smoke` / `-NoSmoke` |
 | `azdo-unreachable`, `bifrost-unreachable` | network | connection error, DNS failure or reset (for example private DNS only resolves on the VPN); connect to the VPN |
 | `azdo-timeout`, `bifrost-timeout` | network | packets dropped and the deadline was reached; usually a firewall drop, connect to the VPN |
 | `internal` | network | unexpected error in the pre-flight |
 | `network-blocked` | azdo, bifrost (`skipped`) | the network check for that target failed, so the credential check was not run |
 | `timeout` | both | no answer in time; check VPN/network or raise `KILO_AZDO_TIMEOUT_MS` |
 | `http-<status>` | azdo | Azure DevOps answered with that status (401/403 credentials or scope, 404 wrong org/project/repo/path/branch) |
-| `<status>` (e.g. `401`) | bifrost | Bifrost answered with that status; 401 usually means a wrong or revoked virtual key; 3xx means a redirect, which is not followed |
+| `<status>` (e.g. `401`) | bifrost | Bifrost answered with that status; 401 usually means a wrong or revoked virtual key; 3xx means a redirect, which is not followed. `407` and `470` mean a proxy or firewall block and also print the network hint |
 | `too-large` | both | response over 1 MiB |
 | `bad-response` | both | answer was not the expected JSON object |
-| `network` | both | connection or DNS failure |
+| `network` | both | connection or DNS failure (hint printed for bifrost only) |
 | `invalid-jsonc` | azdo | the shared config is not valid JSONC |
 | `invalid-shape` | azdo | the shared config root is not an object |
 | `no-base-url` | bifrost | shared config has no `provider.bifrost.options.baseURL` string |

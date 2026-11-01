@@ -918,9 +918,9 @@ function isJsonMediaType(raw: string | undefined): boolean {
   return media.endsWith("+json") && media.length - slash - 1 > "+json".length;
 }
 
-// 407 and a 403 that is not JSON mean a network intermediary refused the request; the body is never read.
+// 407, 470 (Azure Firewall deny, community-reported) and a 403 that is not JSON mean a network intermediary refused the request; the body is never read.
 function codeForStatus(status: number, response: unknown): FetchErrorCode {
-  if (status === 407) return "network-blocked";
+  if (status === 407 || status === 470) return "network-blocked";
   if (status === 403 && !isJsonMediaType(readContentType(response))) return "network-blocked";
   return `http-${status}` as const;
 }

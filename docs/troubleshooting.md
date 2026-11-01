@@ -43,7 +43,7 @@ When Kilo starts behind the Azure IP firewall, the plugin makes one authenticate
 | Code | Meaning | What to do |
 |---|---|---|
 | `network-unreachable` | request failed before the deadline: DNS failure, refused or reset connection, private DNS off the VPN | Connect to the corporate VPN, then restart Kilo |
-| `network-blocked` | HTTP 407, or HTTP 403 with a non-JSON body (HTML firewall, WAF or Front Door block page) | Connect to the VPN or ask the platform team to allow your public IP address, then restart Kilo |
+| `network-blocked` | HTTP 407, HTTP 470 (Azure Firewall application-rule deny; community-reported, unofficial), or HTTP 403 with a non-JSON body (HTML firewall, WAF or Front Door block page) | Connect to the VPN or ask the platform team to allow your public IP address, then restart Kilo |
 | `timeout` | deadline reached; a firewall that silently drops packets shows up as a timeout | Same as above; `KILO_AZDO_TIMEOUT_MS` (default 5000) only helps on a slow link |
 | `http-401` / `http-403` | Azure DevOps answered in JSON: the credential is missing or rejected, or you lack permission | `az login` or replace your PAT; check access to the shared config repository |
 | `network` | catch-all: no usable `fetch`, internal error, or a body read failure | Restart Kilo; report it if it repeats |
@@ -60,7 +60,7 @@ Exact hint line (`http-401`, `http-403`, `auth-unavailable`):
 Azure DevOps credentials are missing or were rejected: run az login or replace your PAT and check your access to the shared config repository; if your organisation restricts Azure DevOps by IP address, also connect to the corporate VPN.
 ```
 
-How to tell them apart: a JSON 401/403 is a credential or permission problem (or an Azure DevOps organisation IP policy). A 407 or a 403 that is not JSON is a firewall or proxy block. Limits: an organisation IP conditional-access policy answers JSON 401/403, so you see the credentials hint (it mentions the VPN); a JSON 403 from a TLS-inspecting proxy reads as `http-403`; Azure Firewall HTTP 470 and HTML sign-in pages answered with 203 are not classified.
+How to tell them apart: a JSON 401/403 is a credential or permission problem (or an Azure DevOps organisation IP policy). A 407, a 470 or a 403 that is not JSON is a firewall or proxy block. HTTP 470 is the Azure Firewall application-rule deny status; this is community-reported and unofficial, Microsoft does not document it. Limits: an organisation IP conditional-access policy answers JSON 401/403, so you see the credentials hint (it mentions the VPN); a JSON 403 from a TLS-inspecting proxy reads as `http-403`; HTML sign-in pages answered with 203 are not classified (470 is now classified).
 
 Kilo keeps using the bound cached config while the network is blocked: with a valid cache the log order is the `using cached config` warn, the hint, then `Applied shared config`. Older versions reported a rejected request as `network`; it is now `network-unreachable`.
 
@@ -96,10 +96,12 @@ Kilo and Bifrost sit behind an Azure IP firewall. The installer smoke test start
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `azdo-blocked` / `bifrost-blocked` | HTTP 403 or 407 to an anonymous request | Connect to the corporate VPN, or ask the platform team to add your public IP to the Azure firewall allow-list |
+| `azdo-blocked` / `bifrost-blocked` | HTTP 403, 407 or 470 to an anonymous request (470: Azure Firewall application-rule deny, community-reported, unofficial) | Connect to the corporate VPN, or ask the platform team to add your public IP to the Azure firewall allow-list |
 | `azdo-unreachable` / `bifrost-unreachable` | connection error, DNS failure or reset (private DNS is often only visible on the VPN) | Connect to the VPN and re-run |
 | `azdo-timeout` / `bifrost-timeout` | packets dropped until the deadline (`KILO_AZDO_TIMEOUT_MS`, default 5000) | Usually a firewall drop; connect to the VPN |
 | `internal` | unexpected error | Re-run; report it if it repeats |
+
+The hint (connect to the VPN or ask for allow-listing) is printed at most once, as the last line, in three cases: the pre-flight `smoke network:` line fails with any code except `internal`; the authenticated `smoke azdo:` line fails with exactly `network-unreachable`, `network-blocked` or `timeout`; or the authenticated `smoke bifrost:` line fails with exactly `network`, `timeout`, `407` or `470`. So `smoke bifrost: fail 470` gets the hint, but `fail 401`, `403`, `404` or `500`, `smoke azdo: fail http-<status>`, `auth-unavailable` and any `skipped` line do not. If a gateway legitimately answers 470 and you get a false `*-blocked`, use `--no-smoke` (`-NoSmoke` on Windows).
 
 After the fix, re-run `install.sh` or `install.ps1`. The worst-case smoke test duration is four times `KILO_AZDO_TIMEOUT_MS`.
 
@@ -110,7 +112,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://dev.azure.com/
 curl -sS -o /dev/null -w '%{http_code}\n' https://<bifrost-host>/
 ```
 
-- HTTP 403 or 407, a timeout, `Could not resolve host` or `Connection reset`: a firewall, VPN or DNS problem. Fix the network first.
+- HTTP 403, 407 or 470, a timeout, `Could not resolve host` or `Connection reset`: a firewall, VPN or DNS problem. Fix the network first.
 - Any other status (200, 301, 302, 401, 404): the network path is open. If `smoke bifrost: fail 401` still appears, the problem is the virtual key, see [Bifrost 401](#bifrost-401-or-virtual-key-rejected).
 - If you are connected and allowed but still see `bifrost-blocked`, the Bifrost origin `/` may answer 403 to everyone. Tell the platform team and use `--no-smoke` meanwhile.
 - An Azure DevOps organisation IP conditional-access policy is enforced after login, so it shows up as `smoke azdo: fail http-401` or `http-403`, not as `azdo-blocked`.

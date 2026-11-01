@@ -1,6 +1,7 @@
 // Smoke checks for the bootstrap installer (ADR-0013, ADR-0019, contract installer-cli.md sections 9 and 9.0).
 // First sends one anonymous GET to each target origin (network pre-flight) and only then, when the
 // origin is reachable, the credentialed checks: Azure DevOps shared-config fetch and Bifrost /models.
+// Network hint rule: ADR-0019 A1, installer-cli 9.4 (N1 network fail, N2 azdo network code, N3 bifrost network code).
 // Never writes files or exposes secrets, hosts, URLs, response bodies or underlying error text.
 import { __internals } from "../plugin/azdo-remote-config.ts";
 import { isPlainObject, PLACEHOLDER_KEY } from "./personal-config-edit.ts";
@@ -325,10 +326,10 @@ async function checkAzdo(
   }
 }
 
-/** Maps a status to a probe verdict: 403/407 are firewall-style blocks, any other valid status is reachable. */
+/** Maps a status to a probe verdict: 403/407/470 are firewall-style blocks, any other valid status is reachable. */
 export function classifyProbeStatus(status: number | undefined): "reachable" | "blocked" | "unreachable" {
   if (status === undefined) return "unreachable";
-  return status === 403 || status === 407 ? "blocked" : "reachable";
+  return status === 403 || status === 407 || status === 470 ? "blocked" : "reachable";
 }
 
 /** Returns "<origin>/" of an already validated models URL. */
@@ -505,8 +506,19 @@ function networkLine(network: unknown): string {
   return network.status === "pass" ? "smoke network: pass" : `smoke network: fail ${network.codes.join(",")}`;
 }
 
-function hasNetworkCondition(network: unknown): boolean {
-  return isNetworkOutcome(network) && network.status === "fail" && network.codes.some((code) => code !== "internal");
+const AZDO_HINT_CODES: readonly string[] = ["network-unreachable", "network-blocked", "timeout"];
+const BIFROST_HINT_CODES: readonly string[] = ["network", "timeout", "407", "470"];
+
+function failedWith(outcome: unknown, codes: readonly string[]): boolean {
+  const status = attempt(() => (outcome as { status?: unknown }).status);
+  const code = attempt(() => (outcome as { code?: unknown }).code);
+  return status === "fail" && typeof code === "string" && codes.includes(code);
+}
+
+function needsNetworkHint(report: SmokeReport): boolean {
+  const network = report.network;
+  const n1 = isNetworkOutcome(network) && network.status === "fail" && network.codes.some((code) => code !== "internal");
+  return n1 || failedWith(report.azdo, AZDO_HINT_CODES) || failedWith(report.bifrost, BIFROST_HINT_CODES);
 }
 
 /** Formats the stdout lines of a smoke report, including the no-key and network hints when applicable. */
@@ -515,7 +527,7 @@ export function formatSmoke(report: SmokeReport, frontEnd: FrontEnd = "install.s
   if (report.bifrost.status === "skipped" && report.bifrost.code === "no-key") {
     lines.push(`Smoke test: set KILO_BIFROST_KEY and re-run ${frontEnd} to check your Bifrost virtual key.`);
   }
-  if (hasNetworkCondition(report.network)) {
+  if (needsNetworkHint(report)) {
     lines.push(
       `Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run ${frontEnd}.`,
     );

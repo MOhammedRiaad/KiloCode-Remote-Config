@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.16.1] - 2026-11-01
+
+### Added
+- T-035: the VPN / IP allow-list hint is now also printed (at most once, as the last line) when the installer smoke's authenticated azdo/bifrost lines fail with network-type codes (rule N1|N2|N3).
+- T-035: Azure Firewall HTTP 470 is treated as blocked in the installer probe (the credential is withheld) and in the plugin (`network-blocked` plus the NETWORK hint). HTTP 470 is community-reported and unofficial.
+- T-035: ADR-0019 and ADR-0020 amendment A1.
+
+### Changed
+- T-035: installer-cli bumped to 1.3.2; plugin-interface bumped to 0.9.1.
+- T-035: an HTTP 470 from Azure DevOps now reads `network-blocked` instead of `http-470`.
+- T-035 (docs): troubleshooting and runbook documentation updated.
+
 ## [0.16.0] - 2026-11-01
 
 BEHAVIOUR CHANGE: a rejected plugin fetch used to be reported with the code `network`; it is now reported as `network-unreachable`. This affects the log/diagnostic code only. Cache fallback behaviour is unchanged. Anything matching on the old `network` code must be updated.

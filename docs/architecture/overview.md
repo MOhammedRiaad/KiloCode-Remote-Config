@@ -60,7 +60,8 @@ Kilo start
                     network-unreachable | network-blocked | timeout -> VPN / allow-list hint;
                     http-401 | http-403 | auth-unavailable -> az login / PAT hint; else none
               (fetch codes, ADR-0020: fetch call fails before deadline -> network-unreachable;
-               407, or 403 without JSON Content-Type -> network-blocked; JSON 403 -> http-403;
+               407, 470 (Azure Firewall deny, T-035) or 403 without JSON Content-Type -> network-blocked;
+               JSON 403 -> http-403;
                body never read on non-2xx; still exactly one request, no probe)
            -> resolvePlaceholders {env:}/{file:} (ADR-0004) every run; log unresolved NAMES only
            -> applyShared: mergeConfig rules (ADR-0005) with a write journal; on any throw
@@ -92,7 +93,7 @@ bash installer/install.sh --org O --project P --repo R [--path --branch --mode] 
       backup kilo.jsonc.bak-<UTC ts> (wx, 0600, byte-identical), write kilo.jsonc (tmp wx 0600 + rename)
     never writes configDir/plugin(s)/ (AC-12); never prints key / PAT / file content
     smoke phase (smoke=on, after a successful write; installer/smoke.ts; ADR-0013, ADR-0019):
-      probe:   GET https://dev.azure.com/ (no headers, redirect manual, timeoutMs); 403/407 -> azdo-blocked,
+      probe:   GET https://dev.azure.com/ (no headers, redirect manual, timeoutMs); 403/407/470 -> azdo-blocked,
                error -> azdo-unreachable, deadline -> azdo-timeout => azdo skipped network-blocked (no PAT, no az)
       azdo:    __internals.resolveSettings(values, {env: PAT vars + KILO_AZDO_TIMEOUT_MS only})
                -> __internals.fetchRemoteConfig (fixed host, PAT|az token, deadline, 1 MiB) -> parseJsonc
@@ -101,7 +102,9 @@ bash installer/install.sh --org O --project P --repo R [--path --branch --mode] 
                key never sent) -> GET <baseURL>/models,
                Bearer <effective apiKey>, redirect manual, timeoutMs, 1 MiB, JSON object body
       prints "smoke network: pass|fail <codes>" first, then "smoke azdo|bifrost: pass|fail <code>|skipped <code>",
-      then the no-key or the VPN/allow-list hint; any fail -> exit 4 (install kept)
+      then the no-key hint, then at most one VPN/allow-list hint (network fail, or azdo fail
+      network-unreachable|network-blocked|timeout, or bifrost fail network|timeout|407|470;
+      installer-cli 9.4, ADR-0019 A1); any fail -> exit 4 (install kept)
 ```
 
 ## Data flow (Windows bootstrap install, C5; ADR-0014, `contracts/installer-cli.md` section 10)

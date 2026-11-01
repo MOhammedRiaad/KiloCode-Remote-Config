@@ -264,7 +264,7 @@ contain messages, URLs, headers, PATs, tokens or response text.
 | `invalid-settings` | org/project/repo/path/branch missing or invalid, or `settings` not an object (checked first; nothing else runs) |
 | `auth-unavailable` | no usable PAT and the `az` token is unavailable or invalid |
 | `network-unreachable` | `fetch` rejected (or threw synchronously) before the deadline: DNS failure, refused or reset connection |
-| `network-blocked` | HTTP 407, or HTTP 403 whose `Content-Type` is not JSON (for example an HTML firewall/WAF block page); the body is not read |
+| `network-blocked` | HTTP 407, HTTP 470 (any `Content-Type`), or HTTP 403 whose `Content-Type` is not JSON (for example an HTML firewall/WAF block page); the body is not read |
 | `timeout` | deadline reached (a firewall silently dropping packets ends here) |
 | `too-large` | body over 1 MiB |
 | `bad-response` | status outside 100..599, no readable body, invalid UTF-8 or JSON, not an object, or `content` not a string |
@@ -274,11 +274,12 @@ contain messages, URLs, headers, PATs, tokens or response text.
 | `http-<status>` | any other non-2xx status, e.g. `http-404`, `http-302` |
 
 Behaviour change: a rejected `fetch` used to be reported as `network`; it is now `network-unreachable`.
-The request is still made once per start, with no probe. Contract: plugin-interface.md 0.9.0 section 2e
-(rows 6, 7, 7a) and 2f-L; rationale in [ADR-0020](architecture/ADR-0020-plugin-fetch-network-classification.md).
+The request is still made once per start, with no probe. Contract: plugin-interface.md 0.9.1 section 2e
+(rows 6, 7, 7a) and 2f-L; rationale in [ADR-0020](architecture/ADR-0020-plugin-fetch-network-classification.md) (amendment A1).
+HTTP 470 is the Azure Firewall application-rule deny status. This is community-reported and unofficial; Microsoft does not document it. The plugin reads it as `network-blocked` whatever the `Content-Type`, without reading the body, so it gets the network hint.
 `runConfigHook` logs one fixed hint after the error line for these codes; see
 [the user guide](user-guide.md#troubleshooting-log-messages).
-Not classified yet: Azure Firewall HTTP 470 and HTML sign-in pages answered with 203.
+Not classified yet: HTML sign-in pages answered with 203.
 
 Example:
 ```ts

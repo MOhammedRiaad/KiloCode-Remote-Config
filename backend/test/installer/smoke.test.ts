@@ -227,7 +227,7 @@ test("formatSmoke and smokeFailed follow contract section 7 and 9", () => {
   assert.equal(smokeFailed(failReport), true);
 });
 
-test("classifyProbeStatus: 403 and 407 are blocked, undefined is unreachable, everything else is reachable", () => {
+test("classifyProbeStatus: 403, 407 and 470 are blocked, undefined is unreachable, everything else is reachable", () => {
   const table: Array<[number | undefined, string]> = [
     [100, "reachable"],
     [199, "reachable"],
@@ -237,6 +237,9 @@ test("classifyProbeStatus: 403 and 407 are blocked, undefined is unreachable, ev
     [403, "blocked"],
     [404, "reachable"],
     [407, "blocked"],
+    [469, "reachable"],
+    [470, "blocked"],
+    [471, "reachable"],
     [599, "reachable"],
     [undefined, "unreachable"],
   ];
@@ -415,8 +418,8 @@ test("runSmoke network probe passes for 200, 204, 302, 401, 404, 405, 500 and 50
   }
 });
 
-test("runSmoke withholds the virtual key when the Bifrost origin answers 403 or 407 (AC-2)", async () => {
-  for (const status of [403, 407]) {
+test("runSmoke withholds the virtual key when the Bifrost origin answers 403, 407 or 470 (AC-2, T-035 AC-4)", async () => {
+  for (const status of [403, 407, 470]) {
     const fake = makeFetch(({ url }) => {
       if (url === "https://bifrost.yourcompany.internal/") {
         return new Response(`<html>${BODY_CANARY}${KEY}</html>`, { status });
@@ -675,6 +678,12 @@ test("runSmoke enforces KILO_AZDO_TIMEOUT_MS deadline on hanging authenticated A
   assert.equal(azdoSignal?.aborted, true);
   assert.ok(Date.now() - t0 < 2000);
   assertNoLeak(r1);
+  assert.deepEqual(formatSmoke(r1), [
+    "smoke network: pass",
+    "smoke azdo: fail timeout",
+    "smoke bifrost: skipped azdo-failed",
+    HINT_SH,
+  ]);
 
   const t1 = Date.now();
   let bifrostSignal: AbortSignal | undefined;
@@ -696,6 +705,12 @@ test("runSmoke enforces KILO_AZDO_TIMEOUT_MS deadline on hanging authenticated A
   assert.equal(bifrostSignal?.aborted, true);
   assert.ok(Date.now() - t1 < 2000);
   assertNoLeak(r2);
+  assert.deepEqual(formatSmoke(r2), [
+    "smoke network: pass",
+    "smoke azdo: pass",
+    "smoke bifrost: fail timeout",
+    HINT_SH,
+  ]);
 });
 
 test("runSmoke maps throwing authenticated fetch to network-unreachable (azdo) and network (bifrost) without leaking error messages", async () => {
@@ -710,6 +725,12 @@ test("runSmoke maps throwing authenticated fetch to network-unreachable (azdo) a
     bifrost: { status: "skipped", code: "azdo-failed" },
   });
   assertNoLeak(r1);
+  assert.deepEqual(formatSmoke(r1), [
+    "smoke network: pass",
+    "smoke azdo: fail network-unreachable",
+    "smoke bifrost: skipped azdo-failed",
+    HINT_SH,
+  ]);
 
   const bifrostThrow = makeFetch(({ url }) => {
     if (isProbeUrl(url)) return new Response("", { status: 404 });
@@ -723,6 +744,12 @@ test("runSmoke maps throwing authenticated fetch to network-unreachable (azdo) a
     bifrost: { status: "fail", code: "network" },
   });
   assertNoLeak(r2);
+  assert.deepEqual(formatSmoke(r2), [
+    "smoke network: pass",
+    "smoke azdo: pass",
+    "smoke bifrost: fail network",
+    HINT_SH,
+  ]);
 });
 
 test("runSmoke enforces 1 MiB response cap and JSON-object body requirement on Bifrost", async () => {
@@ -838,7 +865,7 @@ test("formatSmoke names the front end in the no-key hint", () => {
   );
 });
 
-test("F-021 AC-7a: a plugin-side network failure after a passing pre-flight prints no network hint", async () => {
+test("F-021 AC-7a / T-035: a plugin-side network failure after a passing pre-flight prints exactly one network hint", async () => {
   const cases: Array<[() => unknown, string]> = [
     [() => Promise.reject(new Error(`${ERR_CANARY} ${PAT}`)), "network-unreachable"],
     [
@@ -853,8 +880,184 @@ test("F-021 AC-7a: a plugin-side network failure after a passing pre-flight prin
       "smoke network: pass",
       `smoke azdo: fail ${code}`,
       "smoke bifrost: skipped azdo-failed",
+      HINT_SH,
     ]);
+    assert.equal(formatSmoke(report).filter((l) => l === HINT_SH).length, 1);
     assert.equal(smokeFailed(report), true);
     assertNoLeak(report);
+  }
+});
+
+const HINT_PS = HINT_SH.replace("install.sh", "install.ps1");
+const countHints = (lines: string[]): number =>
+  lines.filter((l) => l.startsWith("Smoke test: a network check failed")).length;
+
+test("T-035 AC-1: azdo network-unreachable, network-blocked and timeout print the hint last, once", () => {
+  for (const code of ["network-unreachable", "network-blocked", "timeout"]) {
+    const report: SmokeReport = {
+      network: PASS_NET,
+      azdo: { status: "fail", code },
+      bifrost: { status: "skipped", code: "azdo-failed" },
+    };
+    const expected = ["smoke network: pass", `smoke azdo: fail ${code}`, "smoke bifrost: skipped azdo-failed"];
+    assert.deepEqual(formatSmoke(report), [...expected, HINT_SH], code);
+    assert.deepEqual(formatSmoke(report, "install.ps1"), [...expected, HINT_PS], code);
+  }
+  const quiet = [
+    "http-401", "http-403", "http-404", "auth-unavailable", "invalid-settings", "network",
+    "bad-response", "too-large", "invalid-jsonc", "invalid-shape", "internal",
+  ];
+  for (const code of quiet) {
+    const report: SmokeReport = {
+      network: PASS_NET,
+      azdo: { status: "fail", code },
+      bifrost: { status: "skipped", code: "azdo-failed" },
+    };
+    assert.equal(formatSmoke(report).length, 3, code);
+  }
+});
+
+test("T-035 AC-2: bifrost network, timeout, 407 and 470 print the hint; other codes and skipped do not", () => {
+  const withBifrost = (bifrost: SmokeReport["bifrost"]): SmokeReport => ({
+    network: PASS_NET,
+    azdo: { status: "pass" },
+    bifrost,
+  });
+  for (const code of ["network", "timeout", "407", "470"]) {
+    assert.deepEqual(formatSmoke(withBifrost({ status: "fail", code })), [
+      "smoke network: pass",
+      "smoke azdo: pass",
+      `smoke bifrost: fail ${code}`,
+      HINT_SH,
+    ]);
+  }
+  for (const code of ["401", "403", "404", "500", "bad-response", "invalid-key", "too-large", "no-base-url"]) {
+    assert.equal(formatSmoke(withBifrost({ status: "fail", code })).length, 3, code);
+  }
+  for (const code of ["azdo-failed", "key-reference", "network-blocked"] as const) {
+    assert.equal(formatSmoke(withBifrost({ status: "skipped", code })).length, 3, code);
+  }
+  const noKey = formatSmoke(withBifrost({ status: "skipped", code: "no-key" }));
+  assert.equal(noKey.length, 4);
+  assert.equal(countHints(noKey), 0);
+});
+
+test("T-035 AC-2: runSmoke with an authenticated Bifrost 407 or 470 reports fail and one hint", async () => {
+  for (const status of [407, 470]) {
+    const fake = makeFetch(({ url }) => {
+      if (isProbeUrl(url)) return new Response("", { status: 404 });
+      if (url.startsWith("https://dev.azure.com/")) return azdoJson(SHARED_OK);
+      return new Response(`${BODY_CANARY} ${KEY}`, { status, headers: { "x-canary": BODY_CANARY } });
+    });
+    const report = await runSmoke(VALUES, KEY, { env: { AZDO_PAT: PAT }, fetch: fake.fn });
+    assert.deepEqual(report, {
+      network: PASS_NET,
+      azdo: { status: "pass" },
+      bifrost: { status: "fail", code: String(status) },
+    });
+    const lines = formatSmoke(report);
+    assert.equal(lines.length, 4);
+    assert.equal(lines[3], HINT_SH);
+    assert.equal(countHints(lines), 1);
+    assertNoLeak(report);
+  }
+});
+
+test("T-035 AC-3: the hint is printed at most once and in the documented order", () => {
+  const passAzdo = { status: "pass" } as const;
+  const skipped = { status: "skipped", code: "azdo-failed" } as const;
+  const cases: Array<[SmokeReport, number]> = [
+    [{ network: { status: "fail", codes: ["azdo-blocked"] }, azdo: { status: "fail", code: "timeout" }, bifrost: skipped }, 1],
+    [{ network: { status: "fail", codes: ["bifrost-timeout"] }, azdo: passAzdo, bifrost: { status: "fail", code: "470" } }, 1],
+    [{ network: PASS_NET, azdo: { status: "fail", code: "network-blocked" }, bifrost: { status: "fail", code: "407" } }, 1],
+    [{ network: { status: "fail", codes: ["internal"] }, azdo: { status: "fail", code: "internal" }, bifrost: skipped }, 0],
+    [{ network: { status: "fail", codes: ["internal"] }, azdo: { status: "fail", code: "network-blocked" }, bifrost: skipped }, 1],
+  ];
+  for (const [report, count] of cases) {
+    const lines = formatSmoke(report);
+    assert.equal(countHints(lines), count);
+    if (count === 1) assert.equal(lines[lines.length - 1], HINT_SH);
+  }
+  const both = formatSmoke({
+    network: { status: "fail", codes: ["bifrost-blocked"] },
+    azdo: passAzdo,
+    bifrost: { status: "skipped", code: "no-key" },
+  });
+  assert.equal(both.length, 5);
+  assert.ok(both[3]!.startsWith("Smoke test: set KILO_BIFROST_KEY"));
+  assert.equal(both[4], HINT_SH);
+});
+
+test("T-035 AC-3: non-string codes and statuses are compared exactly and never produce a hint", () => {
+  const odd = [
+    { status: "fail", code: 470 },
+    { status: "fail", code: new String("timeout") },
+    { status: "fail", code: { toString: () => "timeout" } },
+    { status: new String("fail"), code: "timeout" },
+    { status: "skipped", code: "timeout" },
+  ];
+  for (const outcome of odd) {
+    const lines = formatSmoke({ network: PASS_NET, azdo: outcome as never, bifrost: outcome as never });
+    assert.equal(countHints(lines), 0, JSON.stringify(outcome));
+  }
+  const withN1 = formatSmoke({
+    network: { status: "fail", codes: ["azdo-blocked"] },
+    azdo: odd[0] as never,
+    bifrost: { status: "pass" },
+  });
+  assert.equal(countHints(withN1), 1);
+});
+
+test("T-035 AC-4: an anonymous probe answered with HTTP 470 is blocked and the credential is withheld", async () => {
+  const fake = makeFetch(
+    () =>
+      new Response(`Action: Deny. Reason: No rule matched. ${BODY_CANARY}`, {
+        status: 470,
+        headers: { "content-type": "text/plain", "x-canary": BODY_CANARY },
+      }),
+  );
+  let azCalls = 0;
+  const runAz = () => {
+    azCalls += 1;
+    return Promise.resolve({ exitCode: 0, stdout: TOKEN });
+  };
+  const report = await runSmoke(VALUES, KEY, { env: {}, fetch: fake.fn, runAz });
+  assert.deepEqual(report, {
+    network: { status: "fail", codes: ["azdo-blocked"] },
+    azdo: { status: "skipped", code: "network-blocked" },
+    bifrost: { status: "skipped", code: "azdo-failed" },
+  });
+  assert.equal(fake.calls.length, 1);
+  assert.equal(azCalls, 0);
+  assert.equal(smokeFailed(report), true);
+  const lines = formatSmoke(report);
+  assert.equal(lines.length, 4);
+  assert.equal(lines[3], HINT_SH);
+  assertNoLeak(report);
+});
+
+test("T-035 AC-6: canaries in 470/407 and authenticated network answers never reach the report or lines", async () => {
+  const canaryResponse = (status: number) =>
+    new Response(`${BODY_CANARY} ${PAT} ${TOKEN} ${KEY}`, {
+      status,
+      headers: { "x-canary": BODY_CANARY, "content-type": "text/plain" },
+    });
+  const scenarios: Array<(url: string) => unknown> = [
+    () => canaryResponse(470),
+    (url) => (isProbeUrl(url) ? new Response("", { status: 404 }) : canaryResponse(407)),
+    (url) =>
+      isProbeUrl(url) ? new Response("", { status: 404 }) : Promise.reject(new Error(`${ERR_CANARY} ${PAT}`)),
+    (url) => {
+      if (isProbeUrl(url)) return new Response("", { status: 404 });
+      return url.startsWith("https://dev.azure.com/") ? azdoJson(SHARED_OK) : canaryResponse(470);
+    },
+  ];
+  const forbidden = [BODY_CANARY, ERR_CANARY, PAT, TOKEN, KEY, "dev.azure.com", "bifrost.yourcompany", "acme", "kilo-config", "https://"];
+  for (const handler of scenarios) {
+    const fake = makeFetch(({ url }) => handler(url));
+    const report = await runSmoke(VALUES, KEY, { env: { AZDO_PAT: PAT }, fetch: fake.fn });
+    assertNoLeak(report);
+    const text = formatSmoke(report).join("\n");
+    for (const secret of forbidden) assert.equal(text.includes(secret), false, secret);
   }
 });
