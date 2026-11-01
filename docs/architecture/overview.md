@@ -1,6 +1,6 @@
 # Architecture overview - Kilo Shared Config
 
-Last updated: cycle-0019 (T-013). Stack: ADR-0001. Plugin module shape: ADR-0002.
+Last updated: cycle-0022 (F-020). Stack: ADR-0001. Plugin module shape: ADR-0002.
 JSONC parser: ADR-0003. Placeholder resolution: ADR-0004. Config merge: ADR-0005.
 Settings resolution: ADR-0006. Azure DevOps fetch and auth: ADR-0007.
 Hook wiring, cache, logging, never-crash: ADR-0008. Trust boundary: ADR-0009.
@@ -11,6 +11,7 @@ Shared config repo template, PR pipeline and branch-policy script: ADR-0015.
 End-to-end simulated startup harness (test only): ADR-0016.
 User/operator docs structure and the automated docs check: ADR-0017.
 Config cache bound to the settings that produced it: ADR-0018.
+Installer smoke-test network pre-flight (Azure IP firewall / VPN): ADR-0019.
 Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`,
 `contracts/personal-config-template.md`, `contracts/installer-cli.md`,
 `contracts/shared-config-repo.md`, `contracts/e2e-harness.md` (test only),
@@ -84,12 +85,17 @@ bash installer/install.sh --org O --project P --repo R [--path --branch --mode] 
       copy plugin -> configDir/azdo/azdo-remote-config.ts (only if bytes differ),
       backup kilo.jsonc.bak-<UTC ts> (wx, 0600, byte-identical), write kilo.jsonc (tmp wx 0600 + rename)
     never writes configDir/plugin(s)/ (AC-12); never prints key / PAT / file content
-    smoke phase (smoke=on, after a successful write; installer/smoke.ts; ADR-0013):
+    smoke phase (smoke=on, after a successful write; installer/smoke.ts; ADR-0013, ADR-0019):
+      probe:   GET https://dev.azure.com/ (no headers, redirect manual, timeoutMs); 403/407 -> azdo-blocked,
+               error -> azdo-unreachable, deadline -> azdo-timeout => azdo skipped network-blocked (no PAT, no az)
       azdo:    __internals.resolveSettings(values, {env: PAT vars + KILO_AZDO_TIMEOUT_MS only})
                -> __internals.fetchRemoteConfig (fixed host, PAT|az token, deadline, 1 MiB) -> parseJsonc
-      bifrost: shared provider.bifrost.options.baseURL, https only -> GET <baseURL>/models,
+      bifrost: shared provider.bifrost.options.baseURL, https only, key present ->
+               probe GET <origin>/ (same rule; bifrost-blocked|unreachable|timeout => skipped network-blocked,
+               key never sent) -> GET <baseURL>/models,
                Bearer <effective apiKey>, redirect manual, timeoutMs, 1 MiB, JSON object body
-      prints "smoke azdo|bifrost: pass|fail <code>|skipped <code>"; any fail -> exit 4 (install kept)
+      prints "smoke network: pass|fail <codes>" first, then "smoke azdo|bifrost: pass|fail <code>|skipped <code>",
+      then the no-key or the VPN/allow-list hint; any fail -> exit 4 (install kept)
 ```
 
 ## Data flow (Windows bootstrap install, C5; ADR-0014, `contracts/installer-cli.md` section 10)
@@ -213,6 +219,7 @@ backend/                     # the only package (ADR-0001 section 7)
                               # F-011: install.ps1 (PowerShell front end, ASCII, LF) - ADR-0014
                               #        personal-config-edit.ts (pure edit rules) - ADR-0012
                               # F-019: smoke.ts (azdo + bifrost checks, injectable deps) - ADR-0013
+                              # F-020: + network pre-flight probes before each credential - ADR-0019
                               # T-019: fs-guard.ts (post-mkdir target re-check, injectable lstat) - ADR-0012
   test/installer/*.test.ts    # edit rules (unit) + install.sh in child bash with temp HOME, stub az (F-010)
                               # + smoke unit tests and install.sh smoke tests (F-019)
@@ -220,6 +227,7 @@ backend/                     # the only package (ADR-0001 section 7)
   test/installer/fixtures/fake-network.ts  # TEST ONLY: --import preload replacing globalThis.fetch
                               # (loaded via NODE_OPTIONS by tests; never imported by product code)
                               # F-014: + "auth" answer (401 unless Authorization matches)
+                              # F-020: + optional azdoProbe / bifrostProbe answers for origin "/" requests
   test/installer/fixtures/race-after-mkdir.ts  # TEST ONLY (T-019): preload that swaps a target for a
                               # symlink right after the helper's mkdirSync (POSIX race tests)
   test/e2e/startup.test.ts    # F-014: install.sh -> simulated Kilo starts, end to end (ADR-0016)

@@ -5,6 +5,9 @@
 - Amends: ADR-0012 (installer), contract `installer-cli.md` 1.0.0 -> 1.1.0
 - Amended by: ADR-0016 (cycle-0016, F-014): the test preload gains an additive `auth` answer;
   the existing variants are unchanged (`contracts/e2e-harness.md` section 3)
+- Amended by: ADR-0019 (cycle-0022, F-020): an unauthenticated network pre-flight probe per target
+  runs before its credential-bearing request; new first line `smoke network: ...`, skip code
+  `network-blocked`, time bound `4 x timeoutMs` (contract `installer-cli.md` 1.3.0, section 9.0)
 
 ## Context
 

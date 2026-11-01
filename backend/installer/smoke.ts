@@ -1,6 +1,7 @@
-// Smoke checks for the bootstrap installer (ADR-0013, contract installer-cli.md section 9).
-// Verifies Azure DevOps shared-config fetch and Bifrost /models reachability without writing files
-// or exposing secrets, response bodies or underlying error text.
+// Smoke checks for the bootstrap installer (ADR-0013, ADR-0019, contract installer-cli.md sections 9 and 9.0).
+// First sends one anonymous GET to each target origin (network pre-flight) and only then, when the
+// origin is reachable, the credentialed checks: Azure DevOps shared-config fetch and Bifrost /models.
+// Never writes files or exposes secrets, hosts, URLs, response bodies or underlying error text.
 import { __internals } from "../plugin/azdo-remote-config.ts";
 import { isPlainObject, PLACEHOLDER_KEY } from "./personal-config-edit.ts";
 import type { Values } from "./personal-config-edit.ts";
@@ -10,9 +11,21 @@ export const SMOKE_ENV_NAMES = ["AZDO_PAT", "AZURE_DEVOPS_EXT_PAT", "KILO_AZDO_P
 export type SmokeOutcome =
   | { status: "pass" }
   | { status: "fail"; code: string }
-  | { status: "skipped"; code: "azdo-failed" | "no-key" | "key-reference" };
+  | { status: "skipped"; code: "azdo-failed" | "no-key" | "key-reference" | "network-blocked" };
+
+export type NetworkCode =
+  | "azdo-blocked"
+  | "azdo-unreachable"
+  | "azdo-timeout"
+  | "bifrost-blocked"
+  | "bifrost-unreachable"
+  | "bifrost-timeout"
+  | "internal";
+
+export type NetworkOutcome = { status: "pass" } | { status: "fail"; codes: NetworkCode[] };
 
 export interface SmokeReport {
+  network: NetworkOutcome;
   azdo: SmokeOutcome;
   bifrost: SmokeOutcome;
 }
@@ -28,6 +41,8 @@ export interface SmokeDeps {
   clearTimeout?: unknown;
 }
 
+export const AZDO_PROBE_URL = "https://dev.azure.com/";
+
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_KEY_CHARS = 4096;
 const MAX_RESPONSE_BYTES = 1048576;
@@ -35,6 +50,9 @@ const MAX_EMPTY_CHUNKS = 1024;
 const FORWARDED_DEP_KEYS = ["fetch", "runAz", "setTimeout", "clearTimeout"] as const;
 export type FrontEnd = "install.sh" | "install.ps1";
 
+type ProbeVerdict = "reachable" | "blocked" | "unreachable" | "timeout" | "internal";
+type AzdoSettings = Parameters<typeof __internals.fetchRemoteConfig>[0];
+type Target = "azdo" | "bifrost";
 type BifrostFetchCode = "timeout" | "too-large" | "bad-response" | "network";
 type Outcome = { state: "value"; value: unknown } | { state: "failed" } | { state: "deadline" };
 
@@ -56,7 +74,6 @@ interface BodyReader {
 interface AzdoCheckResult {
   outcome: SmokeOutcome;
   shared?: Record<string, unknown>;
-  timeoutMs: number;
 }
 
 function noop(): void {}
@@ -282,34 +299,81 @@ function isJsonObjectBytes(bytes: Uint8Array): boolean {
   return isPlainObject(parsed);
 }
 
-async function checkAzdo(values: Values, env: Record<string, string>, deps: SmokeDeps): Promise<AzdoCheckResult> {
+async function checkAzdo(
+  settings: AzdoSettings,
+  env: Record<string, string>,
+  deps: SmokeDeps,
+): Promise<AzdoCheckResult> {
   try {
-    const { settings } = __internals.resolveSettings(values, { env });
-    const timeoutMs =
-      typeof settings.timeoutMs === "number" && Number.isInteger(settings.timeoutMs) && settings.timeoutMs >= 1
-        ? settings.timeoutMs
-        : DEFAULT_TIMEOUT_MS;
     const azdoDeps: Record<string, unknown> = { env };
     for (const key of FORWARDED_DEP_KEYS) {
       const val = readOwn(deps, key);
       if (val !== undefined) azdoDeps[key] = val;
     }
     const fetched = await __internals.fetchRemoteConfig(settings, azdoDeps);
-    if (!fetched.ok) return { outcome: { status: "fail", code: fetched.error }, timeoutMs };
+    if (!fetched.ok) return { outcome: { status: "fail", code: fetched.error } };
     let parsed: unknown;
     try {
       parsed = __internals.parseJsonc(fetched.text);
     } catch {
-      return { outcome: { status: "fail", code: "invalid-jsonc" }, timeoutMs };
+      return { outcome: { status: "fail", code: "invalid-jsonc" } };
     }
-    if (!isPlainObject(parsed)) return { outcome: { status: "fail", code: "invalid-shape" }, timeoutMs };
-    return { outcome: { status: "pass" }, shared: parsed, timeoutMs };
+    if (!isPlainObject(parsed)) return { outcome: { status: "fail", code: "invalid-shape" } };
+    return { outcome: { status: "pass" }, shared: parsed };
   } catch {
-    return { outcome: { status: "fail", code: "internal" }, timeoutMs: DEFAULT_TIMEOUT_MS };
+    return { outcome: { status: "fail", code: "internal" } };
   }
 }
 
-async function checkBifrost(azdo: AzdoCheckResult, apiKey: unknown, deps: SmokeDeps): Promise<SmokeOutcome> {
+/** Maps a status to a probe verdict: 403/407 are firewall-style blocks, any other valid status is reachable. */
+export function classifyProbeStatus(status: number | undefined): "reachable" | "blocked" | "unreachable" {
+  if (status === undefined) return "unreachable";
+  return status === 403 || status === 407 ? "blocked" : "reachable";
+}
+
+/** Returns "<origin>/" of an already validated models URL. */
+export function probeOrigin(url: string): string {
+  return `${new URL(url).origin}/`;
+}
+
+async function probe(url: string, timeoutMs: number, deps: SmokeDeps): Promise<ProbeVerdict> {
+  try {
+    const injectedFetch = readOwn(deps, "fetch");
+    const candidateFetch = injectedFetch === undefined ? globalThis.fetch : injectedFetch;
+    if (typeof candidateFetch !== "function") return "internal";
+    const fetchFn = candidateFetch as NonNullable<SmokeDeps["fetch"]>;
+    const clock = resolveClock(deps);
+    const controller = new AbortController();
+    const { deadline, handle } = startDeadline(clock, controller, timeoutMs);
+    try {
+      const init = { method: "GET" as const, headers: {}, redirect: "manual" as const, signal: controller.signal };
+      const outcome = await deadline.race(() => fetchFn(url, init));
+      if (outcome.state === "deadline" || deadline.timedOut()) {
+        if (outcome.state === "value") discardBody(outcome.value);
+        return "timeout";
+      }
+      if (outcome.state === "failed") return "unreachable";
+      discardBody(outcome.value);
+      return classifyProbeStatus(readStatus(outcome.value));
+    } finally {
+      attempt(() => clock.clear(handle));
+    }
+  } catch {
+    return "internal";
+  }
+}
+
+function networkCode(target: Target, verdict: Exclude<ProbeVerdict, "reachable">): NetworkCode {
+  return verdict === "internal" ? "internal" : `${target}-${verdict}`;
+}
+
+async function checkBifrost(
+  azdo: AzdoCheckResult,
+  apiKey: unknown,
+  deps: SmokeDeps,
+  timeoutMs: number,
+  codes: NetworkCode[],
+): Promise<SmokeOutcome> {
   try {
     if (azdo.outcome.status !== "pass" || azdo.shared === undefined) {
       return { status: "skipped", code: "azdo-failed" };
@@ -319,6 +383,12 @@ async function checkBifrost(azdo: AzdoCheckResult, apiKey: unknown, deps: SmokeD
     const keyCheck = classifyKey(apiKey);
     if (!keyCheck.ok) return keyCheck.outcome;
 
+    const verdict = await probe(probeOrigin(urlCheck.url), timeoutMs, deps);
+    if (verdict !== "reachable") {
+      codes.push(networkCode("bifrost", verdict));
+      return { status: "skipped", code: "network-blocked" };
+    }
+
     const injectedFetch = readOwn(deps, "fetch");
     const candidateFetch = injectedFetch === undefined ? globalThis.fetch : injectedFetch;
     if (typeof candidateFetch !== "function") return { status: "fail", code: "network" };
@@ -326,7 +396,7 @@ async function checkBifrost(azdo: AzdoCheckResult, apiKey: unknown, deps: SmokeD
 
     const clock = resolveClock(deps);
     const controller = new AbortController();
-    const { deadline, handle } = startDeadline(clock, controller, azdo.timeoutMs);
+    const { deadline, handle } = startDeadline(clock, controller, timeoutMs);
     try {
       const init = {
         method: "GET" as const,
@@ -364,19 +434,58 @@ async function checkBifrost(azdo: AzdoCheckResult, apiKey: unknown, deps: SmokeD
   }
 }
 
-/** Runs the Azure DevOps and Bifrost smoke checks in sequence; never rejects. */
+function resolveTimeoutMs(settings: AzdoSettings): number {
+  const value = (settings as { timeoutMs?: unknown }).timeoutMs;
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : DEFAULT_TIMEOUT_MS;
+}
+
+function internalReport(): SmokeReport {
+  return {
+    network: { status: "fail", codes: ["internal"] },
+    azdo: { status: "fail", code: "internal" },
+    bifrost: { status: "skipped", code: "azdo-failed" },
+  };
+}
+
+const CODE_ORDER: NetworkCode[] = [
+  "azdo-blocked",
+  "azdo-unreachable",
+  "azdo-timeout",
+  "bifrost-blocked",
+  "bifrost-unreachable",
+  "bifrost-timeout",
+  "internal",
+];
+
+function toNetwork(codes: NetworkCode[]): NetworkOutcome {
+  return codes.length === 0
+    ? { status: "pass" }
+    : { status: "fail", codes: CODE_ORDER.filter((code) => codes.includes(code)) };
+}
+
+/** Runs the network pre-flight, then the Azure DevOps and Bifrost smoke checks in sequence; never rejects. */
 export async function runSmoke(values: Values, apiKey: unknown, deps: SmokeDeps): Promise<SmokeReport> {
   try {
     const rawEnv = readOwn(deps, "env") as Readonly<Record<string, string | undefined>>;
     const env = pickSmokeEnv(rawEnv);
-    const azdo = await checkAzdo(values, env, deps);
-    const bifrost = await checkBifrost(azdo, apiKey, deps);
-    return { azdo: azdo.outcome, bifrost };
+    const { settings } = __internals.resolveSettings(values, { env });
+    const timeoutMs = resolveTimeoutMs(settings);
+    const codes: NetworkCode[] = [];
+
+    const azdoVerdict = await probe(AZDO_PROBE_URL, timeoutMs, deps);
+    if (azdoVerdict !== "reachable") {
+      codes.push(networkCode("azdo", azdoVerdict));
+      return {
+        network: toNetwork(codes),
+        azdo: { status: "skipped", code: "network-blocked" },
+        bifrost: { status: "skipped", code: "azdo-failed" },
+      };
+    }
+    const azdo = await checkAzdo(settings, env, deps);
+    const bifrost = await checkBifrost(azdo, apiKey, deps, timeoutMs, codes);
+    return { network: toNetwork(codes), azdo: azdo.outcome, bifrost };
   } catch {
-    return {
-      azdo: { status: "fail", code: "internal" },
-      bifrost: { status: "skipped", code: "azdo-failed" },
-    };
+    return internalReport();
   }
 }
 
@@ -384,16 +493,37 @@ function formatLine(check: "azdo" | "bifrost", outcome: SmokeOutcome): string {
   return outcome.status === "pass" ? `smoke ${check}: pass` : `smoke ${check}: ${outcome.status} ${outcome.code}`;
 }
 
-/** Formats the stdout lines of a smoke report, including the no-key hint when applicable. */
+function isNetworkOutcome(network: unknown): network is NetworkOutcome {
+  const status = attempt(() => (network as { status?: unknown }).status);
+  if (status === "pass") return true;
+  const codes = attempt(() => (network as { codes?: unknown }).codes);
+  return status === "fail" && Array.isArray(codes) && codes.length > 0 && codes.every((c) => typeof c === "string");
+}
+
+function networkLine(network: unknown): string {
+  if (!isNetworkOutcome(network)) return "smoke network: fail internal";
+  return network.status === "pass" ? "smoke network: pass" : `smoke network: fail ${network.codes.join(",")}`;
+}
+
+function hasNetworkCondition(network: unknown): boolean {
+  return isNetworkOutcome(network) && network.status === "fail" && network.codes.some((code) => code !== "internal");
+}
+
+/** Formats the stdout lines of a smoke report, including the no-key and network hints when applicable. */
 export function formatSmoke(report: SmokeReport, frontEnd: FrontEnd = "install.sh"): string[] {
-  const lines = [formatLine("azdo", report.azdo), formatLine("bifrost", report.bifrost)];
+  const lines = [networkLine(report.network), formatLine("azdo", report.azdo), formatLine("bifrost", report.bifrost)];
   if (report.bifrost.status === "skipped" && report.bifrost.code === "no-key") {
     lines.push(`Smoke test: set KILO_BIFROST_KEY and re-run ${frontEnd} to check your Bifrost virtual key.`);
+  }
+  if (hasNetworkCondition(report.network)) {
+    lines.push(
+      `Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run ${frontEnd}.`,
+    );
   }
   return lines;
 }
 
-/** True when at least one smoke check failed (skipped checks never fail the run). */
+/** True when the network pre-flight or at least one smoke check failed (skipped checks never fail the run). */
 export function smokeFailed(report: SmokeReport): boolean {
-  return report.azdo.status === "fail" || report.bifrost.status === "fail";
+  return !(report.network?.status === "pass") || report.azdo.status === "fail" || report.bifrost.status === "fail";
 }

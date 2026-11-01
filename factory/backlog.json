@@ -11,13 +11,14 @@
     "acceptance_criteria": [
       "Given/When/Then statements, each independently testable"
     ],
-    "source": "vision | security | review | release | po",
+    "source": "vision | security | review | release | po | user",
     "cycle_done": "cycle number that shipped it, or null"
   },
   "_notes": [
     "Product has no UI. 'backend' scope = plugin (C2), validation tooling (C1), installers (C5) and key provisioning (C6), all living under backend/. 'frontend' is false for every item.",
     "FR-11: the shipped plugin must be ONE TypeScript file with zero runtime npm dependencies. Dev-only tooling (test runner, type-checker) is allowed.",
-    "External systems (Azure DevOps, az CLI, Bifrost, Kilo) are never called for real in tests; they are faked/mocked."
+    "External systems (Azure DevOps, az CLI, Bifrost, Kilo) are never called for real in tests; they are faked/mocked.",
+    "Cycle 0022: factory reopened by the USER with a new requirement (Azure IP firewall in front of Bifrost / Kilo-facing endpoints). Items F-020..F-022 have source 'user' and outrank the earlier ordering. F-012/F-013/F-015 remain SKIPPED; remote mode stays OFF."
   ],
   "items": [
     {
@@ -1165,6 +1166,105 @@
       "source": "review",
       "cycle_done": null,
       "notes": "Cycle 0021 PO: AC2 NEEDS A LINUX RUN (push/PR to GitHub so ubuntu-latest CI runs scripts/ci.sh and confirm the 5 AC-3 POSIX tests report passed). The AC1 test and doc wording are low-value follow-ups for later (factory declared DONE)."
+    },
+    {
+      "id": "F-020",
+      "title": "Installer smoke test: network pre-flight for Azure IP firewall / VPN before any credential is sent",
+      "type": "feature",
+      "priority": 1,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-019",
+        "F-011"
+      ],
+      "description": "USER requirement (cycle 0022): the Bifrost gateway (and possibly other Kilo-facing endpoints) sit behind an Azure IP firewall / IP allow-list. An engineer who is not on the VPN or whose public IP is not allow-listed today gets a confusing smoke failure (timeout, reset, or HTTP 403 that reads like a bad key) and the virtual key / AzDO credential is sent anyway. Add a pre-flight 'network' check to backend/installer/smoke.ts (shared by install.sh and install.ps1) that runs BEFORE the authenticated Azure DevOps fetch and BEFORE GET <baseURL>/models: one unauthenticated, bounded HTTPS probe per target (the fixed Azure DevOps host https://dev.azure.com/ and the origin of the validated https Bifrost baseURL). Classification (fixed, value-free codes): HTTP 403 or 407 -> '<target>-blocked'; network error (DNS, refused, reset, TLS) -> '<target>-unreachable'; deadline -> '<target>-timeout'; any other HTTP status (2xx, 3xx, 401, 404, 5xx...) -> reachable (rationale: an allowed client that sends no credentials normally gets 401/404/redirect, whereas an Azure firewall / Front Door / App Service access restriction answers 403 or drops the connection). target is 'azdo' or 'bifrost'. When a target fails the probe, its authenticated check is skipped with code 'network-blocked' and the credential for it is never sent. Output adds a first line 'smoke network: pass' or 'smoke network: fail <code>[,<code>]' and, on failure, one fixed hint line: connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run <front end>. Exit code stays 4 when the network check fails. No new runtime dependencies; plugin file untouched; tests use injected fake fetch / clock only (never real network, az, or home).",
+      "acceptance_criteria": [
+        "Given a fake fetch where the unauthenticated probes of https://dev.azure.com/ and of the Bifrost baseURL origin answer with a non-403/407 HTTP status (e.g. 200, 302, 401, 404), When runSmoke runs, Then report.network is pass, formatSmoke prints 'smoke network: pass' as the first line, and the azdo and bifrost authenticated checks run and are reported exactly as before.",
+        "Given a fake fetch whose probe of the Bifrost origin answers HTTP 403, When runSmoke runs, Then the network line is 'smoke network: fail bifrost-blocked', bifrost is 'skipped network-blocked', the fake records no request to <baseURL>/models and no request carrying the virtual key, the fixed VPN / IP allow-list hint line naming the front end is printed, and smokeFailed returns true (installer exit code 4).",
+        "Given a fake fetch whose probe of https://dev.azure.com/ rejects with a network error, or never settles until a fake clock passes timeoutMs, When runSmoke runs, Then the network code is 'azdo-unreachable' or 'azdo-timeout' respectively, the fake az runner is never invoked, no PAT or bearer token is sent, azdo is 'skipped network-blocked', and runSmoke resolves (never hangs, never rejects).",
+        "Given any probe, When the fake fetch records it, Then it is a GET (or HEAD) to an https: origin only (no path beyond '/', no query), with redirect 'manual', an AbortSignal, no body, and no Authorization, api-key, x-api-key or Cookie header.",
+        "Given a missing, invalid or non-https baseURL, or no key / a key reference, When runSmoke runs, Then the Bifrost probe is not sent and the existing bifrost codes (no-base-url, invalid-base-url, insecure-base-url, no-key, key-reference) are reported unchanged; and Given --no-smoke, Then no probe or other network call is made.",
+        "Given any probe outcome (including a probe response whose body contains a key-like or HTML string, or an internal exception), When the report is formatted, Then every printed line comes from the fixed code set and contains no key, PAT, token, baseURL, host name or response body text; an internal error yields 'smoke network: fail internal' instead of a throw.",
+        "Given the same blocked fake for front ends 'install.sh' and 'install.ps1', When formatSmoke runs, Then both produce identical network and hint lines except the front-end name, and all existing smoke, installer and e2e tests still pass with 'bash scripts/ci.sh' exiting 0."
+      ],
+      "source": "user",
+      "cycle_done": 22,
+      "notes": "Cycle 0022 PO: selected first because it is the literal 'validate before we fetch the URL' request for both URLs (AzDO + Bifrost) and it stops the key being sent to a host that will reject it. Plugin-side classification is F-021, docs F-022."
+    },
+    {
+      "id": "F-021",
+      "title": "Plugin: classify Azure firewall / network-blocked failures in the remote fetch with an actionable log hint",
+      "type": "feature",
+      "priority": 2,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-020"
+      ],
+      "description": "USER requirement (cycle 0022), plugin side. fetchRemoteConfig today reports 'network', 'timeout' or 'http-<status>', so a firewall / IP allow-list block of the Azure DevOps fetch looks like an auth problem or a generic network error. Add fixed, value-free classification (reuse F-020 vocabulary where sensible, e.g. 'network-blocked' for 403/407 that is not an AzDO JSON auth response, 'network-unreachable' for connection errors) and a fixed log hint ('not on the VPN / IP not allow-listed' vs 'check your PAT / az login' vs 'server error'). The Architect decides whether an unauthenticated reachability probe of https://dev.azure.com/ before credentials is worth its startup latency; if adopted it must share the single existing timeout budget. FR-10 (never throw), FR-11 (one file, zero runtime deps), cache fallback and cache binding (T-013) unchanged; tests with fake fetch only.",
+      "acceptance_criteria": [
+        "Given a fake fetch that rejects with a connection error, When fetchRemoteConfig runs, Then it resolves { ok: false } with the fixed network-unreachable code and the config hook logs the fixed VPN / IP allow-list hint.",
+        "Given a fake fetch that answers 403 or 407 with a non-JSON (e.g. HTML) body, When fetchRemoteConfig runs, Then the error is the fixed network-blocked code, distinct from the 401 / auth code.",
+        "Given a fake fetch that answers 401, or 403 with an Azure DevOps JSON error body, When fetchRemoteConfig runs, Then the result is still an auth/http code and the log hint refers to credentials, not the network.",
+        "Given any of these failures and a valid bound cache, When the config hook runs, Then the cached config is used, the hook never throws, and no log line contains a PAT, token, URL or response body text.",
+        "Given the plugin file after the change, When the FR-11 lint and 'bash scripts/ci.sh' run, Then it is still one TypeScript file with zero runtime dependencies and CI exits 0."
+      ],
+      "source": "user",
+      "cycle_done": null,
+      "notes": "Cycle 0022 PO: second slice of the Azure IP firewall requirement."
+    },
+    {
+      "id": "F-022",
+      "title": "Docs: Azure IP firewall / VPN requirement, allow-listing runbook and how to tell a firewall block from a bad key",
+      "type": "feature",
+      "priority": 2,
+      "status": "todo",
+      "scope": {
+        "backend": false,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-020",
+        "F-021"
+      ],
+      "description": "USER requirement (cycle 0022), docs slice. docs/troubleshooting.md: table of the new smoke 'network' codes and plugin network codes with the action for each (VPN, ask platform team to allow-list public IP, check key/PAT, server error). docs/platform-runbook.md: how to add engineer egress IPs / VPN ranges to the Azure firewall / access restrictions in front of Bifrost, and the VPN requirement. docs/engineer-setup.md: prerequisite 'be on the VPN / allowed network before running the installer'. Covered by the docs check (check-docs.mjs). Cycle 0022 note: the F-020 docs pass already wrote the installer-side network-codes table, curl self-check, VPN prerequisite and allow-listing runbook section (troubleshooting.md, engineer-setup.md, platform-runbook.md, user-guide.md); F-022 now only needs to cover the PLUGIN-side codes/log hints from F-021 (and the security note that the probe goes to origin `/` so path-routed gateways can mislead). Shrink its ACs accordingly.",
+      "acceptance_criteria": [
+        "Given docs/troubleshooting.md, When the docs check runs, Then every smoke network code and plugin network code emitted by the code appears with an action.",
+        "Given docs/platform-runbook.md, When read by the docs check, Then it has an Azure firewall / IP allow-list section naming which hosts must allow engineer IPs and how to verify with the installer smoke test.",
+        "Given docs/engineer-setup.md, When read by the docs check, Then the prerequisites list the VPN / allowed-network requirement before running install.sh or install.ps1.",
+        "Given all docs, When 'bash scripts/ci.sh' runs, Then the docs check passes and no doc contains a real key, PAT, company IP address or internal host name."
+      ],
+      "source": "user",
+      "cycle_done": null,
+      "notes": "Cycle 0022 PO: the docs writer will touch these files incidentally while shipping F-020; this item closes the full runbook."
+    },
+    {
+      "id": "T-032",
+      "title": "F-020 follow-ups: probe body-cancel test, test anchors, diagnostics",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-020"
+      ],
+      "description": "Cycle 0022 review/security follow-ups: (review low R1) add a test that records the probe body's cancel() call so removing discardBody in smoke.ts is caught; (R2) restore the `Done.\n$` end anchor in the install-smoke.test.ts AC-3 Bifrost-probe-hang regex; (R3) add a smoke.test.ts case with a working probe and runAz: 42 so the fetchRemoteConfig-with-bad-runAz path stays covered; (R4, optional) checkBifrost reports network codes by mutating a passed-in array - return the code instead; (security I2, optional) skip the AzDO probe when org/project/repo are missing so the user sees invalid-settings rather than network-blocked.",
+      "acceptance_criteria": [
+        "Given the probe response, When the probe finishes, Then a test asserts body.cancel() was called.",
+        "Given runAz: 42 with a reachable probe, When runSmoke runs, Then azdo reports the auth-unavailable code without spawning anything."
+      ],
+      "source": "review",
+      "cycle_done": null
     }
   ]
 }

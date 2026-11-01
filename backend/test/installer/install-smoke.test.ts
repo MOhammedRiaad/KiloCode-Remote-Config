@@ -44,10 +44,32 @@ function assertLoaded(sb: Sandbox): void {
 
 function assertNoSecretsOrStack(r: RunResult): void {
   const combined = r.stdout + r.stderr;
-  for (const secret of [KEY, "AbCdEf1234567890", PAT, BASIC_CRED, AZ_TOKEN, ERR_CANARY, BODY_CANARY]) {
+  for (const secret of [
+    KEY,
+    "AbCdEf1234567890",
+    PAT,
+    BASIC_CRED,
+    AZ_TOKEN,
+    ERR_CANARY,
+    BODY_CANARY,
+    "bifrost.yourcompany.internal",
+    "dev.azure.com",
+  ]) {
     assert.equal(combined.includes(secret), false, `output leaked ${secret}`);
   }
   assert.doesNotMatch(combined, /\n\s+at /);
+}
+
+const HINT_SH =
+  "Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run install.sh.";
+
+function assertProbeRequest(req: { url: string; method: string; headers: Record<string, string>; redirect: string }, url: string): void {
+  assert.equal(req.url, url);
+  assert.equal(req.method, "GET");
+  assert.equal(req.redirect, "manual");
+  assert.equal(req.headers["authorization"], undefined);
+  assert.equal(req.headers["api-key"], undefined);
+  assert.equal(req.headers["cookie"], undefined);
 }
 
 function seedPersonalConfig(sb: Sandbox, text: string): void {
@@ -64,21 +86,23 @@ test("AC-1 smoke test passes end-to-end with shipped shared config and Bifrost /
       { smoke: true, scenario: okScenario() },
     );
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /\nsmoke azdo: pass\n/);
+    assert.match(r.stdout, /\nsmoke network: pass\nsmoke azdo: pass\n/);
     assert.match(r.stdout, /\nsmoke bifrost: pass\nDone\.\n$/);
     assert.equal(r.stderr, "");
     assertLoaded(sb);
 
     const reqs = requests(sb);
-    assert.equal(reqs.length, 2);
+    assert.equal(reqs.length, 4);
+    assertProbeRequest(reqs[0]!, "https://dev.azure.com/");
+    assertProbeRequest(reqs[2]!, "https://bifrost.yourcompany.internal/");
 
-    const azdoReq = reqs[0]!;
+    const azdoReq = reqs[1]!;
     assert.equal(azdoReq.url, expectedItemsUrl("acme", "proj", "cfg", "/teams/core/kilo.jsonc", "release/1"));
     assert.equal(azdoReq.method, "GET");
     assert.equal(azdoReq.redirect, "manual");
     assert.equal(azdoReq.headers["authorization"], `Basic ${BASIC_CRED}`);
 
-    const bifrostReq = reqs[1]!;
+    const bifrostReq = reqs[3]!;
     assert.equal(bifrostReq.url, "https://bifrost.yourcompany.internal/v1/models");
     assert.equal(bifrostReq.method, "GET");
     assert.equal(bifrostReq.redirect, "manual");
@@ -107,10 +131,10 @@ test("AC-2 Bifrost 401 and AzDO 404 exit 4, skip Bifrost on AzDO failure, and ke
       },
     });
     assert.equal(r.status, 4);
-    assert.match(r.stdout, /\nsmoke azdo: pass\nsmoke bifrost: fail 401\nDone\.\n$/);
+    assert.match(r.stdout, /\nsmoke network: pass\nsmoke azdo: pass\nsmoke bifrost: fail 401\nDone\.\n$/);
     assert.match(r.stderr, /install\.sh: error: smoke test failed; the installation was kept\./);
     assertLoaded(sb401);
-    assert.equal(requests(sb401).length, 2);
+    assert.equal(requests(sb401).length, 4);
     assert.deepEqual(snapshot(sb401.configDir), expectedSnap);
     assertNoSecretsOrStack(r);
   });
@@ -124,12 +148,16 @@ test("AC-2 Bifrost 401 and AzDO 404 exit 4, skip Bifrost on AzDO failure, and ke
       },
     });
     assert.equal(r.status, 4);
-    assert.match(r.stdout, /\nsmoke azdo: fail http-404\nsmoke bifrost: skipped azdo-failed\nDone\.\n$/);
+    assert.match(
+      r.stdout,
+      /\nsmoke network: pass\nsmoke azdo: fail http-404\nsmoke bifrost: skipped azdo-failed\nDone\.\n$/,
+    );
     assert.match(r.stderr, /install\.sh: error: smoke test failed; the installation was kept\./);
     assertLoaded(sb404);
     const reqs = requests(sb404);
-    assert.equal(reqs.length, 1);
-    assert.ok(reqs[0]!.url.startsWith("https://dev.azure.com/"));
+    assert.equal(reqs.length, 2);
+    assertProbeRequest(reqs[0]!, "https://dev.azure.com/");
+    assert.ok(reqs[1]!.url.startsWith("https://dev.azure.com/acme/"));
     assert.deepEqual(snapshot(sb404.configDir), expectedSnap);
     assertNoSecretsOrStack(r);
   });
@@ -146,9 +174,30 @@ test("AC-3 timeouts and invalid/insecure shared configs exit 4 within bounded ti
     });
     assert.equal(r.status, 4);
     assert.ok(Date.now() - t0 < 10_000);
-    assert.match(r.stdout, /\nsmoke azdo: fail timeout\nsmoke bifrost: skipped azdo-failed\nDone\.\n$/);
+    assert.equal(
+      r.stdout.slice(r.stdout.indexOf("smoke network:")),
+      `smoke network: fail azdo-timeout\nsmoke azdo: skipped network-blocked\nsmoke bifrost: skipped azdo-failed\n${HINT_SH}\nDone.\n`,
+    );
     assertLoaded(sb);
-    assert.equal(requests(sb).length, 1);
+    const reqs = requests(sb);
+    assert.equal(reqs.length, 1);
+    assertProbeRequest(reqs[0]!, "https://dev.azure.com/");
+    assertNoSecretsOrStack(r);
+  });
+
+  withSandbox((sb) => {
+    const r = runInstall(sb, REQUIRED_ARGS, env, {
+      smoke: true,
+      scenario: {
+        azdoProbe: { status: 302 },
+        azdo: { mode: "hang" },
+        bifrost: { status: 200, body: MODELS_BODY },
+      },
+    });
+    assert.equal(r.status, 4);
+    assert.match(r.stdout, /\nsmoke network: pass\nsmoke azdo: fail timeout\nsmoke bifrost: skipped azdo-failed\nDone\.\n$/);
+    assertLoaded(sb);
+    assert.equal(requests(sb).length, 2);
   });
 
   withSandbox((sb) => {
@@ -159,13 +208,35 @@ test("AC-3 timeouts and invalid/insecure shared configs exit 4 within bounded ti
     });
     assert.equal(r.status, 4);
     assert.ok(Date.now() - t0 < 10_000);
-    assert.match(r.stdout, /\nsmoke azdo: pass\nsmoke bifrost: fail timeout\nDone\.\n$/);
+    assert.match(
+      r.stdout,
+      /\nsmoke network: fail bifrost-timeout\nsmoke azdo: pass\nsmoke bifrost: skipped network-blocked\n/,
+    );
     assertLoaded(sb);
-    assert.equal(requests(sb).length, 2);
+    const reqs = requests(sb);
+    assert.equal(reqs.length, 3);
+    assertProbeRequest(reqs[2]!, "https://bifrost.yourcompany.internal/");
+    assert.equal(JSON.stringify(reqs).includes(KEY), false);
+    assertNoSecretsOrStack(r);
+  });
+
+  withSandbox((sb) => {
+    const r = runInstall(sb, REQUIRED_ARGS, env, {
+      smoke: true,
+      scenario: {
+        azdo: { status: 200, content: sharedConfig },
+        bifrostProbe: { status: 404 },
+        bifrost: { mode: "hang" },
+      },
+    });
+    assert.equal(r.status, 4);
+    assert.match(r.stdout, /\nsmoke network: pass\nsmoke azdo: pass\nsmoke bifrost: fail timeout\nDone\.\n$/);
+    assertLoaded(sb);
+    assert.equal(requests(sb).length, 4);
   });
 
   const badSharedCases: Array<[string, RegExp]> = [
-    ["{ invalid jsonc", /\nsmoke azdo: fail invalid-jsonc\nsmoke bifrost: skipped azdo-failed\n/],
+    ["{ invalid jsonc", /\nsmoke network: pass\nsmoke azdo: fail invalid-jsonc\nsmoke bifrost: skipped azdo-failed\n/],
     ["{}", /\nsmoke azdo: pass\nsmoke bifrost: fail no-base-url\n/],
     [
       '{"provider":{"bifrost":{"options":{"baseURL":"http://bifrost.yourcompany.internal/v1"}}}}',
@@ -187,8 +258,9 @@ test("AC-3 timeouts and invalid/insecure shared configs exit 4 within bounded ti
       assert.match(r.stdout, pattern);
       assertLoaded(sb);
       const reqs = requests(sb);
-      assert.equal(reqs.length, 1);
-      assert.ok(reqs[0]!.url.startsWith("https://dev.azure.com/"));
+      assert.equal(reqs.length, 2);
+      assertProbeRequest(reqs[0]!, "https://dev.azure.com/");
+      assert.ok(reqs[1]!.url.startsWith("https://dev.azure.com/acme/"));
     });
   }
 });
@@ -199,10 +271,10 @@ test("AC-4 fresh install without key skips Bifrost with hint (exit 0); update wi
     assert.equal(r.status, 0, r.stderr);
     assert.match(
       r.stdout,
-      /\nsmoke azdo: pass\nsmoke bifrost: skipped no-key\nSmoke test: set KILO_BIFROST_KEY and re-run install\.sh to check your Bifrost virtual key\.\nDone\.\n$/,
+      /\nsmoke network: pass\nsmoke azdo: pass\nsmoke bifrost: skipped no-key\nSmoke test: set KILO_BIFROST_KEY and re-run install\.sh to check your Bifrost virtual key\.\nDone\.\n$/,
     );
     assertLoaded(sb);
-    assert.equal(requests(sb).length, 1);
+    assert.equal(requests(sb).length, 2);
   });
 
   withSandbox((sb) => {
@@ -212,11 +284,11 @@ test("AC-4 fresh install without key skips Bifrost with hint (exit 0); update wi
     );
     const r = runInstall(sb, REQUIRED_ARGS, { AZDO_PAT: PAT }, { smoke: true, scenario: okScenario() });
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /\nsmoke azdo: pass\nsmoke bifrost: pass\nDone\.\n$/);
+    assert.match(r.stdout, /\nsmoke network: pass\nsmoke azdo: pass\nsmoke bifrost: pass\nDone\.\n$/);
     assertLoaded(sb);
     const reqs = requests(sb);
-    assert.equal(reqs.length, 2);
-    assert.equal(reqs[1]!.headers["authorization"], "Bearer sk-bf-existing");
+    assert.equal(reqs.length, 4);
+    assert.equal(reqs[3]!.headers["authorization"], "Bearer sk-bf-existing");
   });
 });
 
@@ -225,14 +297,17 @@ test("AC-5 without PAT, stub az supplies Bearer token for AzDO while Bifrost rec
     stubAz(sb, "ok", AZ_TOKEN);
     const r = runInstall(sb, REQUIRED_ARGS, { KILO_BIFROST_KEY: KEY }, { smoke: true, scenario: okScenario() });
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /\nsmoke azdo: pass\nsmoke bifrost: pass\nDone\.\n$/);
+    assert.match(r.stdout, /\nsmoke network: pass\nsmoke azdo: pass\nsmoke bifrost: pass\nDone\.\n$/);
     assertLoaded(sb);
 
     const reqs = requests(sb);
-    assert.equal(reqs.length, 2);
-    assert.equal(reqs[0]!.headers["authorization"], `Bearer ${AZ_TOKEN}`);
-    assert.equal(reqs[1]!.headers["authorization"], `Bearer ${KEY}`);
-    assert.equal(JSON.stringify(reqs[1]!.headers).includes(AZ_TOKEN), false);
+    assert.equal(reqs.length, 4);
+    assertProbeRequest(reqs[0]!, "https://dev.azure.com/");
+    assertProbeRequest(reqs[2]!, "https://bifrost.yourcompany.internal/");
+    assert.equal(reqs[1]!.headers["authorization"], `Bearer ${AZ_TOKEN}`);
+    assert.equal(reqs[3]!.headers["authorization"], `Bearer ${KEY}`);
+    assert.equal(JSON.stringify(reqs[3]!.headers).includes(AZ_TOKEN), false);
+    assert.equal(JSON.stringify([reqs[0], reqs[2]]).includes(AZ_TOKEN), false);
     assertNoSecretsOrStack(r);
   });
 });
@@ -277,6 +352,26 @@ test("AC-6 secrets, Basic credentials, body canaries and fetch error messages ne
         bifrost: { status: 200, body: `<html>${BODY_CANARY}</html>` },
       },
     },
+    {
+      scenario: {
+        azdo: { status: 200, content: sharedConfig },
+        bifrostProbe: { status: 403, body: `${BODY_CANARY}${KEY}` },
+        bifrost: { status: 200, body: MODELS_BODY },
+      },
+    },
+    {
+      scenario: {
+        azdo: { mode: "throw", message: `${ERR_CANARY} ${PAT} ${BASIC_CRED}` },
+        bifrost: { status: 200, body: MODELS_BODY },
+      },
+    },
+    {
+      scenario: {
+        azdoProbe: { status: 407, body: BODY_CANARY },
+        azdo: { status: 200, content: sharedConfig },
+        bifrost: { status: 200, body: MODELS_BODY },
+      },
+    },
   ];
 
   for (const item of scenarios) {
@@ -291,6 +386,45 @@ test("AC-6 secrets, Basic credentials, body canaries and fetch error messages ne
       assertNoSecretsOrStack(r);
     });
   }
+});
+
+test("F-020 Bifrost behind the Azure IP firewall: key withheld, exit 4, installation kept (AC-2, AC-7)", () => {
+  const env = { AZDO_PAT: PAT, KILO_BIFROST_KEY: KEY };
+  let expectedSnap: Record<string, string> = {};
+  withSandbox((sbOk) => {
+    const ok = runInstall(sbOk, REQUIRED_ARGS, env, { smoke: true, scenario: okScenario() });
+    assert.equal(ok.status, 0, ok.stderr);
+    expectedSnap = snapshot(sbOk.configDir);
+  });
+
+  withSandbox((sb) => {
+    const r = runInstall(sb, REQUIRED_ARGS, env, {
+      smoke: true,
+      scenario: {
+        azdo: { status: 200, content: sharedConfig },
+        bifrostProbe: { status: 403 },
+        bifrost: { status: 200, body: MODELS_BODY },
+      },
+    });
+    assert.equal(r.status, 4);
+    assert.ok(
+      r.stdout.endsWith(
+        `smoke network: fail bifrost-blocked\nsmoke azdo: pass\nsmoke bifrost: skipped network-blocked\n${HINT_SH}\nDone.\n`,
+      ),
+      r.stdout,
+    );
+    assert.match(r.stderr, /install\.sh: error: smoke test failed; the installation was kept\./);
+    assertLoaded(sb);
+    const reqs = requests(sb);
+    assert.equal(reqs.length, 3);
+    assert.equal(
+      reqs.some((req) => req.url.endsWith("/models")),
+      false,
+    );
+    assert.equal(JSON.stringify(reqs).includes(KEY), false);
+    assert.deepEqual(snapshot(sb.configDir), expectedSnap);
+    assertNoSecretsOrStack(r);
+  });
 });
 
 test("AC-7 --no-smoke skips HTTP requests, az token calls and smoke output; --no-smoke=x is a usage error", () => {
@@ -312,6 +446,7 @@ test("AC-7 --no-smoke skips HTTP requests, az token calls and smoke output; --no
       false,
     );
     assert.doesNotMatch(r.stdout, /^smoke /m);
+    assert.doesNotMatch(r.stdout, /^smoke network/m);
     assert.doesNotMatch(r.stdout, /Smoke test:/);
   });
 

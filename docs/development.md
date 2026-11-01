@@ -97,6 +97,11 @@ replaces `globalThis.fetch` with a deterministic fake. It reads a JSON scenario 
 scenario it denies every call. `smoke.test.ts` covers the smoke module; `install-smoke.test.ts` runs
 `install.sh` end to end (exit codes, output lines, no leaks, installation unchanged on failure). The
 other installer tests pass `--no-smoke`.
+F-020 (ADR-0019, contract installer-cli.md 1.3.0 section 9.0) adds the network pre-flight to `smoke.ts`. The
+fake network scenario also answers the anonymous probes of `https://dev.azure.com/` and the Bifrost
+origin `/` (403/407, connection error, hang until the deadline). `smoke.test.ts` and
+`install-smoke.test.ts` cover the `smoke network:` line, the `skipped network-blocked` rows, the hint
+line, exit 4 and that no credential is sent to a blocked target.
 Lint rule 7 (`check-fr11.mjs`, ADR-0013) forbids any file directly in `backend/installer/` from
 mentioning test switches such as the fake-network preload, so product code can never enable it.
 

@@ -1,13 +1,18 @@
 # Contract: bootstrap installers (`install.sh`, `install.ps1`) and install helper
 
-- Version: 1.2.1 (cycle-0020, T-019: `install.sh` resolves its directory CDPATH-safe and exits 3
+- Version: 1.3.0 (cycle-0022, F-020: the smoke test starts each target with an unauthenticated
+  network pre-flight probe and prints a first line `smoke network: ...`, a new skip code
+  `network-blocked` and a fixed VPN / allow-list hint (sections 7 and 9.0); time bound
+  `4 x timeoutMs` (9.3). No new input, flag, record or exit code. Decision record: ADR-0019.)
+  1.2.1: cycle-0020, T-019: `install.sh` resolves its directory CDPATH-safe and exits 3
   with a fixed message when `install-helper.ts` is missing (section 3 step 4); the helper re-checks
   its targets for symlinks after creating directories and changes modes only through
-  `O_NOFOLLOW` descriptors (section 6). No new input, record or exit code.)
+  `O_NOFOLLOW` descriptors (section 6). No new input, record or exit code.
   1.2.0: cycle-0014, F-011: `install.ps1` front end (section 10), optional `frontend`
   stdin record, front-end-specific message prefix. 1.1.0: cycle-0013, F-019 (smoke test,
   `--no-smoke`, exit code 4, optional `smoke` stdin record). 1.0.0: cycle-0011, F-010.
-  Decision records: ADR-0012 (amended cycle-0020), ADR-0013, ADR-0014.
+  Decision records: ADR-0012 (amended cycle-0020), ADR-0013 (amended by ADR-0019), ADR-0014,
+  ADR-0019.
 - Files: `backend/installer/install.sh` (bash front end), `backend/installer/install.ps1`
   (PowerShell front end; since 1.2.0), `backend/installer/install-helper.ts`
   (Node CLI, all file I/O), `backend/installer/personal-config-edit.ts` (pure library),
@@ -75,8 +80,10 @@ There is deliberately **no flag for the virtual key** and no flag for a PAT.
    symlinks (section 6), fix dir modes, copy plugin, fix the mode of an unchanged `kilo.jsonc`,
    write backup, write personal config. Failure -> exit 3, temp files removed.
 7. Helper, **smoke phase** (1.1.0; only when the write phase succeeded and the `smoke` record is
-   `on`): checks `azdo` then `bifrost` (section 9). Writes nothing, never modifies or undoes the
-   installation. Any check `fail` -> exit 4; otherwise exit 0.
+   `on`): (1.3.0) network probe of the AzDO origin, then `azdo`, then (only when the Bifrost
+   request would be sent) network probe of the Bifrost origin, then `bifrost` (section 9).
+   Writes nothing, never modifies or undoes the installation. Any `fail` (network or check) ->
+   exit 4; otherwise exit 0.
 
 | Code | Meaning |
 |---|---|
@@ -84,7 +91,7 @@ There is deliberately **no flag for the virtual key** and no flag for a PAT.
 | 1 | A prerequisite is missing (Node / Node version / credentials). Nothing written. |
 | 2 | Usage or input error: unknown option, missing value, missing org/project/repo, a value rejected by the plugin's setting rules, `KILO_BIFROST_KEY` containing control characters, relative `XDG_CONFIG_HOME`. Nothing written. |
 | 3 | Existing config or file system problem: existing `kilo.jsonc` not valid JSONC / root not an object / larger than 1 MiB / `plugin` present but not an array / `provider`, `provider.bifrost` or `provider.bifrost.options` present but not a plain object / a target is a symlink or wrong type / I/O error / installer sources missing / internal error. Nothing written when detected in the read-only phase. |
-| 4 | (1.1.0) Installed exactly as for exit 0, but at least one smoke check failed. The files are byte-identical to those of a run with the same inputs that exits 0. Never returned with `--no-smoke`. |
+| 4 | (1.1.0) Installed exactly as for exit 0, but at least one smoke check failed (1.3.0: including `smoke network: fail ...`). The files are byte-identical to those of a run with the same inputs that exits 0. Never returned with `--no-smoke`. |
 
 ## 4. Helper stdin protocol (shared with F-011)
 
@@ -105,6 +112,7 @@ There is deliberately **no flag for the virtual key** and no flag for a PAT.
   | usage hint after exit 2 | `Run install.sh --help for usage.` | `Run install.ps1 -Help for usage.` |
   | setting label in `invalid value for <label>: <reason>` | `--org` `--project` `--repo` `--path` `--branch` `--mode` | `-Org` `-Project` `-Repo` `-Path` `-Branch` `-Mode` |
   | no-key smoke hint | `... and re-run install.sh to check ...` | `... and re-run install.ps1 to check ...` |
+  | (1.3.0) network smoke hint | `..., then re-run install.sh.` | `..., then re-run install.ps1.` |
 
   The update header comment (section 5 step 5) keeps the text `Rewritten by install.sh` for both
   front ends, so personal configs are byte-identical across front ends.
@@ -203,10 +211,14 @@ Personal config already up to date: <path>
 Note: dropped plugin options from the previous entry: <names>
 Set your Bifrost virtual key: re-run with KILO_BIFROST_KEY set, or edit provider.bifrost.options.apiKey in <path>.
                                                  (whenever apiKey equals the placeholder after the run)
+smoke network: pass | smoke network: fail <code>[,<code>]
+                                                 (1.3.0, smoke phase only, always the first smoke line, section 9.0)
 smoke azdo: <result>                             (1.1.0, smoke phase only, section 9)
 smoke bifrost: <result>
 Smoke test: set KILO_BIFROST_KEY and re-run install.sh to check your Bifrost virtual key.
                                                  (only after "smoke bifrost: skipped no-key")
+Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run install.sh.
+                                                 (1.3.0, only when the network line is "fail" with a code other than "internal")
 Done.                                            (exit 0 and exit 4)
 ```
 stderr:
@@ -249,8 +261,50 @@ supplied key, else the existing value).
 
 Result line format: `smoke <check>: pass` | `smoke <check>: fail <code>` |
 `smoke <check>: skipped <code>`. Checks run and print in the order `azdo`, `bifrost`.
+(1.3.0) The line `smoke network: ...` (9.0) is printed before them, always first.
+
+### 9.0 `network` pre-flight (1.3.0, F-020, ADR-0019)
+
+Before the credential-bearing request of a target is sent, the helper sends one
+**unauthenticated probe** to that target's origin:
+
+| Target | Probe URL | Sent when |
+|---|---|---|
+| `azdo` | `https://dev.azure.com/` (constant) | always, first; before `fetchRemoteConfig` (so before any PAT header and before `az` runs) |
+| `bifrost` | origin of the models URL + `/` (e.g. `https://bifrost.yourcompany.internal/`; a non-default port is kept) | only when 9.2 rows 1-7 did not match (the `GET <models URL>` would otherwise be sent next) |
+
+Probe request (exactly): `GET <probe URL>`, `headers` = `{}` (no `Authorization`, `api-key`,
+`x-api-key`, `Cookie`, `Accept`), no body, `redirect: "manual"` (never followed), one
+AbortController and one `timeoutMs` timer per probe. The response body is never read (it is
+cancelled). Same fetch function as 9.2 (`globalThis.fetch` at call time in production).
+
+Classification:
+
+| Probe outcome | Verdict | Code |
+|---|---|---|
+| integer status 100-599 except 403 and 407 (e.g. 200, 204, 301, 302, 401, 404, 405, 500, 503) | reachable | - |
+| status 403 or 407 | blocked | `<target>-blocked` |
+| resolved value without an integer status 100-599 | unreachable | `<target>-unreachable` |
+| rejection / throw before the deadline (DNS, refused, reset, TLS) | unreachable | `<target>-unreachable` |
+| deadline reached | timeout | `<target>-timeout` |
+| unexpected exception, injected `fetch` not a function | internal | `internal` |
+
+`<target>` is `azdo` or `bifrost`. Any verdict other than reachable:
+- `azdo`: `smoke azdo: skipped network-blocked`, `smoke bifrost: skipped azdo-failed`; `az` is not
+  run, no PAT / token is sent, no Bifrost request of any kind is sent.
+- `bifrost`: `smoke bifrost: skipped network-blocked`; `GET <models URL>` is not sent and the key
+  is sent nowhere.
+
+Network line: `smoke network: pass` when every probe that was sent was reachable; otherwise
+`smoke network: fail <codes>` with the codes de-duplicated, comma-joined without spaces, in the
+order azdo, bifrost, `internal` (e.g. `smoke network: fail bifrost-blocked`). Any `fail` here sets
+exit 4. When the codes include at least one code other than `internal`, the last smoke line is
+the fixed hint (section 7):
+`Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run <install.sh|install.ps1>.`
 
 ### 9.1 `azdo`
+
+Only evaluated when the azdo probe is reachable; otherwise `smoke azdo: skipped network-blocked` (9.0).
 
 | Condition | Line |
 |---|---|
@@ -265,7 +319,8 @@ The request is exactly the plugin's (FR-2/FR-3, ADR-0007): `https://dev.azure.co
 
 ### 9.2 `bifrost`
 
-Evaluated in this order; the first matching row decides. Only the last two rows send a request.
+Evaluated in this order; the first matching row decides. Only rows 7a (probe, no credential),
+8 and 9 send a request.
 
 | # | Condition | Line |
 |---|---|---|
@@ -276,6 +331,7 @@ Evaluated in this order; the first matching row decides. Only the last two rows 
 | 5 | effective key is not a string, is empty, or equals `sk-bf-<your-virtual-key>` | `smoke bifrost: skipped no-key` (+ the `Smoke test: set KILO_BIFROST_KEY ...` line) |
 | 6 | effective key contains `{env:` or `{file:` | `smoke bifrost: skipped key-reference` |
 | 7 | effective key is longer than 4096 chars or has a char outside 0x21-0x7E | `smoke bifrost: fail invalid-key` |
+| 7a | (1.3.0) Bifrost origin probe (9.0) not reachable | `smoke bifrost: skipped network-blocked` (network line carries the code) |
 | 8 | request made (below) and fails | `smoke bifrost: fail <code>` |
 | 9 | request made, 2xx, body is UTF-8 JSON with a plain-object root, <= 1 MiB | `smoke bifrost: pass` |
 
@@ -293,9 +349,19 @@ az token is never sent to Bifrost.
 
 ### 9.3 Outcome
 
-- Any `fail` -> stderr `install.sh: error: smoke test failed; the installation was kept.`, exit 4.
-- Otherwise exit 0. `skipped` never fails the run.
-- Time bound: at most about `2 x timeoutMs` (plus process overhead).
+- Any `fail` (network, azdo or bifrost) -> stderr `install.sh: error: smoke test failed; the installation was kept.`, exit 4.
+- Otherwise exit 0. `skipped` never fails the run by itself (`skipped network-blocked` always
+  comes with `smoke network: fail ...`, which does).
+- Time bound: at most about `4 x timeoutMs` (1.3.0: probe, items, probe, models; plus process
+  overhead). A blocked AzDO probe ends the smoke phase after at most one `timeoutMs`.
+- Output example (Bifrost behind an Azure IP firewall, engineer off the VPN):
+  ```
+  smoke network: fail bifrost-blocked
+  smoke azdo: pass
+  smoke bifrost: skipped network-blocked
+  Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run install.sh.
+  Done.
+  ```
 - The smoke phase writes no file (no cache, no log) and never alters the installed files.
 
 ## 10. `install.ps1` (1.2.0, F-011; ADR-0014)

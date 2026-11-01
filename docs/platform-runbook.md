@@ -84,6 +84,15 @@ Because `azure-pipelines.yml`, `validator/` and `plugin/` live in the same repos
 - Grant **Bypass policies when completing pull requests** and **Edit policies** only to a small, audited platform administrator group.
 - Keep the platform team as a blocking required reviewer on `main`, and carefully inspect any pull request that touches `azure-pipelines.yml`, `set-branch-policies.sh`, `validator/**` or `plugin/**`.
 
+## Allow-listing engineers on the Azure firewall
+
+The installer smoke test first sends one anonymous `GET` (no credentials, no redirects) to `https://dev.azure.com/` and to the Bifrost `baseURL` origin `/`. Engineers off the VPN or not on the allow-list see `smoke network: fail azdo-blocked`, `bifrost-blocked`, `-unreachable` or `-timeout` instead of a confusing credential error.
+
+- Add engineer public IPs (or require the VPN) in the Azure firewall for Bifrost.
+- Keep the Bifrost origin `/` answering something other than HTTP 403 for allowed clients. A 403 on `/` is read as blocked and gives a false `bifrost-blocked`. Engineers can work around it with `--no-smoke`.
+- Expect an anonymous `GET /` with no `Authorization` header from each install in the Bifrost WAF or access logs; it is the pre-flight, not an attack.
+- Caveat: an Azure DevOps organisation IP conditional-access policy is enforced after login, so a blocked engineer sees `smoke azdo: fail http-401` or `http-403`, not `azdo-blocked`.
+
 ## Changing the shared config
 
 To roll out a model, provider or setting change to all engineers:

@@ -24,6 +24,9 @@ const unauthorizedScenario = (): FakeScenario => ({
   bifrost: { status: 401, body: `{"error":"${BODY_CANARY}"}` },
 });
 
+const HINT_PS =
+  "Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run install.ps1.";
+
 function assertClean(sb: PsSandbox, r: PsRunResult): void {
   const combined = r.stdout + r.stderr;
   for (const secret of [KEY, "AbCdEf1234567890", PAT, BASIC_CRED, AZ_TOKEN, BODY_CANARY]) {
@@ -36,21 +39,25 @@ function assertClean(sb: PsSandbox, r: PsRunResult): void {
 }
 
 psTest(
-  "AC-6 smoke passes: one AzDO and one Bifrost request with the right credentials",
+  "AC-6 smoke passes: a probe and a credentialed request per target with the right credentials",
   (host) => {
     withPsSandbox((sb) => {
       const args = [...ARGS, "-Path", "teams/core/kilo.jsonc", "-Branch", "release/1"];
       const r = runInstallPs(sb, host, args, { AZDO_PAT: PAT, KILO_BIFROST_KEY: KEY }, { smoke: true, scenario: okScenario() });
       assert.equal(r.status, 0, r.stderr);
-      assert.match(r.stdout, /\nsmoke azdo: pass\nsmoke bifrost: pass\nDone\.\n$/);
+      assert.match(r.stdout, /\nsmoke network: pass\nsmoke azdo: pass\nsmoke bifrost: pass\nDone\.\n$/);
       assert.equal(r.stderr, "");
       assert.ok(readNetLog(sb).some((e) => e.event === "loaded"));
       const reqs = requests(sb);
-      assert.equal(reqs.length, 2);
-      assert.equal(reqs[0]!.url, expectedItemsUrl("acme", "proj", "cfg", "/teams/core/kilo.jsonc", "release/1"));
-      assert.equal(reqs[0]!.headers["authorization"], `Basic ${BASIC_CRED}`);
-      assert.equal(reqs[1]!.url, "https://bifrost.yourcompany.internal/v1/models");
-      assert.equal(reqs[1]!.headers["authorization"], `Bearer ${KEY}`);
+      assert.equal(reqs.length, 4);
+      assert.equal(reqs[0]!.url, "https://dev.azure.com/");
+      assert.equal(reqs[0]!.headers["authorization"], undefined);
+      assert.equal(reqs[1]!.url, expectedItemsUrl("acme", "proj", "cfg", "/teams/core/kilo.jsonc", "release/1"));
+      assert.equal(reqs[1]!.headers["authorization"], `Basic ${BASIC_CRED}`);
+      assert.equal(reqs[2]!.url, "https://bifrost.yourcompany.internal/");
+      assert.equal(reqs[2]!.headers["authorization"], undefined);
+      assert.equal(reqs[3]!.url, "https://bifrost.yourcompany.internal/v1/models");
+      assert.equal(reqs[3]!.headers["authorization"], `Bearer ${KEY}`);
       assertClean(sb, r);
     });
   },
@@ -69,7 +76,7 @@ psTest(
     withPsSandbox((sb) => {
       const r = runInstallPs(sb, host, ARGS, env, { smoke: true, scenario: unauthorizedScenario() });
       assert.equal(r.status, 4);
-      assert.match(r.stdout, /\nsmoke azdo: pass\nsmoke bifrost: fail 401\nDone\.\n$/);
+      assert.match(r.stdout, /\nsmoke network: pass\nsmoke azdo: pass\nsmoke bifrost: fail 401\nDone\.\n$/);
       assert.equal(r.stderr, "install.ps1: error: smoke test failed; the installation was kept.\n");
       assert.deepEqual(snapshot(sb.configDir), passing);
       assertClean(sb, r);
@@ -83,8 +90,8 @@ psTest("AC-6 an AzDO failure skips Bifrost and exits 4", (host) => {
     const scenario: FakeScenario = { azdo: { status: 404, body: BODY_CANARY } };
     const r = runInstallPs(sb, host, ARGS, { AZDO_PAT: PAT, KILO_BIFROST_KEY: KEY }, { smoke: true, scenario });
     assert.equal(r.status, 4);
-    assert.match(r.stdout, /\nsmoke azdo: fail http-404\nsmoke bifrost: skipped azdo-failed\nDone\.\n$/);
-    assert.equal(requests(sb).length, 1);
+    assert.match(r.stdout, /\nsmoke network: pass\nsmoke azdo: fail http-404\nsmoke bifrost: skipped azdo-failed\nDone\.\n$/);
+    assert.equal(requests(sb).length, 2);
     assertClean(sb, r);
   });
 });
@@ -113,9 +120,9 @@ psTest("AC-6 without a key Bifrost is skipped and the hint names install.ps1", (
   withPsSandbox((sb) => {
     const r = runInstallPs(sb, host, ARGS, { AZDO_PAT: PAT }, { smoke: true, scenario: okScenario() });
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /\nsmoke azdo: pass\nsmoke bifrost: skipped no-key\n/);
+    assert.match(r.stdout, /\nsmoke network: pass\nsmoke azdo: pass\nsmoke bifrost: skipped no-key\n/);
     assert.match(r.stdout, /\nSmoke test: set KILO_BIFROST_KEY and re-run install\.ps1 to check your Bifrost virtual key\.\nDone\.\n$/);
-    assert.equal(requests(sb).length, 1);
+    assert.equal(requests(sb).length, 2);
     assertClean(sb, r);
   });
 });
@@ -126,8 +133,37 @@ psTest("AC-7 the az token path never leaks the token", (host) => {
     const r = runInstallPs(sb, host, ARGS, { KILO_BIFROST_KEY: KEY }, { smoke: true, scenario: okScenario() });
     assert.equal(r.status, 0, r.stderr);
     const reqs = requests(sb);
-    assert.equal(reqs[0]!.headers["authorization"], `Bearer ${AZ_TOKEN}`);
-    assert.equal(JSON.stringify(reqs[1]!.headers).includes(AZ_TOKEN), false);
+    assert.equal(reqs.length, 4);
+    assert.equal(reqs[1]!.headers["authorization"], `Bearer ${AZ_TOKEN}`);
+    assert.equal(reqs[3]!.headers["authorization"], `Bearer ${KEY}`);
+    assert.equal(JSON.stringify([reqs[0], reqs[2], reqs[3]]).includes(AZ_TOKEN), false);
+    assertClean(sb, r);
+  });
+});
+
+psTest("F-020 Bifrost behind the Azure IP firewall: key withheld, exit 4, hint names install.ps1", (host) => {
+  withPsSandbox((sb) => {
+    const scenario: FakeScenario = {
+      azdo: { status: 200, content: sharedConfig },
+      bifrostProbe: { status: 403 },
+      bifrost: { status: 200, body: '{"object":"list","data":[]}' },
+    };
+    const r = runInstallPs(sb, host, ARGS, { AZDO_PAT: PAT, KILO_BIFROST_KEY: KEY }, { smoke: true, scenario });
+    assert.equal(r.status, 4);
+    assert.ok(
+      r.stdout.endsWith(
+        `smoke network: fail bifrost-blocked\nsmoke azdo: pass\nsmoke bifrost: skipped network-blocked\n${HINT_PS}\nDone.\n`,
+      ),
+      r.stdout,
+    );
+    assert.equal(r.stderr, "install.ps1: error: smoke test failed; the installation was kept.\n");
+    const reqs = requests(sb);
+    assert.equal(reqs.length, 3);
+    assert.equal(
+      reqs.some((req) => req.url.endsWith("/models")),
+      false,
+    );
+    assert.equal(JSON.stringify(reqs).includes(KEY), false);
     assertClean(sb, r);
   });
 });

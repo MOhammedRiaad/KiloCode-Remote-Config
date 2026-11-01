@@ -258,7 +258,7 @@ test("T6 AC-10: the smoke test checks the key against fake Bifrost", OPTS, () =>
   withE2eSandbox((sbA) => {
     const a = install(sbA, [], ENV, smokeOpts(bifrostAuth(KEY)));
     assert.equal(a.status, 0);
-    assert.match(a.stdout, /\nsmoke azdo: pass\nsmoke bifrost: pass\nDone\.\n$/);
+    assert.match(a.stdout, /\nsmoke network: pass\nsmoke azdo: pass\nsmoke bifrost: pass\nDone\.\n$/);
 
     const before = snapshot(sbA.configDir);
     const b = install(sbA, [], ENV, smokeOpts(bifrostAuth(OTHER_KEY)));

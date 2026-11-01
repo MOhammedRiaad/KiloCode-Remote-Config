@@ -1,6 +1,7 @@
 # Contract: end-to-end startup harness (TEST ONLY)
 
-- Version: 1.0.1 (cycle-0019, T-013: `expectedCache` returns the bound cache envelope of
+- Version: 1.1.0 (cycle-0022, F-020: fake-network gains optional `azdoProbe` / `bifrostProbe`
+  answers for origin-only requests, section 3a; ADR-0019). 1.0.1 (cycle-0019, T-013: `expectedCache` returns the bound cache envelope of
   plugin-interface 0.8.0 section 2f-C, `DEFAULT_BINDING` added; ADR-0018). 1.0.0 was cycle-0016,
   F-014. Decision record: ADR-0016.
 - Files: `backend/test/e2e/fixtures/kilo-start-simulator.ts` (simulator CLI),
@@ -82,6 +83,25 @@ export type FakeAnswer =
 | No match / header missing -> | `new Response('{"error":"unauthorized"}', { status: 401, headers: { "content-type": "application/json" } })`. |
 | Logging | The request is logged before the decision, as for every request. |
 | Compatibility | Existing variants behave byte-for-byte as before; `FakeAnswer` / `FakeScenario` stay exported from `fake-network.ts` and re-exported from `test/installer/helpers.ts` (add `FakeStaticAnswer` to the re-export). |
+
+## 3a. Origin-probe answers (1.1.0, cycle-0022, F-020; ADR-0019)
+
+```ts
+export interface FakeScenario {
+  azdo?: FakeAnswer;
+  bifrost?: FakeAnswer;
+  azdoProbe?: FakeAnswer;    // new, optional
+  bifrostProbe?: FakeAnswer; // new, optional
+}
+```
+
+| Aspect | Contract |
+|---|---|
+| Origin request | `new URL(url)` succeeds and `pathname === "/"`, `search === ""`, `hash === ""` (e.g. `https://dev.azure.com/`, `https://bifrost.yourcompany.internal/`). |
+| Routing | Origin request to a `https://dev.azure.com/` URL -> `azdoProbe` **if present**; origin request to any other URL -> `bifrostProbe` **if present**. Otherwise (key absent, or not an origin request) -> the existing `azdo` / `bifrost` routing, unchanged. So a hanging / throwing / absent (deny-all) target also hangs / throws / denies its probe, and an `auth` target answers the credential-less probe with 401. |
+| Rendering | Same code path as section 3 for every variant (`hang`, `throw`, `auth`, static). |
+| Logging | Unchanged: every request, including probes, is logged before the decision. |
+| Product code | Unchanged rule: never mentions the fixture, `KILO_TEST_`, `NODE_OPTIONS` (lint rule 7). |
 
 ## 4. Harness API (`backend/test/e2e/helpers.ts`)
 

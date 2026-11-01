@@ -14,6 +14,7 @@ Check the version of your Kilo CLI or VS Code extension before installing. Versi
 
 - **Node.js 22.18 or newer** on your `PATH`.
 - **Azure DevOps authentication**: sign in with `az login` (recommended, using the Azure CLI) or set `AZDO_PAT` (or `AZURE_DEVOPS_EXT_PAT` / `KILO_AZDO_PAT`) to a Personal Access Token with **Code (Read)** scope.
+- **Network access**: Azure DevOps and Bifrost are behind an Azure IP firewall. Connect to the corporate VPN, or ask the platform team to add your public IP to the allow-list, before installing. Otherwise the smoke test prints `smoke network: fail ...` and the installer exits with code 4.
 - **A local checkout of this repository**: run the installer directly from the checkout so it can locate the plugin and template files relative to the script.
 - **Your Bifrost virtual key** (`sk-bf-...`), issued to you by the platform team. Keep your virtual key only in your personal `~/.config/kilo/kilo.jsonc` or in the `KILO_BIFROST_KEY` environment variable when running the installer—never place it in the shared config repository or inside a project directory.
 
@@ -66,6 +67,7 @@ Never copy your personal `kilo.jsonc` into a project directory and never commit 
 At the end of a normal run, the installer executes a smoke test and prints:
 
 ```text
+smoke network: pass
 smoke azdo: pass
 smoke bifrost: pass
 ```

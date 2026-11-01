@@ -15,6 +15,8 @@ export type FakeAnswer =
 export interface FakeScenario {
   azdo?: FakeAnswer;
   bifrost?: FakeAnswer;
+  azdoProbe?: FakeAnswer;
+  bifrostProbe?: FakeAnswer;
 }
 
 interface ScenarioFile extends FakeScenario {
@@ -61,6 +63,12 @@ function renderStatic(answer: FakeStaticAnswer): Response {
   });
 }
 
+function isOriginRequest(url: string): boolean {
+  if (!URL.canParse(url)) return false;
+  const parsed = new URL(url);
+  return parsed.pathname === "/" && parsed.search === "" && parsed.hash === "";
+}
+
 const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   const method = init?.method ?? (input instanceof Request ? input.method : "GET");
@@ -73,7 +81,9 @@ const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Pro
 
   appendLog({ event: "request", url, method, headers, redirect });
 
-  const answer = url.startsWith("https://dev.azure.com/") ? scenario?.azdo : scenario?.bifrost;
+  const isAzdo = url.startsWith("https://dev.azure.com/");
+  const probeAnswer = isOriginRequest(url) ? (isAzdo ? scenario?.azdoProbe : scenario?.bifrostProbe) : undefined;
+  const answer = probeAnswer ?? (isAzdo ? scenario?.azdo : scenario?.bifrost);
   if (answer === undefined) {
     throw new Error("fake-network: request denied");
   }

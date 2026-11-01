@@ -56,9 +56,34 @@ Both `install.sh` and `install.ps1` use the same exit codes (see [Installer exit
 - **`3`**: existing `kilo.jsonc` is invalid JSONC, has an unexpected root shape, or a target path is a symlink, or (`install.sh`) the helper file is missing. Two messages to know:
   - `install.sh: error: installer sources are missing (expected install-helper.ts next to install.sh).`: `install-helper.ts` is not next to the script, for example after downloading only `install.sh`. Run it from a full repository checkout (`bash backend/installer/install.sh ...`). `install.ps1` prints the same wording with its own name.
   - `<path> is not a regular file or directory (symlinks are not followed); update it manually.`: that path (config folder, `azdo` folder, plugin file or `kilo.jsonc`) is a symlink. Replace it with a real file or folder, or move it away, and re-run. Nothing is written through the link.
-- **`4`**: **exit code 4** means the plugin and personal `kilo.jsonc` were installed and kept, but the post-install smoke test (`smoke azdo:` or `smoke bifrost:`) failed.
+- **`4`**: **exit code 4** means the plugin and personal `kilo.jsonc` were installed and kept, but the post-install smoke test (`smoke network:`, `smoke azdo:` or `smoke bifrost:`) failed. For `smoke network: fail ...` see [Network blocked](#network-blocked-azure-firewall-or-vpn).
   - On offline machines or restricted environments without network access to Azure DevOps or Bifrost, pass `--no-smoke` to `install.sh` on macOS/Linux or `-NoSmoke` to `install.ps1` on Windows.
   - For each smoke failure code (`auth-unavailable`, `timeout`, `http-<status>`, `no-base-url`, `insecure-base-url`, etc.) and how to fix it, see the [Smoke test troubleshooting table in the user guide](user-guide.md#smoke-test).
+
+## Network blocked: Azure firewall or VPN
+
+Kilo and Bifrost sit behind an Azure IP firewall. The installer smoke test starts with `smoke network:` so a blocked network is not confused with a bad credential. The PAT, `az` token and virtual key are never sent to a target whose network check failed (its line reads `skipped network-blocked`).
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `azdo-blocked` / `bifrost-blocked` | HTTP 403 or 407 to an anonymous request | Connect to the corporate VPN, or ask the platform team to add your public IP to the Azure firewall allow-list |
+| `azdo-unreachable` / `bifrost-unreachable` | connection error, DNS failure or reset (private DNS is often only visible on the VPN) | Connect to the VPN and re-run |
+| `azdo-timeout` / `bifrost-timeout` | packets dropped until the deadline (`KILO_AZDO_TIMEOUT_MS`, default 5000) | Usually a firewall drop; connect to the VPN |
+| `internal` | unexpected error | Re-run; report it if it repeats |
+
+After the fix, re-run `install.sh` or `install.ps1`. The worst-case smoke test duration is four times `KILO_AZDO_TIMEOUT_MS`.
+
+Self-check with curl (use the host of your Bifrost `baseURL`):
+
+```
+curl -sS -o /dev/null -w '%{http_code}\n' https://dev.azure.com/
+curl -sS -o /dev/null -w '%{http_code}\n' https://<bifrost-host>/
+```
+
+- HTTP 403 or 407, a timeout, `Could not resolve host` or `Connection reset`: a firewall, VPN or DNS problem. Fix the network first.
+- Any other status (200, 301, 302, 401, 404): the network path is open. If `smoke bifrost: fail 401` still appears, the problem is the virtual key, see [Bifrost 401](#bifrost-401-or-virtual-key-rejected).
+- If you are connected and allowed but still see `bifrost-blocked`, the Bifrost origin `/` may answer 403 to everyone. Tell the platform team and use `--no-smoke` meanwhile.
+- An Azure DevOps organisation IP conditional-access policy is enforced after login, so it shows up as `smoke azdo: fail http-401` or `http-403`, not as `azdo-blocked`.
 
 ## Windows installer issues
 
@@ -80,5 +105,5 @@ If the installer outputs `smoke bifrost: fail 401` or model requests in Kilo fai
 When reporting an issue to the platform team, include:
 
 1. Your OS, Node.js version (`node --version`), and Kilo CLI or VS Code extension version.
-2. The exact `azdo-remote-config` log lines from Kilo or the `smoke azdo:` / `smoke bifrost:` lines and exit code from the installer.
+2. The exact `azdo-remote-config` log lines from Kilo or the `smoke network:` / `smoke azdo:` / `smoke bifrost:` lines and exit code from the installer.
 3. **Never** paste your `sk-bf-...` virtual key, `AZDO_PAT`, Entra access token, or the raw contents of `~/.config/kilo/kilo.jsonc` into an issue, chat message or ticket.

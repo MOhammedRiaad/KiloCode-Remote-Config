@@ -492,21 +492,29 @@ Exit code 3 troubleshooting:
   the check.
 
 ### Smoke test
-After a successful install, the installer runs two checks and prints one line each:
+After a successful install, the installer first runs a network pre-flight and then two credential checks. It prints one line each, the network line first:
 
 ```
+smoke network: pass
 smoke azdo: pass
 smoke bifrost: pass
 ```
 
+0. `network`: sends one anonymous `GET` (no credentials, redirects not followed, body not read) to `https://dev.azure.com/` and to the origin `/` of the Bifrost `baseURL` (https only; the origin, not the `/models` path). It tells a firewall or VPN problem apart from a credential problem. The line is `smoke network: pass` or `smoke network: fail <code>[,<code>]`.
 1. `azdo`: fetches the shared config from Azure DevOps the same way the plugin does (PAT, else `az` token) and parses it.
 2. `bifrost`: calls `GET <baseURL>/models` with your virtual key. The `baseURL` comes from the shared config and must be `https`; redirects are not followed.
 
 Each line is `pass`, `fail <code>` or `skipped <code>`. `skipped` never causes exit 4. Bifrost is skipped
 when `azdo` failed (`azdo-failed`), when your key is still the placeholder (`no-key`; the installer
 prints a hint to set `KILO_BIFROST_KEY` and re-run), or when the key is a `{env:...}` / `{file:...}`
-reference (`key-reference`). Each check waits at most `KILO_AZDO_TIMEOUT_MS` (default 5000 ms), so the
-test takes up to about twice that. The smoke test writes no file, and your key, PAT and tokens are never printed.
+reference (`key-reference`). When a network target fails, its credential check prints `skipped network-blocked` and your PAT, `az` token or virtual key is never sent to it. The installer then prints this hint and exits with code 4 (the installation is kept):
+
+```
+Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run <install.sh|install.ps1>.
+```
+
+Each request waits at most `KILO_AZDO_TIMEOUT_MS` (default 5000 ms), so the
+test takes up to about four times that (two network probes plus two credential checks). The smoke test writes no file, and your key, PAT and tokens are never printed.
 
 Use `--no-smoke` on machines that cannot reach the network (it makes no request). Exit codes 1, 2 and 3 never run the smoke test.
 
@@ -516,6 +524,11 @@ Troubleshooting by code (a `fail` or `skipped` code on the line):
 |---|---|---|
 | `invalid-settings` | azdo | org, project, repo, path or branch was rejected; check the flags |
 | `auth-unavailable` | azdo | no PAT and no usable `az login`; set `AZDO_PAT` or run `az login` |
+| `azdo-blocked`, `bifrost-blocked` | network | the anonymous request got HTTP 403 or 407: your public IP is not on the Azure firewall allow-list; connect to the VPN or ask the platform team |
+| `azdo-unreachable`, `bifrost-unreachable` | network | connection error, DNS failure or reset (for example private DNS only resolves on the VPN); connect to the VPN |
+| `azdo-timeout`, `bifrost-timeout` | network | packets dropped and the deadline was reached; usually a firewall drop, connect to the VPN |
+| `internal` | network | unexpected error in the pre-flight |
+| `network-blocked` | azdo, bifrost (`skipped`) | the network check for that target failed, so the credential check was not run |
 | `timeout` | both | no answer in time; check VPN/network or raise `KILO_AZDO_TIMEOUT_MS` |
 | `http-<status>` | azdo | Azure DevOps answered with that status (401/403 credentials or scope, 404 wrong org/project/repo/path/branch) |
 | `<status>` (e.g. `401`) | bifrost | Bifrost answered with that status; 401 usually means a wrong or revoked virtual key; 3xx means a redirect, which is not followed |
@@ -529,6 +542,11 @@ Troubleshooting by code (a `fail` or `skipped` code on the line):
 | `insecure-base-url` | bifrost | `baseURL` is not `https`; the key is never sent over plain http |
 | `invalid-key` | bifrost | key is too long or has characters outside printable ASCII |
 | `internal` | both | unexpected error |
+
+Known limits of the network check:
+
+- An Azure DevOps organisation IP conditional-access policy is enforced after login, so it still appears as an `http-401` or `http-403` failure on the `azdo` line, not as `azdo-blocked`.
+- If the Bifrost origin `/` answers 403 even to allowed clients, you get a false `bifrost-blocked`. The platform team must make `/` answer something other than 403; until then use `--no-smoke`.
 
 ## Installing on Windows (engineers)
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.15.0] - 2026-11-01
+
+### Added
+- F-020: installer smoke test network pre-flight. Before any credential is sent, the smoke test makes anonymous origin probes of `dev.azure.com` and the Bifrost baseURL.
+- F-020: new `smoke network:` first line in the install output, with codes `azdo-blocked`, `azdo-unreachable`, `azdo-timeout`, `bifrost-blocked`, `bifrost-unreachable`, `bifrost-timeout` and `internal`.
+- F-020: new skip code `network-blocked`, plus a fixed VPN / IP allow-list hint.
+- F-020: a blocked or unreachable network exits with code 4. The worst case is 4 x `timeoutMs`.
+- F-020: ADR-0019, and updates to the troubleshooting guide and platform runbook.
+
+### Changed
+- F-020: installer contract bumped to 1.3.0; e2e-harness bumped to 1.1.0.
+- F-020: UPGRADE NOTE: install output gains a first smoke line (`smoke network:`). Anything parsing install output must tolerate it.
+
 ## [0.14.2] - 2026-11-01
 
 ### Security
