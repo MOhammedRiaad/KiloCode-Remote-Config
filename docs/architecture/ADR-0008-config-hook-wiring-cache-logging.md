@@ -226,7 +226,8 @@ No `catch` binds or inspects an error except the cache `code` read. No message c
   `node:fs` import. Nothing else. No `node:crypto` (the temp name uses pid, time and a counter;
   `wx` makes collisions fail safely).
 - No slash-star / star-slash anywhere (do not write glob-like strings such as a slash followed by
-  a star). `//` comments, ASCII, LF, erasable TypeScript only.
+  a star). `//` comments, ASCII, LF, erasable TypeScript only. (Amended by ADR-0021 section 4,
+  T-037: whole-line `/** ... */` JSDoc blocks without inner slash-star / star-slash are allowed.)
 - No named exports added. The header comment of the file is updated (the hook is no longer a
   no-op).
 

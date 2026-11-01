@@ -182,22 +182,34 @@ export surface is unchanged.
 
 ## Internal structure of C2 (single file, sections in this order)
 
-0. `node:` imports only (since F-002: `node:fs`, `node:os`, `node:path`; since F-005: `node:child_process`; F-006 adds more `node:fs` functions)
-1. Types (structural Kilo types, contract section 1)
-2. Constants (`PLUGIN_ID`, `SUPPORTED_KILO_RANGE`, defaults)
-3. Pure helpers: JSONC parser, placeholder resolver (sync; env / homedir / readFile
+Since T-037 (ADR-0021) the file opens with a table of contents and has exactly these 15 numbered
+section banners (`// ==== N. Title ====`); every hot-path function carries a JSDoc block with an
+`Invariants:` line and `@see` pointers. Checked by `backend/test/plugin/source-layout.test.ts`.
+
+1. Imports, public types and plugin identity: `node:` imports only (`node:child_process`,
+   `node:fs`, `node:os`, `node:path`), structural Kilo types (contract section 1), `PLUGIN_ID`,
+   `SUPPORTED_KILO_RANGE`
+2. Shared guards and helpers (`noop`, `attempt`, `readOwn`, `isRecordLike`, `isPlainObject`)
+3. JSONC parser (`parseJsonc`, ADR-0003)
+4. Placeholder resolver (`resolvePlaceholders`, ADR-0004: sync; env / homedir / readFile
    injectable, defaults process.env / os.homedir / a guarded reader: `fs.statSync` then
-   `fs.readFileSync`, regular files of at most 1 MiB only; UNC-style `{file:}` paths are
-   rejected before any read), merge (`mergeConfig`, ADR-0005: two phases, sanitize then merge,
-   pure apart from mutating its `target` argument), settings (`resolveSettings`, ADR-0006:
-   options > `KILO_AZDO_*` env > defaults; env injectable, default `process.env` at call time)
-4. I/O helpers with injectable seams: `fetchRemoteConfig` (F-005, ADR-0007: fetch, env, `az`
-   runner, setTimeout/clearTimeout injectable; default runner `execFile` without a shell, on
-   Windows `cmd.exe /d /s /c` with a constant command line)
-5. Hook orchestration (F-006, ADR-0008): `validateShared`, cache read/write (`fs` + `homedir`
-   injectable), logger adapter, `applyShared` (journaled merge), `runConfigHook`
-6. `AzdoRemoteConfig` server function (no I/O) whose `config` hook calls `runConfigHook`
-7. Exports: `__internals` (6 keys, last `runConfigHook`), constants, `default { id, server }`
+   `fs.readFileSync`, regular files of at most 1 MiB only; UNC-style `{file:}` paths are rejected
+   before any read)
+5. Config merge (`mergeConfig`, ADR-0005: two phases, sanitize then merge; `applyShared`, the
+   journaled transactional merge of ADR-0008 section 6)
+6. Settings resolution (`resolveSettings`, ADR-0006: options > `KILO_AZDO_*` env > defaults; env
+   injectable, default `process.env` at call time)
+7. Fetch foundations: types, target, Items API URL, injectable fetch / clock, the single deadline
+8. Authentication: PAT (Basic) then `az` bearer token; default runner `execFile` without a shell,
+   on Windows `cmd.exe /d /s /c` with a constant command line
+9. Response handling and failure classification (ADR-0007 section 10, ADR-0020)
+10. Fetch pipeline: `performRequest`, `runFetch`, `fetchRemoteConfig` (F-005, ADR-0007)
+11. Shared config validation (`validateShared`, ADR-0008 section 3, ADR-0009)
+12. Config cache bound to settings (`readCache` / `writeCache`, ADR-0008 section 4, ADR-0018)
+13. Logging, fixed messages and hints (`makeLogger`, `LOG_*`, `hintFor`, ADR-0008, ADR-0020)
+14. Config hook (`executeHook`, `runConfigHook`, F-006, ADR-0008)
+15. Exports: `__internals` (6 keys, last `runConfigHook`), `AzdoRemoteConfig` server function
+    (no I/O) whose `config` hook calls `runConfigHook`, `default { id, server }` (last statement)
 
 ## Directory layout
 
@@ -224,6 +236,9 @@ backend/                     # the only package (ADR-0001 section 7)
   tools/check-docs.mjs        # F-016: docs gate (pages, links/anchors, required text, Kilo range, sk-bf- scan,
                               #   forbidden scope) - ADR-0017, contracts/docs-check.md; run by scripts/ci.sh
   test/tools/check-docs.test.ts  # F-016: hermetic temp-dir fixtures, negative controls
+  tools/compare-plugin-shape.mjs # T-037: dev-only, manual move-only proof for the plugin file (ADR-0021)
+  test/tools/compare-plugin-shape.test.ts  # T-037: synthetic base/head fixtures only
+  test/plugin/source-layout.test.ts        # T-037: TOC/banners, hot-path JSDoc, comment safety, fresh import
   installer/                  # F-010: install.sh (bash front end), install-helper.ts (Node I/O CLI),
                               # F-011: install.ps1 (PowerShell front end, ASCII, LF) - ADR-0014
                               #        personal-config-edit.ts (pure edit rules) - ADR-0012

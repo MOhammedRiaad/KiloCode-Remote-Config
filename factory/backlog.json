@@ -1361,6 +1361,77 @@
       "source": "review",
       "cycle_done": null,
       "notes": "Cycle 0025 PO: not selected; factory declared DONE. The formatLine guard is defence-in-depth only (no real runSmoke path produces such a report; install-helper's catch keeps exit 4). The conditional-access (JSON 401/403, VS403463-style) hint needs real-environment evidence and a contract decision first. Optional extra from the cycle 0024 architect: a PowerShell child-process 470 smoke test in install-ps1-smoke.test.ts if pwsh is available on CI."
+    },
+    {
+      "id": "T-037",
+      "title": "Organise the single plugin file (TOC, numbered section banners, co-located helpers) and JSDoc every hot path - zero behaviour change",
+      "type": "tech-debt",
+      "priority": 1,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-035"
+      ],
+      "description": "Cycle 0026 PO, USER request (factory reopened after DONE at v0.16.1). The USER asked whether backend/plugin/azdo-remote-config.ts (~1456 lines) should be split into smaller modules or stay one file, and chose OPTION A: KEEP ONE FILE and organise it better inside; USER addendum: 'add jsdoc comments for all hot paths' in the same pass. FR-11 stays fully in force: one TypeScript file, zero runtime npm dependencies, no relative imports, only node: imports, no build step, shipped artefact path unchanged, no new __internals key. PART 1 - organisation: (1) a table-of-contents header comment at the top listing numbered sections; (2) consistent numbered section banners in a dependency-friendly order, e.g. 1 types/constants -> 2 low-level guards/helpers -> 3 JSONC parser (ADR-0003) -> 4 placeholders (ADR-0004) -> 5 merge (ADR-0005) -> 6 settings (ADR-0006) -> 7 fetch/auth (ADR-0007, ADR-0020) -> 8 cache (ADR-0008, ADR-0018) -> 9 logging/hints (ADR-0008) -> 10 config hook -> 11 exports/__internals (the Architect fixes the exact list; TOC and banners match 1:1 and in order); (3) related helpers moved next to their primary users; (4) stale or duplicated comments trimmed while every contract / ADR / FR / AC reference is kept; (5) no dead code (an unused declaration is removed only if provably unreferenced AND not exported / not in __internals; otherwise reported). PART 2 - JSDoc on hot paths. Definition: a HOT PATH is a function or constant that runs on every Kilo start (plugin load + config hook) or on every credential-bearing request. The FIXED hot-path list for this item (names verified against the current file by the PO): AzdoRemoteConfig (the default export's `server`), runConfigHook, executeHook, acquireRemote, resolveSettings, fetchRemoteConfig, runFetch, performRequest, buildItemsUrl, resolveAuthorization, findPat, basicHeader, azAuthorization, defaultRunAz, startDeadline, handleResponse, codeForStatus, readContentType, isJsonMediaType, codeForInterrupted, readCappedBody, extractContent, parseJsonc, resolvePlaceholders, mergeConfig, applyShared, validateShared, readCache, writeCache, checkCacheEnvelope, cacheBindingOf, makeLogger, logHint, hintFor, __internals. Each hot-path declaration gets a preceding /** ... */ block with: a one-sentence purpose; @param / @returns described in prose (do NOT repeat TypeScript types); the fixed error codes / log messages it can produce (e.g. FetchErrorCode values, LOG_* lines, hint lines) where applicable; an invariants line starting 'Invariants:' (as applicable: never throws (FR-10); no secret, URL, host or config value in any log (AC-9); response body discarded unread on non-success; exactly one request per hook run; cache order / binding per ADR-0008 / ADR-0018); and at least one @see pointer to an existing ADR file or contract section (e.g. ADR-0007, ADR-0008, ADR-0018, ADR-0020; plugin-interface.md 2e / 2f / 2f-C). JSDoc must describe the CURRENT code (verified against it, not memory), be ASCII-only, contain no secrets or realistic example keys (any Bifrost key example only as `sk-bf-<...>`), and must not change any code token. HARD CONSTRAINTS: ZERO behaviour change - a pure move-and-comment change: no logic edits, no renames, no signature changes, identical exported surface and __internals key set; declaration order changes must be safe for module evaluation (no top-level const/let read before initialisation at load time; only function declarations may rely on hoisting). All existing tests (~692) pass UNCHANGED - no existing test file is edited (tests import the plugin by path); NEW dev-only tests/scripts may be added. Proof required: a before/after comparison (dev-only script or node:test, output recorded in the engineer report) showing the sorted top-level declaration names, the export list and the __internals keys are identical, and that a normalised comparison (comments and whitespace stripped, top-level statements compared as a sorted multiset) is identical. Optional, ONLY if cheap: a dev-only check (extend backend/tools/check-fr11.mjs or a sibling wired into scripts/ci.sh) that the TOC entries and banners exist in order. No contract version bump (no behaviour change). Versioning: patch (refactor/docs). F-012 / F-013 / F-015 remain blocked/skipped; remote mode stays OFF.",
+      "acceptance_criteria": [
+        "Given the reorganised backend/plugin/azdo-remote-config.ts, When its source is scanned as text by a dev-only test or check, Then the header contains a table-of-contents comment listing N numbered sections and the file contains exactly N section banner comments in one consistent format whose numbers and titles match the TOC 1:1 and in the same order.",
+        "Given the fixed hot-path list in this item (AzdoRemoteConfig (the default export's `server`), runConfigHook, executeHook, acquireRemote, resolveSettings, fetchRemoteConfig, runFetch, performRequest, buildItemsUrl, resolveAuthorization, findPat, basicHeader, azAuthorization, defaultRunAz, startDeadline, handleResponse, codeForStatus, readContentType, isJsonMediaType, codeForInterrupted, readCappedBody, extractContent, parseJsonc, resolvePlaceholders, mergeConfig, applyShared, validateShared, readCache, writeCache, checkCacheEnvelope, cacheBindingOf, makeLogger, logHint, hintFor, __internals), When a dev-only node:test (e.g. under backend/test/tools) reads the plugin source as text, Then every listed declaration is immediately preceded by a /** ... */ JSDoc block that contains a purpose sentence, an 'Invariants:' line and at least one @see tag, and the test fails if any listed name is missing its block or no longer exists in the file.",
+        "Given every JSDoc block in the plugin file, When the dev-only test inspects them, Then each @see ADR-NNNN reference names a file that exists in docs/architecture/, the blocks are ASCII-only, and no block contains a secret-like value (no 'sk-bf-' followed by anything other than '<', no 'Basic ' or 'Bearer ' followed by a credential-like token, no dev.azure.com URL with a real-looking organisation).",
+        "Given the file before (git main at v0.16.1) and after the change, When the top-level declarations (function, const, let, type, interface, class names) are extracted and sorted, Then the two sorted name lists are identical, and the exported names and the sorted __internals key list are identical.",
+        "Given both versions with all comments (including the new JSDoc) and whitespace removed, When their top-level statements are normalised and compared as a sorted multiset, Then the multisets are identical (proving a move-and-comment-only change with no logic edits); the command and its output are recorded in the engineer report.",
+        "Given the existing backend test suite (~692 tests), When it runs against the reorganised file, Then every test passes, no pre-existing test file is modified in the cycle diff, and importing the plugin in a fresh process succeeds without a ReferenceError / temporal-dead-zone error with the default export still { id, server } and the same named exports.",
+        "Given the change, When the FR-11 lint (backend/tools/check-fr11.mjs), check-docs and 'bash scripts/ci.sh' run, Then all exit 0: the plugin is still ONE TypeScript file at the unchanged path with zero runtime npm dependencies, no relative imports, only node: imports and no new __internals key; and any optional TOC/banner check added is dev-only (not shipped) and fails when a banner is missing or out of order."
+      ],
+      "source": "user",
+      "cycle_done": 26,
+      "notes": "Cycle 0026 PO: selected (priority 1, USER request; factory reopened after cycle 0025 DONE). Decision recorded: OPTION A (keep one file, organise inside) - FR-11 single-file packaging is preserved because the plugin ships as one file copied into the Kilo plugin folder. USER addendum merged into this same item: JSDoc for all hot paths. Hot-path names were verified by the PO against the current file: the default export is { id: PLUGIN_ID, server: AzdoRemoteConfig }; URL building is buildItemsUrl; auth header selection is resolveAuthorization / findPat / basicHeader / azAuthorization (plus defaultRunAz); the deadline/timer is startDeadline; capped body reading is readCappedBody; the logger factory is makeLogger. One-cycle sized: move + comment edits plus dev-only proof/check tests; no logic, existing-test, contract or behaviour changes."
+    },
+    {
+      "id": "T-038",
+      "title": "Plugin JSDoc trim pass and wording fixes (comment-only)",
+      "type": "tech-debt",
+      "priority": 1,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-037"
+      ],
+      "description": "Cycle 0026 review/security follow-ups, COMMENT-ONLY in backend/plugin/azdo-remote-config.ts (zero behaviour change, re-proved with compare-plugin-shape vs v0.16.2): (1) trim duplicated JSDoc boilerplate - `Codes: none.` appears 16 times, the full fetch error-code list is repeated in several functions, `@param deadline - the operation-wide deadline` 6 times; reference the contract section instead; wrap the four rework-1 run-on lines (133-217 chars) at ~110; target roughly 80-120 fewer lines without losing any required element (purpose, Invariants:, @see on all 35 hot paths); (2) wording: line ~394 'The only phase that throws' contradicts the mergeConfig JSDoc; ~515 'a target whose getter throws' propagates the getter's own error, not a TypeError; ~1223 readCappedBody 1 MiB cap claim assumes an honest byteLength; ~490 and ~1889 'unchanged or fully merged' holds for ordinary objects only (rollback best-effort); ~1889 'no config value in any log' vs sanitised placeholder names of L-UNRESOLVED. The user's original concern was file size (1456 -> 1939 lines).",
+      "acceptance_criteria": [
+        "Given the plugin after the trim, When compare-plugin-shape runs against v0.16.2, Then it reports PASS with identical declarations, exports, __internals keys and statements.",
+        "Given source-layout.test.ts, When it runs, Then it still passes unchanged (35 hot paths keep purpose, Invariants: and @see).",
+        "Given the six wording findings, When the JSDoc is read, Then none of the overstated claims remains.",
+        "Given the file, When line-counted, Then it is at least 80 lines shorter than 1939."
+      ],
+      "source": "user",
+      "cycle_done": null
+    },
+    {
+      "id": "T-039",
+      "title": "compare-plugin-shape tool hardening and ADR status lines",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-037"
+      ],
+      "description": "Cycle 0026 review/security follow-ups: (tool) compare-plugin-shape.mjs splits operators into single characters so `a + ++b` -> `a++ + b` and `--a` -> `- -a` report PASS - tokenize multi-character operators; any `git show` failure (mistyped ref, shallow clone without tags) prints SKIP and exits 0 - distinguish 'git/history unavailable' (SKIP) from 'ref not found' (exit 2); output says 'multiset of:' where the spec says 'multiset of'; (ADR-0021 Consequences) the claim 'whitespace has no runtime meaning' is wrong for adjacent +/- tokens - correct it (architect); ADR-0007 and ADR-0008 status lines should mention the ADR-0021 amendment (architect); source-layout.test.ts ~L245 the AC-3 negative-control test fails noisily whenever the real source has an AC-3 problem - make it independent.",
+      "acceptance_criteria": [
+        "Given base and head differing only by `a + ++b` vs `a++ + b`, When the tool runs, Then it reports FAIL.",
+        "Given a mistyped --base-ref, When the tool runs, Then it exits 2, not SKIP/0."
+      ],
+      "source": "review",
+      "cycle_done": null
     }
   ]
 }

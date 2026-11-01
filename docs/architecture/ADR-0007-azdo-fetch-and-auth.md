@@ -300,6 +300,9 @@ The size cap applies to the HTTP body bytes, before decoding and before any JSON
   regex literals. In particular never write an `Accept` value like star-slash-star; it is
   `application/json`. Character-set checks use `charCodeAt` ranges, not regex literals.
 - New comments use `//` only. ASCII only. LF line endings. No `require(`, no dynamic import.
+  (Amended by ADR-0021 section 4, T-037: whole-line `/** ... */` JSDoc blocks whose body contains
+  neither slash-star nor star-slash are allowed; the ban stays for strings, regex literals and `//`
+  comments.)
 - Erasable TypeScript only (a template literal type is fine).
 
 ## Consequences

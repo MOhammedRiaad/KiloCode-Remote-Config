@@ -35,6 +35,52 @@ At runtime the plugin writes only `~/.cache/kilo-azdo/remote-config.json` (see [
 
 The plugin now imports `node:fs`, `node:os`, `node:path` and `node:child_process` (the last only to run `az` for the Entra-token fallback; allowed by FR-11; still `node:` only).
 
+## Plugin source layout
+Decision record: `docs/architecture/ADR-0021-plugin-source-layout-and-hot-path-jsdoc.md`. The plugin stays
+ONE file (FR-11); it is organised inside by 15 numbered sections. The header holds a table of contents
+(`//   N. Title`, three spaces) and each section starts with a banner `// ==== N. Title ====` set off by blank lines.
+Search for `// ==== ` to jump between sections. Sections in order:
+
+1. Imports, public types and plugin identity
+2. Shared guards and helpers
+3. JSONC parser
+4. Placeholder resolver
+5. Config merge
+6. Settings resolution
+7. Fetch foundations: types, target, URL and deadline
+8. Authentication: PAT and az CLI
+9. Response handling and failure classification
+10. Fetch pipeline: `fetchRemoteConfig`
+11. Shared config validation
+12. Config cache bound to settings
+13. Logging, fixed messages and hints
+14. Config hook: `runConfigHook`
+15. Exports: `__internals`, server and default export (always the last statement)
+
+Adding a function: put it in the section it belongs to. Top-level `const` initialisers that read another
+top-level `const` must come after it (function declarations are hoisted). Adding or renaming a section means updating the
+TOC, the banner and `backend/test/plugin/source-layout.test.ts` together.
+
+Hot paths (code that runs on every Kilo start or every credential-bearing request; the fixed list of 35 names is in the layout test)
+need a `/** ... */` JSDoc block directly above the declaration, with, in order:
+- one purpose sentence ending in `.`;
+- `@param name - prose` and `@returns prose` (no `{Type}`);
+- `Codes:` and/or `Logs:` naming the error codes or `LOG_*` constants it can produce, where applicable;
+- an `Invariants:` line (for example never throws, no secret or URL in logs);
+- at least one `@see` to an ADR or contract that exists (`@see ADR-NNNN section N` or `@see contracts/<file>.md section <id>`).
+
+JSDoc rules: the body must not contain `/*` or `*/` (`tools/check-fr11.mjs` strips block comments naively; avoid glob-like text), the block
+sits on its own lines, ASCII only, and no secret-like examples (write `sk-bf-<...>`, `Basic <base64>`, `https://dev.azure.com/<org>/...`).
+
+Checks:
+- `backend/test/plugin/source-layout.test.ts` (part of `npm test`) enforces the TOC and banner formats and numbering, JSDoc on every hot path,
+  the comment-safety rule, ASCII, existing `@see` targets, a secret-like scan, and a fresh-process import with the same exports and `__internals` keys.
+- `node backend/tools/compare-plugin-shape.mjs --base-ref <git ref>` is a manual, dev-only tool (not in `scripts/ci.sh`).
+  It proves a refactor is move-and-comment only: it ignores comments and order, then compares declarations, exports, `__internals` keys and
+  top-level statements against the file at that ref. Use it for any pure refactor of the plugin (for example `--base-ref HEAD`).
+  Exit 0 is PASS, 1 a difference, 2 a usage error. It prints SKIP (exit 0) when git or history is unavailable. Its own tests are
+  `backend/test/tools/compare-plugin-shape.test.ts`.
+
 ## Validator tests and lint rule 5
 The validator (`backend/validator/`, contract `docs/architecture/contracts/validator-cli.md`, ADR-0010)
 is tested by `backend/test/validator/` (`rules.test.ts`, `cli.test.ts`, `schema-subset.test.ts`,
@@ -189,6 +235,7 @@ backend/tools/assemble-shared-repo.ts  builds the shared config repo tree
 backend/personal-config/kilo.jsonc     personal config template (copied to ~/.config/kilo/)
 backend/installer/                     bootstrap installer (install.sh, install.ps1 + Node helper)
 backend/tools/check-fr11.mjs           lint
+backend/tools/compare-plugin-shape.mjs manual move-and-comment-only proof for plugin refactors
 backend/test/                          tests (backend/test/e2e/ = end-to-end startup suite)
 ```
 Further folders (templates, provisioning) arrive with later items.

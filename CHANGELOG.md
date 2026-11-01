@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.16.2] - 2026-11-01
+
+NOTE: the plugin source file grew from 1456 to about 1939 lines because of the added JSDoc. A trim pass is queued as T-038.
+
+### Added
+- T-037: ADR-0021 (JSDoc blocks are now permitted in the plugin source).
+- T-037: permanent test `source-layout.test.ts` guarding the section layout and table of contents.
+- T-037: manual dev tool `backend/tools/compare-plugin-shape.mjs` (compares the plugin AST shape against a base git ref).
+- T-037 (docs): `development.md` gains a plugin source layout section.
+
+### Changed
+- T-037: plugin source reorganised into 15 numbered sections with a table of contents, and JSDoc added on the 35 hot paths. Zero behaviour change, proven by compare-plugin-shape: 200 statements / 195 declarations / 10 exports / 6 `__internals` keys identical to v0.16.1.
+
 ## [0.16.1] - 2026-11-01
 
 ### Added

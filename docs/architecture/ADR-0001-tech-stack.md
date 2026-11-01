@@ -1,5 +1,6 @@
 # ADR-0001: Tech stack
-- Status: accepted
+- Status: accepted; sections 6, 7 and 8 amended by ADR-0021 (cycle-0026, T-037: plugin file
+  layout with TOC and numbered sections, hot-path JSDoc, dev-only layout test and compare tool)
 - Date: 2026-10-30
 - Cycle / item: cycle-0002 / T-001
 
@@ -122,6 +123,10 @@ requires re-running the Phase 0 checks (vision assumptions A1-A2) and a new ADR.
   lives in that one file. Pure helpers are exposed to tests only through the single named
   constant `__internals` (an object, never a function), per ADR-0002.
 - Enforced automatically by `npm run lint` (`tools/check-fr11.mjs`) in every CI run.
+- (since T-037, ADR-0021) Inside the one file: a table-of-contents header and 15 numbered section
+  banners (`// ==== N. Title ====`) in the order fixed by ADR-0021 section 1, and a JSDoc block on
+  every hot-path declaration (ADR-0021 section 3). `/** ... */` blocks are allowed as whole-line
+  comments only (ADR-0021 section 4). Checked by `test/plugin/source-layout.test.ts`, not by lint.
 - Other components (validator, installers, provisioning) are **not** bound by the single-file
   rule but are bound by the zero-runtime-dependency rule (Node built-ins / PowerShell / POSIX sh).
 
@@ -144,6 +149,7 @@ backend/
     check-fr11.mjs        # lint: FR-11 guard rails
     check-docs.mjs        # docs gate, run by scripts/ci.sh (F-016, ADR-0017)
     assemble-shared-repo.ts  # writes the complete C1 repo tree (F-008, ADR-0015)
+    compare-plugin-shape.mjs # dev-only, manual: move-only proof for the plugin file (T-037, ADR-0021)
   test/
     plugin/               # tests for C2 (*.test.ts)
     validator/ ...        # one test folder per component, mirroring the source tree
@@ -164,6 +170,7 @@ All commands run from `backend/`. `frontend/` does not exist and is not planned 
 | Test | `node --test "test/**/*.test.ts"` | `npm test` |
 | Build | none - the plugin ships as source; no `build` script is defined | - |
 | Docs check (repo root, since F-016) | `node backend/tools/check-docs.mjs` | - (called by `scripts/ci.sh`) |
+| Plugin move-only proof (dev-only, manual, since T-037) | `node tools/compare-plugin-shape.mjs --base-ref <git-ref>` | - (never in `scripts/ci.sh`; ADR-0021 section 5) |
 
 `scripts/ci.sh` already runs `lint`, `typecheck`, `test`, `build` via `npm run --if-present`,
 so these scripts plug in without changes to its Node path.
