@@ -6,6 +6,10 @@
   Contract: `contracts/installer-cli.md` 1.3.2 -> 1.4.0 (sections 7, 9 and 9.2). No change to the
   plugin (`contracts/plugin-interface.md`), the personal config template or the installer's write
   phase.
+- Amended by: ADR-0023 (cycle-0028, T-040): decision 5 and the first consequence are superseded.
+  On update with a non-empty `azurefoundry` `x-bf-vk` header the installer writes a supplied
+  `KILO_BIFROST_KEY` into that header and adds no `provider.bifrost` block, so the written key is
+  the smoke-tested key (contract `installer-cli.md` 1.5.0).
 
 ## Context
 
@@ -41,7 +45,8 @@ for the code to match the real config; the change was made in commit 7701a9b and
    `skipped key-reference`, > 4096 chars or char outside 0x21-0x7E -> `fail invalid-key`), is sent
    only to the validated https models URL, never to AzDO, never printed, never written to argv,
    logs or reports. The PAT / az token is never sent to Bifrost.
-5. **Write phase unchanged.** The installer still writes `KILO_BIFROST_KEY` (or the placeholder when
+5. **Write phase unchanged** (superseded by ADR-0023 for configs with a non-empty `x-bf-vk`
+   header). The installer still writes `KILO_BIFROST_KEY` (or the placeholder when
    no `apiKey` exists) to `provider.bifrost.options.apiKey` on fresh and update. It does not write
    or touch `provider.azurefoundry`.
 
@@ -49,7 +54,7 @@ for the code to match the real config; the change was made in commit 7701a9b and
 
 - The smoke test passes against the team's real config shape and keeps working for configs that
   use the original `provider.bifrost` shape.
-- On **update**, a non-empty `azurefoundry` `x-bf-vk` header in the personal config takes priority
+- (Resolved by ADR-0023: a supplied key is now written into the header.) On **update**, a non-empty `azurefoundry` `x-bf-vk` header in the personal config takes priority
   over a `KILO_BIFROST_KEY` supplied on this run: the supplied key is still written to
   `bifrost.options.apiKey`, but the smoke test checks the header key. The fixed hint
   `Smoke test: set KILO_BIFROST_KEY and re-run install.sh ...` can therefore be misleading when the

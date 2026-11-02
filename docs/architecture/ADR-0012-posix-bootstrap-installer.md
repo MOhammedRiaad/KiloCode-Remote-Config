@@ -9,6 +9,9 @@
 - Amended in place (cycle-0020, T-019; contract 1.2.1): section 2 (CDPATH-safe script dir,
   missing-helper exit 3), section 6 (post-`mkdir` symlink re-check, `O_NOFOLLOW` + `fchmod`,
   residual race), section 8 (race preload fixture, `fs-guard.ts` unit tests).
+- Amended by: ADR-0023 (cycle-0028, T-040): on update with a non-empty
+  `provider.azurefoundry.options.headers["x-bf-vk"]` the key goes into that header and no
+  `provider.bifrost` block is added (contract `installer-cli.md` 1.5.0, section 5 step 2).
 
 ## Context
 
