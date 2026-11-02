@@ -14,9 +14,12 @@ Owned by the **architect** agent.
   `contracts/shared-config-repo.md` (since F-008) and the test-only end-to-end harness
   (Kilo start simulator, fake-network preload) in `contracts/e2e-harness.md` (since F-014) and the
   repository docs check (`backend/tools/check-docs.mjs`) in `contracts/docs-check.md` (since F-016).
-- Latest ADR: `ADR-0022-smoke-bifrost-azurefoundry-fallback-and-x-bf-vk.md` (cycle-0027; installer
-  smoke test reads the gateway URL from `provider.azurefoundry` as fallback and authenticates
-  with `x-bf-vk`; `contracts/installer-cli.md` 1.4.0, `contracts/e2e-harness.md` 1.1.1).
+- Latest ADR: `ADR-0023-installer-key-follows-x-bf-vk-header.md` (cycle-0028, T-040; on update
+  the installer writes the Bifrost key into an existing `azurefoundry` `x-bf-vk` header and adds
+  no `provider.bifrost` block, so the written key is the smoke-tested key;
+  `contracts/installer-cli.md` 1.5.0). Previous: `ADR-0022-smoke-bifrost-azurefoundry-fallback-and-x-bf-vk.md`
+  (cycle-0027; smoke test gateway URL fallback to `provider.azurefoundry`, `x-bf-vk` auth;
+  `contracts/installer-cli.md` 1.4.0, `contracts/e2e-harness.md` 1.1.1).
 
 ADR template:
 

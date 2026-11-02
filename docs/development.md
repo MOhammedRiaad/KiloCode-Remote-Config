@@ -148,6 +148,10 @@ ADR-0022 (contract installer-cli.md 1.4.0, T-038): the Bifrost smoke request tak
 `x-bf-vk: <key>` instead of `Authorization: Bearer`. The fake network and the e2e fake Bifrost therefore check
 the `x-bf-vk` header (the e2e fake-network scenario gains an optional lower-case `header` name, see
 contract e2e-harness.md 1.1.1). Tests use placeholder keys only.
+ADR-0023 (contract installer-cli.md 1.5.0, T-040): the installer's key follows the `x-bf-vk` header. If the
+personal config already has a non-empty `provider.azurefoundry.options.headers["x-bf-vk"]`, no `provider.bifrost`
+block is added, the header is kept without a supplied key, and `KILO_BIFROST_KEY` replaces the header value.
+Otherwise behaviour is unchanged. Tests use placeholder keys only.
 F-020 (ADR-0019, contract installer-cli.md 1.3.0 section 9.0) adds the network pre-flight to `smoke.ts`. The
 fake network scenario also answers the anonymous probes of `https://dev.azure.com/` and the Bifrost
 origin `/` (403/407, connection error, hang until the deadline). `smoke.test.ts` and

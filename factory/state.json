@@ -1,6 +1,6 @@
 {
   "status": "running",
-  "cycle": 27,
+  "cycle": 28,
   "max_cycles": 50,
   "phase": "idle",
   "current_item": null,
@@ -9,7 +9,7 @@
   "max_rework": 3,
   "consecutive_blocked": 0,
   "max_consecutive_blocked": 3,
-  "last_release": "v0.16.3",
+  "last_release": "v0.16.4",
   "history": [
     {
       "cycle": 3,
@@ -178,6 +178,13 @@
       "result": "released",
       "version": "v0.16.3",
       "rework": 3
+    },
+    {
+      "cycle": 28,
+      "item": "T-040",
+      "result": "released",
+      "version": "v0.16.4",
+      "rework": 0
     }
   ]
 }

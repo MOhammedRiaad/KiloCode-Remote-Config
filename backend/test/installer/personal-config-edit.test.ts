@@ -8,6 +8,7 @@ import {
   refersToAzdoPlugin,
   renderFresh,
   renderUpdated,
+  storedApiKey,
   validateInputs,
 } from "../../installer/personal-config-edit.ts";
 import type { Values } from "../../installer/personal-config-edit.ts";
@@ -161,4 +162,19 @@ test("validateInputs flags an unusual key prefix", () => {
   assert.ok(unusual.ok && unusual.apiKeyLooksUnusual);
   const usual = validateInputs(records({ apiKey: FAKE }));
   assert.ok(usual.ok && !usual.apiKeyLooksUnusual && usual.apiKey === FAKE);
+});
+
+test("planUpdate adds no bifrost block when the key already lives in the azurefoundry x-bf-vk header; a supplied key replaces it", () => {
+  const existing = { provider: { azurefoundry: { options: { headers: { "x-bf-vk": "sk-bf-old" } } } } };
+  const kept = planUpdate(existing, values, undefined);
+  assert.equal(kept.ok, true);
+  if (!kept.ok) return;
+  assert.equal(Object.hasOwn(kept.result["provider"] as object, "bifrost"), false);
+  assert.equal(storedApiKey(kept.result), "sk-bf-old");
+  const replaced = planUpdate(existing, values, "sk-bf-new");
+  assert.equal(replaced.ok, true);
+  if (!replaced.ok) return;
+  assert.equal(Object.hasOwn(replaced.result["provider"] as object, "bifrost"), false);
+  assert.equal(storedApiKey(replaced.result), "sk-bf-new");
+  assert.equal(storedApiKey(existing), "sk-bf-old");
 });

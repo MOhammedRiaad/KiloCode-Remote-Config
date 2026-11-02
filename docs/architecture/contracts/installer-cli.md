@@ -1,13 +1,22 @@
 # Contract: bootstrap installers (`install.sh`, `install.ps1`) and install helper
 
-- Version: 1.4.0 (cycle-0027, out-of-band with T-038, ADR-0022: the smoke test (a) reads the
+- Version: 1.5.0 (cycle-0028, T-040, ADR-0023: on **update**, when the existing personal config
+  holds a non-empty string at `provider.azurefoundry.options.headers["x-bf-vk"]` (the "key
+  header"), the installer (a) creates or changes nothing under `provider.bifrost` (no block, no
+  `apiKey` placeholder; an existing block is kept deep-equal as parsed, never deleted) and
+  (b) writes a supplied `KILO_BIFROST_KEY` into that header instead of `bifrost.options.apiKey`,
+  so the key written is always the key the smoke test checks. Without a key header the 1.4.0
+  rules apply unchanged; fresh installs are unchanged. Sections 2, 3 (exit 3 row), 5, 7 and 9.
+  No new input, line, hint text, code or exit code; no-leak guarantees unchanged. Removes the
+  1.4.0 "header wins over a supplied key" caveat.)
+  1.4.0: cycle-0027, out-of-band with T-038, ADR-0022: the smoke test (a) reads the
   gateway URL from shared `provider.bifrost.options.baseURL`, falling back to
   `provider.azurefoundry.options.baseURL` when bifrost declares none; (b) sends the Bifrost
   request with `x-bf-vk: <effective key>` instead of `Authorization: Bearer <effective key>`;
   (c) on update takes the effective key from the personal config's
   `provider.azurefoundry.options.headers["x-bf-vk"]` when a non-empty string, else
   `provider.bifrost.options.apiKey`. Sections 7, 9 and 9.2. No new input, line, code or exit
-  code; write phase unchanged.)
+  code; write phase unchanged (write phase amended in 1.5.0).
   1.3.2: cycle-0024, T-035: (a) the fixed network hint of section 7 is also printed,
   at most once, when the pre-flight passed but an authenticated line failed for a network
   reason (`smoke azdo: fail network-unreachable|network-blocked|timeout`,
@@ -29,8 +38,8 @@
   1.2.0: cycle-0014, F-011: `install.ps1` front end (section 10), optional `frontend`
   stdin record, front-end-specific message prefix. 1.1.0: cycle-0013, F-019 (smoke test,
   `--no-smoke`, exit code 4, optional `smoke` stdin record). 1.0.0: cycle-0011, F-010.
-  Decision records: ADR-0012 (amended cycle-0020), ADR-0013 (amended by ADR-0019), ADR-0014,
-  ADR-0019.
+  Decision records: ADR-0012 (amended cycle-0020), ADR-0013 (amended by ADR-0019, ADR-0022),
+  ADR-0014, ADR-0019, ADR-0022 (amended by ADR-0023), ADR-0023.
 - Files: `backend/installer/install.sh` (bash front end), `backend/installer/install.ps1`
   (PowerShell front end; since 1.2.0), `backend/installer/install-helper.ts`
   (Node CLI, all file I/O), `backend/installer/personal-config-edit.ts` (pure library),
@@ -67,7 +76,7 @@ There is deliberately **no flag for the virtual key** and no flag for a PAT.
 |---|---|
 | `KILO_AZDO_ORG`, `KILO_AZDO_PROJECT`, `KILO_AZDO_REPO` | Used when the matching flag is absent. A flag always wins. An empty value counts as absent. |
 | `KILO_AZDO_PATH`, `KILO_AZDO_BRANCH`, `KILO_AZDO_MODE` | Same; when both flag and env are absent the defaults are `/kilo.jsonc`, `main`, `defaults`. |
-| `KILO_BIFROST_KEY` | The engineer's Bifrost virtual key. Non-empty: written to `provider.bifrost.options.apiKey`. Empty/unset: existing `apiKey` kept, or the placeholder `sk-bf-<your-virtual-key>` written when there is none. Never printed. |
+| `KILO_BIFROST_KEY` | The engineer's Bifrost virtual key. Non-empty: written to the key location of section 5 step 2: on update with a key header (a non-empty string at `provider.azurefoundry.options.headers["x-bf-vk"]`; 1.5.0, ADR-0023) it replaces that header value; otherwise (fresh, or update without a key header) it is written to `provider.bifrost.options.apiKey`. Empty/unset: the existing key header or existing `apiKey` is kept; the placeholder `sk-bf-<your-virtual-key>` is written to `provider.bifrost.options.apiKey` only when there is neither a key header nor an `apiKey`. Never printed. |
 | `AZDO_PAT`, `AZURE_DEVOPS_EXT_PAT`, `KILO_AZDO_PAT` | `install.sh` only tests them for non-emptiness (prerequisite check). Since 1.1.0 the helper reads them **in the smoke phase only** and hands them solely to the plugin's `resolveSettings` / `fetchRemoteConfig` (FR-3 order). Never printed, never written to a file, never in argv. |
 | `KILO_AZDO_TIMEOUT_MS` | (1.1.0) Read by the helper in the smoke phase only, through `resolveSettings`: per-check timeout, default 5000 ms; invalid values silently fall back to the default. |
 | `PATH`, `ComSpec` | Used by the plugin's default `az` runner in the smoke phase when no PAT is set. |
@@ -108,7 +117,7 @@ There is deliberately **no flag for the virtual key** and no flag for a PAT.
 | 0 | Installed, updated, or already up to date. Warnings allowed. Smoke test (if run): every check `pass` or `skipped`. |
 | 1 | A prerequisite is missing (Node / Node version / credentials). Nothing written. |
 | 2 | Usage or input error: unknown option, missing value, missing org/project/repo, a value rejected by the plugin's setting rules, `KILO_BIFROST_KEY` containing control characters, relative `XDG_CONFIG_HOME`. Nothing written. |
-| 3 | Existing config or file system problem: existing `kilo.jsonc` not valid JSONC / root not an object / larger than 1 MiB / `plugin` present but not an array / `provider`, `provider.bifrost` or `provider.bifrost.options` present but not a plain object / a target is a symlink or wrong type / I/O error / installer sources missing / internal error. Nothing written when detected in the read-only phase. |
+| 3 | Existing config or file system problem: existing `kilo.jsonc` not valid JSONC / root not an object / larger than 1 MiB / `plugin` present but not an array / `provider`, `provider.bifrost` or `provider.bifrost.options` present but not a plain object (1.5.0: the two `provider.bifrost` checks apply only when the config has no key header, section 5 step 2; with a key header `provider.bifrost` is neither inspected nor changed) / a target is a symlink or wrong type / I/O error / installer sources missing / internal error. Nothing written when detected in the read-only phase. |
 | 4 | (1.1.0) Installed exactly as for exit 0, but at least one smoke check failed (1.3.0: including `smoke network: fail ...`). The files are byte-identical to those of a run with the same inputs that exits 0. Never returned with `--no-smoke`. |
 
 ## 4. Helper stdin protocol (shared with F-011)
@@ -167,9 +176,21 @@ keeps the template's comments and line endings normalised to LF.
 1. `plugin` absent -> `[entry]`. Present and not an array -> exit 3. Otherwise remove every entry
    that refers to azdo-remote-config and insert `entry` at the index of the first removed entry, or
    append it. Every other entry keeps its value and relative order.
-2. `provider.bifrost.options.apiKey`: key supplied -> set to the key. No key and an `apiKey` property
-   exists (any value) -> unchanged. No key and none exists -> placeholder. Missing `provider`,
-   `bifrost`, `options` objects are created; present but not plain objects -> exit 3.
+2. Key location (1.5.0, ADR-0023). The config has a **key header** when `provider`,
+   `provider.azurefoundry`, `provider.azurefoundry.options` and
+   `provider.azurefoundry.options.headers` are all plain objects and `headers["x-bf-vk"]` is a
+   non-empty string (any content, including the placeholder or a `{env:` / `{file:` reference).
+   - **Key header present**: key supplied -> `headers["x-bf-vk"]` is set to the key (replacing
+     the old value); no key -> unchanged. Nothing under `provider.bifrost` is created, changed,
+     validated or deleted: no `bifrost` block and no placeholder `apiKey` is added, and an
+     existing `provider.bifrost` (any value, including a stale `apiKey`) is kept as parsed. The
+     installer never creates the key header and never adds other keys to `azurefoundry`.
+   - **No key header** (unchanged from 1.4.0): `provider.bifrost.options.apiKey`: key supplied ->
+     set to the key. No key and an `apiKey` property exists (any value) -> unchanged. No key and
+     none exists -> placeholder. Missing `provider`, `bifrost`, `options` objects are created;
+     present but not plain objects -> exit 3.
+   In both cases the key written (or kept) is exactly the effective key the smoke test checks
+   (section 9).
 3. Every other key at every level is left exactly as parsed (deep-equal). `$schema` is not added.
 4. If the result `util.isDeepStrictEqual`s the parsed original: **no write, no backup**.
 5. Otherwise: backup (byte-identical, section 6), then write
@@ -229,16 +250,21 @@ Personal config already up to date: <path>
 Note: dropped plugin options from the previous entry: <names>
 Set your Bifrost virtual key: re-run with KILO_BIFROST_KEY set, or edit provider.bifrost.options.apiKey in <path>.
                                                  (whenever the effective key, section 9, equals the placeholder after the run;
-                                                  1.4.0: on update that can be the azurefoundry x-bf-vk header value)
+                                                  1.4.0: on update that can be the azurefoundry x-bf-vk header value.
+                                                  1.5.0: wording unchanged; with a key header, re-running with
+                                                  KILO_BIFROST_KEY replaces the header value (section 5), so the hint
+                                                  clears; the "edit provider.bifrost.options.apiKey" part names the
+                                                  1.0.0 location only, ADR-0023 follow-up)
 smoke network: pass | smoke network: fail <code>[,<code>]
                                                  (1.3.0, smoke phase only, always the first smoke line, section 9.0)
 smoke azdo: <result>                             (1.1.0, smoke phase only, section 9)
 smoke bifrost: <result>
 Smoke test: set KILO_BIFROST_KEY and re-run install.sh to check your Bifrost virtual key.
-                                                 (only after "smoke bifrost: skipped no-key"; wording unchanged in 1.4.0.
-                                                  Known gap, ADR-0022: when the personal config's azurefoundry
-                                                  x-bf-vk header holds the placeholder, re-running with
-                                                  KILO_BIFROST_KEY does not change the effective key)
+                                                 (only after "smoke bifrost: skipped no-key"; wording unchanged in 1.4.0
+                                                  and 1.5.0. 1.5.0, ADR-0023: accurate in every case, because a
+                                                  supplied KILO_BIFROST_KEY is written to the key location the smoke
+                                                  test reads (the x-bf-vk key header when present); the 1.4.0
+                                                  known gap is closed)
 Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run install.sh.
                                                  (1.3.0, only when the network line is "fail" with a code other than "internal";
                                                   1.3.2: also after a qualifying authenticated-line code; at most once; rule: section 9.4)
@@ -260,7 +286,8 @@ Fixed prerequisite messages (must contain these fixes):
 - (1.2.1) Helper missing next to `install.sh` (exit 3): `installer sources are missing (expected install-helper.ts next to install.sh).` (same wording as `install.ps1`, section 10.2 step 5)
 
 **Never printed**: the value of `KILO_BIFROST_KEY` or of the effective key (whether taken from
-`apiKey` or, 1.4.0, from the `x-bf-vk` header), any PAT, its
+`apiKey` or, 1.4.0, from the `x-bf-vk` header), the old or new value of a replaced `x-bf-vk`
+key header (1.5.0), any PAT, its
 Basic credential, any az token, any argument text of an unknown option, any content of an existing
 config file or of the fetched shared config, any fetch error text or HTTP response body, stack
 traces. All errors are caught at the top of the helper and mapped to a fixed message.
@@ -283,10 +310,12 @@ normalised `org/project/repo/path/branch` of this install; `settings = resolveSe
 virtual key the personal config holds after this run. Fresh: `KILO_BIFROST_KEY` or the
 placeholder. Update (1.4.0, ADR-0022): `provider.azurefoundry.options.headers["x-bf-vk"]` when it
 is a non-empty string; otherwise `provider.bifrost.options.apiKey` (the supplied key, else the
-existing value). Note: on update a non-empty `x-bf-vk` header wins over a `KILO_BIFROST_KEY`
-supplied on this run (the supplied key is still written to `bifrost.options.apiKey`, section 5,
-but is not the one the smoke test checks). The same effective key decides the
-`Set your Bifrost virtual key` line of section 7.
+existing value, else the placeholder). (1.5.0, ADR-0023) Because the write phase puts a supplied
+`KILO_BIFROST_KEY` into the key header when one exists (section 5 step 2), the effective key on
+update is always the supplied key when one was given, otherwise the header value, else the
+`apiKey` value: the written key and the smoke-tested key never differ. (Up to 1.4.0 a non-empty
+header won over a supplied key, which was written only to `bifrost.options.apiKey`.) The same
+effective key decides the `Set your Bifrost virtual key` line of section 7.
 
 Result line format: `smoke <check>: pass` | `smoke <check>: fail <code>` |
 `smoke <check>: skipped <code>`. Checks run and print in the order `azdo`, `bifrost`.

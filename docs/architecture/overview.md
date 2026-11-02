@@ -12,6 +12,7 @@ End-to-end simulated startup harness (test only): ADR-0016.
 User/operator docs structure and the automated docs check: ADR-0017.
 Config cache bound to the settings that produced it: ADR-0018.
 Installer smoke-test network pre-flight (Azure IP firewall / VPN): ADR-0019.
+Installer key location follows the `x-bf-vk` header the smoke test reads: ADR-0023 (amends ADR-0022).
 Contracts: `contracts/plugin-interface.md`, `contracts/validator-cli.md`,
 `contracts/personal-config-template.md`, `contracts/installer-cli.md`,
 `contracts/shared-config-repo.md`, `contracts/e2e-harness.md` (test only),
@@ -87,6 +88,8 @@ bash installer/install.sh --org O --project P --repo R [--path --branch --mode] 
     read-only phase: validate records + values, configDir = $XDG_CONFIG_HOME/kilo | homedir/.config/kilo,
       lstat targets, read plugin + template + existing kilo.jsonc (<= 1 MiB, parseJsonc, root object),
       plan: fresh = template token replacement | update = personal-config-edit rules; deep-equal -> no-op
+        (update key location, ADR-0023: non-empty azurefoundry headers["x-bf-vk"] -> key replaces it,
+         no provider.bifrost block added; else provider.bifrost.options.apiKey key | kept | placeholder)
     write phase: mkdir 0700, re-lstat configDir/azdo/plugin/kilo.jsonc (fs-guard.ts; symlink -> exit 3),
       chmod only via O_NOFOLLOW fd + fchmod (T-019),
       copy plugin -> configDir/azdo/azdo-remote-config.ts (only if bytes differ),

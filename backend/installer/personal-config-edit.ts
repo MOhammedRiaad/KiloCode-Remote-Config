@@ -159,7 +159,24 @@ function childObject(parent: Json, key: string): Json | undefined {
   return isPlainObject(value) ? value : undefined;
 }
 
+// The azurefoundry headers object that already carries the Bifrost virtual key (x-bf-vk), if any.
+function keyHeaders(root: Json): Json | undefined {
+  const provider = root["provider"];
+  const azure = isPlainObject(provider) ? provider["azurefoundry"] : undefined;
+  const options = isPlainObject(azure) ? azure["options"] : undefined;
+  const headers = isPlainObject(options) ? options["headers"] : undefined;
+  if (!isPlainObject(headers)) return undefined;
+  const key = headers["x-bf-vk"];
+  return typeof key === "string" && key !== "" ? headers : undefined;
+}
+
 function applyKey(root: Json, apiKey: string | undefined): UpdateErrorCode | undefined {
+  // The key already lives in the azurefoundry x-bf-vk header: no redundant provider.bifrost block; a supplied key replaces it.
+  const headers = keyHeaders(root);
+  if (headers !== undefined) {
+    if (apiKey !== undefined) headers["x-bf-vk"] = apiKey;
+    return undefined;
+  }
   const provider = childObject(root, "provider");
   if (provider === undefined) return "provider-not-object";
   const bifrost = childObject(provider, "bifrost");
