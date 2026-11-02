@@ -1394,7 +1394,7 @@
       "title": "Plugin JSDoc trim pass and wording fixes (comment-only)",
       "type": "tech-debt",
       "priority": 1,
-      "status": "todo",
+      "status": "done",
       "scope": {
         "backend": true,
         "frontend": false
@@ -1402,15 +1402,19 @@
       "depends_on": [
         "T-037"
       ],
-      "description": "Cycle 0026 review/security follow-ups, COMMENT-ONLY in backend/plugin/azdo-remote-config.ts (zero behaviour change, re-proved with compare-plugin-shape vs v0.16.2): (1) trim duplicated JSDoc boilerplate - `Codes: none.` appears 16 times, the full fetch error-code list is repeated in several functions, `@param deadline - the operation-wide deadline` 6 times; reference the contract section instead; wrap the four rework-1 run-on lines (133-217 chars) at ~110; target roughly 80-120 fewer lines without losing any required element (purpose, Invariants:, @see on all 35 hot paths); (2) wording: line ~394 'The only phase that throws' contradicts the mergeConfig JSDoc; ~515 'a target whose getter throws' propagates the getter's own error, not a TypeError; ~1223 readCappedBody 1 MiB cap claim assumes an honest byteLength; ~490 and ~1889 'unchanged or fully merged' holds for ordinary objects only (rollback best-effort); ~1889 'no config value in any log' vs sanitised placeholder names of L-UNRESOLVED. The user's original concern was file size (1456 -> 1939 lines).",
+      "description": "Cycle 0026 review/security follow-ups, COMMENT-ONLY in backend/plugin/azdo-remote-config.ts (zero behaviour change, re-proved with compare-plugin-shape vs v0.16.2). The ONLY file that may change under backend/ is backend/plugin/azdo-remote-config.ts; no test, tool, contract or ADR edits (T-039 owns the tool/ADR follow-ups). (1) TRIM: delete every `Codes: none.` line (16; source-layout.test.ts does NOT check Codes: lines, it only requires a purpose sentence ending in '.', an `Invariants:` line and an `@see ` line per hot path); collapse the qualified `Codes: none (...)` / `Codes: none directly...` lines into the Invariants/purpose text or drop them; replace repeated fetch error-code enumerations (handleResponse, readCappedBody, runFetch, fetchRemoteConfig, resolveSettings-related blocks) with a reference such as `Codes: see contracts/plugin-interface.md section 2e.` keeping the full list in at most ONE JSDoc block; shorten the 6 `@param deadline - the operation-wide deadline` lines to a minimal form or drop them; wrap every comment line longer than 110 chars (24 today, incl. the rework-1 run-ons of 133-217 chars). Must keep verbatim the mutation anchors used by source-layout.test.ts: the line ` * Invariants: pure and never throws.` (codeForInterrupted), the text ` * @see ADR-0007 section 6\\n */\\nfunction basicHeader`, `@param text - the JSONC`, `Parses JSON with comments and trailing commas.`, a JSDoc block directly before `async function runFetch`, `function noop(): void {}`, the TOC and the 15 `// ==== N. Title ====` banners. (2) WORDING (six fixes): (a) line ~394 Phase 1 comment 'The only phase that throws' contradicts the mergeConfig JSDoc (the write phase can also throw when the target rejects a write); (b) ~515 'as does a target whose getter throws' - a throwing getter propagates the getter's own error, not a TypeError; (c) ~1223 readCappedBody 'nothing beyond the 1 MiB cap is accumulated' assumes each chunk reports an honest byteLength; (d) ~490 applyShared 'a failed merge leaves the config unchanged' holds for ordinary objects only (rollback is best-effort); (e) ~1889 runConfigHook 'every failure leaves the config unchanged or fully merged' - same ordinary-objects/best-effort qualifier; (f) ~1889 'no ... config value appears in any log' - qualify that L-UNRESOLVED logs sanitised placeholder NAMES (never values). The user's original concern was file size (1456 -> 1939 lines in v0.16.2); target at least 100 fewer lines.",
       "acceptance_criteria": [
-        "Given the plugin after the trim, When compare-plugin-shape runs against v0.16.2, Then it reports PASS with identical declarations, exports, __internals keys and statements.",
-        "Given source-layout.test.ts, When it runs, Then it still passes unchanged (35 hot paths keep purpose, Invariants: and @see).",
-        "Given the six wording findings, When the JSDoc is read, Then none of the overstated claims remains.",
-        "Given the file, When line-counted, Then it is at least 80 lines shorter than 1939."
+        "Given the trimmed plugin, When `node tools/compare-plugin-shape.mjs --base-ref v0.16.2` runs from backend/, Then it prints PASS (not SKIP) and exits 0 with identical declarations, exports, __internals keys and statement multiset.",
+        "Given the branch, When `git diff --name-only v0.16.2 -- backend` runs, Then it lists only backend/plugin/azdo-remote-config.ts, and `git diff --exit-code v0.16.2 -- backend/test backend/tools docs/architecture` exits 0 (source-layout.test.ts unchanged).",
+        "Given the unchanged source-layout.test.ts, When the backend test suite and `bash scripts/ci.sh` run, Then all tests pass (35 hot paths keep a purpose sentence, an Invariants: line and an @see line; 15 banners and TOC intact).",
+        "Given the trimmed file, When `wc -l backend/plugin/azdo-remote-config.ts` runs, Then it reports at most 1839 lines (at least 100 fewer than 1939), and no comment line (starting with optional whitespace then `*`, `/**` or `//`) is longer than 110 characters.",
+        "Given the trimmed file, When searched, Then `^ \\* Codes: none` matches 0 lines, the full fetch error-code list (bad-response, too-large, network, timeout, network-blocked) appears in at most one JSDoc block, and every other fetch-path block that mentions codes references `contracts/plugin-interface.md section 2e`.",
+        "Given the Phase 1 comment and the mergeConfig JSDoc, When searched, Then the phrase 'The only phase that throws' matches 0 lines and the mergeConfig Invariants no longer say a throwing getter gives a TypeError (it states the getter's own error propagates).",
+        "Given the readCappedBody, applyShared and runConfigHook JSDoc blocks, When read, Then the readCappedBody 1 MiB cap sentence mentions byteLength as the trusted chunk size, the applyShared and runConfigHook rollback claims say 'ordinary objects' and 'best-effort', and the runConfigHook log claim mentions L-UNRESOLVED placeholder names (no values)."
       ],
+      "notes": "Cycle 0027 PO: selected (priority 1, USER-sourced size concern). Tightened: measurable size (<= 1839 lines), 110-char cap on comment lines only (18 CODE lines already exceed 110 and cannot change in a comment-only item), Codes: lines confirmed NOT required by source-layout.test.ts so `Codes: none.` lines are deleted, test-anchor strings listed so the layout test passes unchanged. Comment-only, one file, one cycle.",
       "source": "user",
-      "cycle_done": null
+      "cycle_done": 27
     },
     {
       "id": "T-039",
@@ -1429,6 +1433,44 @@
       "acceptance_criteria": [
         "Given base and head differing only by `a + ++b` vs `a++ + b`, When the tool runs, Then it reports FAIL.",
         "Given a mistyped --base-ref, When the tool runs, Then it exits 2, not SKIP/0."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-040",
+      "title": "Installer: align written key with the key the smoke test checks",
+      "type": "bug",
+      "priority": 2,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [],
+      "description": "Cycle 0027 review/security/architect follow-up. On update, a non-empty provider.azurefoundry.options.headers[\"x-bf-vk\"] wins over a freshly supplied KILO_BIFROST_KEY (which is still written to provider.bifrost.options.apiKey), so the smoke test can check a different key than the one just written and the \"set KILO_BIFROST_KEY and re-run\" hint can mislead. Also the installer still writes the provider.bifrost.apiKey placeholder when creating/updating config. Decide which key wins (or write the supplied key into the x-bf-vk header), stop writing the redundant placeholder, update personal-config template, hints and ADR-0022/installer-cli contract.",
+      "acceptance_criteria": [
+        "Given an existing config whose azurefoundry x-bf-vk header differs from a supplied KILO_BIFROST_KEY, When the installer runs, Then the key written and the key smoke-tested are the same key.",
+        "Given an existing azurefoundry-shaped config, When the installer runs, Then no bifrost.apiKey placeholder is added."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-041",
+      "title": "Tests for ADR-0022 smoke edge rules",
+      "type": "test",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [],
+      "description": "Cycle 0027 review follow-up: smoke.test.ts has no test that a non-string provider.bifrost baseURL must NOT fall back to azurefoundry (stays no-base-url), nor that an empty or non-string azurefoundry x-bf-vk header falls back to bifrost.apiKey in storedApiKey. Optional hardening: storedApiKey reads own properties only (Object.hasOwn); e2e-harness.md section 3 heading still says \"version for 1.0.0\".",
+      "acceptance_criteria": [
+        "Given bifrost.baseURL = 123 and an azurefoundry baseURL, When the smoke runs, Then it reports fail no-base-url.",
+        "Given an empty x-bf-vk header and a bifrost apiKey, When storedApiKey runs, Then it returns the apiKey."
       ],
       "source": "review",
       "cycle_done": null

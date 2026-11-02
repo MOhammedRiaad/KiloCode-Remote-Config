@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { backendRoot, expectedItemsUrl, readNetLog, requests, snapshot } from "./helpers.ts";
 import type { FakeScenario } from "./helpers.ts";
-import { helperPath, psTest, readLog, runInstallPs, stubAzPs, withPsSandbox } from "./ps-helpers.ts";
+import { isAllowedNodeArgv, psTest, readLog, runInstallPs, stubAzPs, withPsSandbox } from "./ps-helpers.ts";
 import type { PsRunResult, PsSandbox } from "./ps-helpers.ts";
 
 const KEY = "sk-bf-AbCdEf1234567890";
@@ -34,7 +34,7 @@ function assertClean(sb: PsSandbox, r: PsRunResult): void {
   }
   assert.doesNotMatch(combined, /\n\s+at /);
   for (const line of readLog(sb, "node-argv.log")) {
-    assert.ok(line === "-p process.versions.node" || line.toLowerCase() === `"${helperPath}"`.toLowerCase(), line);
+    assert.ok(isAllowedNodeArgv(line), line);
   }
 }
 
@@ -57,7 +57,7 @@ psTest(
       assert.equal(reqs[2]!.url, "https://bifrost.yourcompany.internal/");
       assert.equal(reqs[2]!.headers["authorization"], undefined);
       assert.equal(reqs[3]!.url, "https://bifrost.yourcompany.internal/v1/models");
-      assert.equal(reqs[3]!.headers["authorization"], `Bearer ${KEY}`);
+      assert.equal(reqs[3]!.headers["x-bf-vk"], KEY);
       assertClean(sb, r);
     });
   },
@@ -135,7 +135,7 @@ psTest("AC-7 the az token path never leaks the token", (host) => {
     const reqs = requests(sb);
     assert.equal(reqs.length, 4);
     assert.equal(reqs[1]!.headers["authorization"], `Bearer ${AZ_TOKEN}`);
-    assert.equal(reqs[3]!.headers["authorization"], `Bearer ${KEY}`);
+    assert.equal(reqs[3]!.headers["x-bf-vk"], KEY);
     assert.equal(JSON.stringify([reqs[0], reqs[2], reqs[3]]).includes(AZ_TOKEN), false);
     assertClean(sb, r);
   });

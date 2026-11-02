@@ -1,9 +1,8 @@
 // azdo-remote-config: Kilo plugin that applies a remote Azure DevOps config.
-// Single file, zero runtime dependencies (FR-11). See docs/architecture/ADR-0001-tech-stack.md
-// and ADR-0002-plugin-module-shape.md, ADR-0003 .. ADR-0021. The config hook (runConfigHook) resolves
-// the settings, fetches the shared config from Azure DevOps, caches it bound to the settings that produced
-// it (ADR-0018), falls back to that cache only when the settings match, merges it into the Kilo config
-// transactionally and logs fixed messages. It never throws or rejects.
+// Single file, zero runtime dependencies (FR-11). See docs/architecture/ADR-0001-tech-stack.md and
+// ADR-0002 .. ADR-0021. The config hook (runConfigHook) resolves the settings, fetches the shared config,
+// caches it bound to those settings (ADR-0018), falls back to that cache only when the settings match,
+// merges it transactionally and logs fixed messages. It never throws or rejects.
 // Types not marked export are module-local on purpose (ADR-0002).
 //
 // Table of contents (one numbered section banner per entry, same numbers, titles and order):
@@ -140,7 +139,7 @@ function stringEnd(text: string, start: number): number {
   return -1;
 }
 
-/** Index just past the comment starting at `start`; -1 if a block comment is unterminated; `start` if none. */
+/** Index just past the comment at `start`; -1 if a block comment is unterminated; `start` if none. */
 function commentEnd(text: string, start: number): number {
   if (text[start] !== "/") return start;
   if (text[start + 1] === "/") {
@@ -157,7 +156,7 @@ function commentEnd(text: string, start: number): number {
   return start;
 }
 
-/** True when the next significant character from `from` (skipping whitespace and comments) closes a container. */
+/** True when the first non-space, non-comment character from `from` closes a container. */
 function closesContainer(text: string, from: number): boolean {
   let i = from;
   while (i < text.length) {
@@ -182,11 +181,8 @@ function blank(text: string, start: number, end: number): string {
 
 /**
  * Parses JSON with comments and trailing commas.
- *
- * @param text - the JSONC text; a leading byte order mark is allowed and line and block comments are
- *   blanked out.
+ * @param text - the JSONC text; a leading byte order mark is allowed and comments are blanked out.
  * @returns the parsed JSON value.
- * Codes: none; failures are thrown, not returned.
  * Invariants: THROWS instead of returning an error: a TypeError for a non-string input and an Error with a
  *   message starting Invalid JSONC for an unterminated string, an unterminated block comment or malformed
  *   JSON. Errors never contain input text, only fixed wording and 1-based line and column numbers (see
@@ -248,8 +244,7 @@ const MAX_PLACEHOLDER_DEPTH = 64;
 const MAX_PLACEHOLDER_FILE_BYTES = 1024 * 1024;
 const DROP: unique symbol = Symbol("drop");
 
-// Default reader: regular files up to the cap only. statSync runs before any open, so a FIFO or
-// device is rejected without blocking. Callers discard the error.
+// Default reader: regular files up to the cap only (statSync first, so a FIFO or device never blocks).
 function readGuardedFile(path: string): string {
   const st = statSync(path);
   if (!st.isFile() || st.size > MAX_PLACEHOLDER_FILE_BYTES) throw new Error("unreadable");
@@ -262,8 +257,7 @@ function isUncLike(path: string): boolean {
   return isSlash(path[0]) && isSlash(path[1]);
 }
 
-// Resolves one file path to its trimmed content, or undefined. Errors are discarded on purpose:
-// they may carry file contents or paths.
+// Resolves one path to its trimmed content, or undefined; errors are discarded as they may carry paths.
 function readPlaceholderFile(path: string, deps: Required<PlaceholderDeps>): string | undefined {
   try {
     if (isUncLike(path)) return undefined;
@@ -312,19 +306,15 @@ function resolveContainer(
 
 /**
  * Resolves {env:NAME} and {file:PATH} placeholders in every string of a parsed config.
- *
  * @param input - any parsed JSON value; it is not mutated.
- * @param deps - optional seams env, homedir and readFile (defaults: process.env, os.homedir and a guarded
- *   file reader).
- * @returns the new value and the list of unresolved placeholders as kind:name entries, each once, in
- *   first-seen order.
- * Codes: none.
- * Invariants: single pass that never re-scans resolved values; a string that is exactly one unresolved
- *   placeholder is dropped (its key or array item is omitted) while an unresolved placeholder inside a
- *   longer string becomes empty; env names are own properties and empty values count as unresolved; file
- *   paths must be absolute or start with ~, UNC-like paths are rejected, only regular files up to 1 MiB are
- *   read, content is trimmed and read errors are discarded. For parsed JSON input it throws only when nested 64 levels deep or more;
- *   hostile objects (throwing getters, proxies) in the input or in an injected env can also make it throw.
+ * @param deps - optional env, homedir, readFile seams; the default readFile is the guarded reader.
+ * @returns the new value and the unresolved placeholders as kind:name entries, each once, in order.
+ * Invariants: single pass, resolved values are never re-scanned; a string that is exactly one unresolved
+ *   placeholder is dropped (key or array item omitted), one inside a longer string becomes empty; env names
+ *   are own properties and empty values are unresolved; file paths must be absolute or start with ~,
+ *   UNC-like paths are rejected, the default reader reads only regular files up to 1 MiB (trimmed, errors
+ *   discarded). For parsed JSON it throws only at nesting depth 64 or more; hostile objects (throwing
+ *   getters, proxies) in the input or an injected env can also make it throw.
  * @see ADR-0004
  * @see contracts/plugin-interface.md section 2b
  */
@@ -391,7 +381,7 @@ function hasOwn(target: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(target, key);
 }
 
-// Phase 1: deep clone of the shared value without secrets or prototype keys. The only phase that throws.
+// Phase 1: deep clone of the shared value without secrets or prototype keys; throws on over-deep input.
 function sanitizeNode(node: unknown, depth: number, topLevel: boolean): unknown {
   if (node === null || typeof node === "string" || typeof node === "number" || typeof node === "boolean") {
     return node;
@@ -430,8 +420,7 @@ function containsApiKey(value: unknown, depth: number): boolean {
   return Object.keys(value).some((key) => isApiKeyName(key) || containsApiKey(value[key], depth + 1));
 }
 
-// Phase 2: merge the sanitized tree into the target; keys of the target not in the tree are untouched.
-// An optional journal records the previous descriptor of every key before it is written.
+// Phase 2: merge the sanitized tree into the target; an optional journal records each key's old descriptor.
 interface JournalEntry {
   target: object;
   key: string;
@@ -477,18 +466,15 @@ function rollback(journal: readonly JournalEntry[]): void {
 
 /**
  * Merges the shared config into the Kilo config as one transaction.
- *
  * @param target - the Kilo config; changed in place.
  * @param shared - the shared config, after placeholder resolution.
  * @param mode - the string enforce lets shared values win; any other value keeps local values.
- * @returns true when fully merged; false when an input is not a plain object or the merge threw and was
- *   rolled back.
- * Codes: none.
- * Invariants: does not throw for ordinary objects (the merge runs inside try and the rollback steps are
- *   each guarded), but the two plain-object checks run before the try, so a hostile Proxy input (a
- *   throwing getPrototypeOf trap or a revoked proxy) can throw; every written key is journaled with its previous descriptor and restored in
- *   reverse order on failure, so a failed merge leaves the config unchanged; the merge rules are those of
- *   mergeConfig.
+ * @returns true when fully merged; false when an input is not a plain object or the merge was rolled back.
+ * Invariants: does not throw for ordinary objects (the merge runs inside try, each rollback step is guarded),
+ *   but the plain-object checks run before the try, so a hostile Proxy (throwing getPrototypeOf trap,
+ *   revoked proxy) can throw; every written key is journaled with its previous descriptor and restored in
+ *   reverse order on failure, so for ordinary objects a failed merge leaves the config unchanged (rollback
+ *   is best-effort); the merge rules are those of mergeConfig.
  * @see ADR-0008 section 6
  * @see ADR-0005
  */
@@ -506,16 +492,14 @@ function applyShared(target: unknown, shared: unknown, mode: unknown): boolean {
 
 /**
  * Merges the shared config into the Kilo config in place.
- *
  * @param target - the Kilo config; changed in place.
  * @param shared - the shared config to merge in.
  * @param mode - the string enforce lets shared values win; any other value keeps local values.
- * @returns nothing.
- * Codes: none.
- * Invariants: non-object inputs are a no-op and it THROWS for over-deep or cyclic shared input and also when the target rejects a write (a frozen target gives a TypeError, as does a target whose getter throws); it is
- *   not transactional (applyShared adds rollback); apiKey-named keys, the keys __proto__, constructor and
- *   prototype, and the top-level keys $schema and plugin are never copied from shared; in enforce mode a
- *   local value that holds an apiKey is never replaced.
+ * Invariants: non-object inputs are a no-op. It THROWS for over-deep or cyclic shared input and when the
+ *   target rejects a write (a frozen target gives a TypeError) or has a getter that throws (that getter's
+ *   own error propagates, not a TypeError). Not transactional (applyShared adds rollback); apiKey-named
+ *   keys, __proto__, constructor, prototype and the top-level keys $schema and plugin are never copied
+ *   from shared; in enforce mode a local value that holds an apiKey is never replaced.
  * @see ADR-0005
  * @see contracts/plugin-interface.md section 2c
  */
@@ -696,15 +680,12 @@ function selectEnv(deps: unknown): unknown {
 
 /**
  * Resolves the plugin settings: option first, then KILO_AZDO_ environment variable, then default.
- *
- * @param options - the raw plugin options; a value that is present but not an object is ignored with a
- *   warning.
+ * @param options - the raw plugin options; a present value that is not an object is ignored with a warning.
  * @param deps - optional seams; the own property env replaces process.env.
- * @returns settings (org, project, repo, path, branch, mode, timeoutMs and the own non-enumerable pat),
- *   missing (a subset of org, project, repo in that order) and warnings (fixed texts).
- * Codes: none.
+ * @returns settings (including the own non-enumerable pat), missing (a subset of org, project, repo) and
+ *   warnings (fixed texts).
  * Invariants: never throws and never mutates its inputs; an invalid value warns with a fixed text and falls
- *   through to the next source; warnings and missing hold fixed texts only; the PAT is reachable solely
+ *   through to the next source; warnings and missing hold fixed texts only; the PAT is reachable only
  *   through settings.pat.
  * @see ADR-0006
  * @see ADR-0009 section 1
@@ -809,12 +790,9 @@ function readTimeoutMs(settings: unknown): number {
 
 /**
  * Builds the Items API URL for a validated target.
- *
  * @param target - the validated org, project, repo, path and branch.
  * @returns https://dev.azure.com/<org>/<project>/_apis/git/repositories/<repo>/items with the query path,
- *   versionDescriptor.version, versionDescriptor.versionType=branch, includeContent=true and
- *   api-version=7.1.
- * Codes: none.
+ *   versionDescriptor.version and .versionType=branch, includeContent=true and api-version=7.1.
  * Invariants: pure; the scheme and host are the fixed AZDO_HOST_PREFIX and every variable part goes through
  *   encodeURIComponent, which throws only for lone surrogates that readTarget has already rejected.
  * @see ADR-0007 section 5
@@ -856,15 +834,13 @@ function resolveClock(deps: unknown): Clock {
 
 /**
  * Starts the one timer and AbortController that bound the whole fetch operation.
- *
  * @param clock - the timer functions (set, clear), real or injected.
  * @param controller - the AbortController aborted when the deadline fires.
  * @param timeoutMs - the deadline in milliseconds.
  * @returns the deadline (race and timedOut) and the timer handle that the caller must clear.
- * Codes: none (callers map the deadline to timeout).
  * Invariants: one controller and one timer for the whole operation; on expiry the controller is aborted
- *   (guarded) and the deadline outcome resolves; every raced operation is guarded against synchronous
- *   throws and later rejections, which become a failed outcome.
+ *   (guarded) and the deadline outcome resolves; raced operations are guarded against throws and
+ *   rejections, which become a failed outcome.
  * @see ADR-0007 section 8
  * @see ADR-0020
  */
@@ -896,11 +872,8 @@ function startDeadline(
 
 /**
  * Chooses the error code for an operation that did not produce a value: the deadline wins over any failure.
- *
  * @param outcome - the raced outcome.
- * @param deadline - the operation-wide deadline.
- * @param failed - the code to report when the deadline did not fire (network, or network-unreachable for
- *   the request).
+ * @param failed - the code to report when the deadline did not fire (network or network-unreachable).
  * @returns timeout when the outcome is a deadline or the deadline has fired, else the failed code.
  * Codes: timeout, network, network-unreachable.
  * Invariants: pure and never throws.
@@ -957,11 +930,9 @@ function usablePat(candidate: unknown): string | undefined {
 
 /**
  * Finds the first usable personal access token.
- *
  * @param settings - the resolved settings; its own pat is read first.
  * @param deps - the seams; the env member (or process.env) is read only when needed.
  * @returns the trimmed PAT, or undefined.
- * Codes: none.
  * Invariants: order is settings.pat, then AZDO_PAT, then AZURE_DEVOPS_EXT_PAT, and later sources are read
  *   only when earlier ones are unusable; a usable PAT is non-empty visible ASCII after trimming; never
  *   throws and never logs the value.
@@ -976,12 +947,9 @@ function findPat(settings: unknown, deps: unknown): string | undefined {
 
 /**
  * Encodes a PAT as an HTTP Basic Authorization header value.
- *
  * @param pat - a usable PAT from findPat.
  * @returns Basic <base64>, where the base64 text encodes an empty user name, a colon and the PAT as UTF-8.
- * Codes: none.
- * Invariants: pure and never throws; the result is used only as the Authorization header and is never
- *   logged.
+ * Invariants: pure and never throws; the result is used only as the Authorization header, never logged.
  * @see ADR-0007 section 6
  */
 function basicHeader(pat: string): string {
@@ -1016,16 +984,13 @@ function bearerFrom(result: unknown): string | undefined {
 
 /**
  * Obtains an Azure DevOps bearer token from the az CLI when no PAT is available.
- *
  * @param deps - the seams; the runAz member replaces the real runner.
- * @param deadline - the operation-wide deadline; the runner call is raced against it.
  * @param timeoutMs - the az child-process timeout in milliseconds.
  * @returns a promise of Bearer <token>, or undefined when the runner is unusable, fails, times out, exits
- *   non-zero or prints an invalid token.
- * Codes: none directly (runFetch maps undefined to auth-unavailable).
- * Invariants: never throws or rejects (the runner is raced through the deadline, which guards synchronous
- *   throws and rejections); the command arguments are the fixed AZ_TOKEN_ARGS; the token must be at most
- *   16384 token68 characters and is never logged.
+ *   non-zero or prints an invalid token; runFetch maps undefined to auth-unavailable.
+ * Invariants: never throws or rejects (the runner is raced through the deadline, which guards throws and
+ *   rejections); the arguments are the fixed AZ_TOKEN_ARGS; the token is at most 16384 token68 characters
+ *   and is never logged.
  * @see ADR-0007 section 7
  */
 async function azAuthorization(deps: unknown, deadline: Deadline, timeoutMs: number): Promise<string | undefined> {
@@ -1037,14 +1002,10 @@ async function azAuthorization(deps: unknown, deadline: Deadline, timeoutMs: num
 
 /**
  * Picks the Authorization value for the one Items API request: a PAT as Basic, else an az bearer token.
- *
  * @param settings - the resolved settings; only its own non-enumerable pat is read here.
  * @param deps - the injected seams (env, runAz); absent members fall back to the real ones.
- * @param deadline - the operation-wide deadline that also bounds the az call.
  * @param timeoutMs - the az child-process timeout in milliseconds.
- * @returns the header value, or undefined when no credential is usable (runFetch maps that to
- *   auth-unavailable).
- * Codes: none directly.
+ * @returns the header value, or undefined when no credential is usable (runFetch: auth-unavailable).
  * Invariants: a usable PAT always wins and az is run only when there is none; the PAT or token never
  *   reaches a log, error or result code (AC-9).
  * @see ADR-0007 section 6
@@ -1066,8 +1027,7 @@ function toAzResult(error: { code?: unknown } | null, stdout: unknown): AzRunRes
   return { exitCode: typeof code === "number" ? code : null, stdout: "" };
 }
 
-// Windows: az is a .cmd batch file, which Node will not spawn without a shell, so cmd.exe is run
-// explicitly with a command line made only of module constants.
+// Windows: az is a .cmd file that Node will not spawn without a shell, so cmd.exe runs a constant line.
 function windowsCommandInterpreter(): string {
   const comspec = readOwn(process.env, "ComSpec");
   return typeof comspec === "string" && isAbsolute(comspec) ? comspec : "cmd.exe";
@@ -1075,16 +1035,13 @@ function windowsCommandInterpreter(): string {
 
 /**
  * Real az runner: runs the fixed az account get-access-token command and reports its exit code and stdout.
- *
  * @param args - the fixed AZ_TOKEN_ARGS (used on non-Windows platforms).
  * @param options - timeoutMs, the child-process timeout in milliseconds.
- * @returns a promise of exitCode and stdout; on any error the exit code is the numeric error code or null
- *   and stdout is empty.
- * Codes: none.
+ * @returns a promise of exitCode and stdout (on any error: the numeric error code or null, and no stdout).
  * Invariants: execFile is used without a shell option; on Windows cmd.exe is run explicitly with the
  *   constant AZ_COMMAND_LINE; cwd is the home directory so an az executable planted in a project directory
- *   is never picked up; output is capped at 64 KiB. The caller races the promise against the deadline. Not
- *   covered by automated tests.
+ *   is never picked up; output is capped at 64 KiB; the caller races it against the deadline. Not covered
+ *   by automated tests.
  * @see ADR-0007 section 7
  */
 function defaultRunAz(args: readonly string[], options: { timeoutMs: number }): Promise<AzRunResult> {
@@ -1130,12 +1087,9 @@ function declaredTooLarge(response: unknown): boolean {
 
 /**
  * Reads the Content-Type header of a response safely.
- *
  * @param response - the untyped fetch response.
  * @returns the header value, or undefined when it is absent or not a primitive string.
- * Codes: none.
- * Invariants: never throws: any throw (header getter, headers.get) counts as absent; only a primitive
- *   string is returned.
+ * Invariants: never throws: any throw (header getter, headers.get) counts as absent.
  * @see ADR-0020
  */
 function readContentType(response: unknown): string | undefined {
@@ -1147,11 +1101,8 @@ function readContentType(response: unknown): string | undefined {
 
 /**
  * Tells whether a Content-Type value is a JSON media type.
- *
  * @param raw - the Content-Type header value, or undefined.
- * @returns true for application/json or type/subtype+json (one slash, non-empty subtype prefix); parameters
- *   after a semicolon are ignored and the comparison is case-insensitive.
- * Codes: none.
+ * @returns true for application/json or type/subtype+json; parameters are ignored and case does not matter.
  * Invariants: pure and never throws; an absent value is not JSON.
  * @see ADR-0020
  */
@@ -1167,10 +1118,8 @@ function isJsonMediaType(raw: string | undefined): boolean {
 
 /**
  * Maps a non-2xx status to a fixed error code.
- *
  * @param status - the HTTP status, an integer from 100 to 599 outside the 2xx range.
  * @param response - the response, read only for its Content-Type header.
- * @returns network-blocked, or http-<status>.
  * Codes: network-blocked, http-NNN.
  * Invariants: 407, 470 (Azure Firewall deny, community-reported) and a 403 that is not JSON mean a network
  *   intermediary refused the request and give network-blocked (amendment A1 for 470); every other status
@@ -1211,17 +1160,15 @@ function joinChunks(chunks: Uint8Array[], total: number): Uint8Array {
 
 /**
  * Streams the response body with a running byte total and a cap, racing every read against the deadline.
- *
  * @param response - the untyped fetch response.
- * @param deadline - the operation-wide deadline.
  * @returns a promise of the body bytes, or a fixed failure code string.
- * Codes: bad-response (no usable reader, a chunk that is not bytes, more than 1024 consecutive empty
- *   chunks), too-large (more than 1 MiB), network (a read failed), timeout.
- * Invariants: does not throw for the chunks a real fetch produces; the reads of done and value and the
+ * Codes: bad-response (no usable reader, a non-bytes chunk, over 1024 consecutive empty chunks) and
+ *   too-large (over 1 MiB); the rest: contracts/plugin-interface.md section 2e.
+ * Invariants: does not throw for the chunks a real fetch produces; the done and value reads and the
  *   reader.read and reader.cancel calls are guarded, but the instanceof check and the byteLength read on a
- *   chunk are not, so a hostile injected chunk can throw and fetchRemoteConfig then maps that to network;
- *   the reader is cancelled on every early exit and a failing cancel is ignored; nothing beyond the 1 MiB
- *   cap is accumulated.
+ *   chunk are not, so a hostile chunk can throw and fetchRemoteConfig maps that to network; the reader is
+ *   cancelled on every early exit (a failing cancel is ignored); the 1 MiB cap is checked on the running
+ *   total of chunk.byteLength, trusted as the chunk size, so no chunk that crosses the cap is accumulated.
  * @see ADR-0007 section 10
  */
 async function readCappedBody(response: unknown, deadline: Deadline): Promise<Uint8Array | FetchErrorCode> {
@@ -1255,10 +1202,7 @@ async function readCappedBody(response: unknown, deadline: Deadline): Promise<Ui
 
 /**
  * Decodes the JSON response body and returns its content text.
- *
- * @param bytes - the complete body bytes.
  * @returns ok with the string content property, or not ok with bad-response.
- * Codes: bad-response.
  * Invariants: never throws; the body must be strict UTF-8 and a JSON object with an own string content
  *   property; the text is returned unparsed (parsing is the job of validateShared).
  * @see ADR-0007 section 10
@@ -1273,17 +1217,13 @@ function extractContent(bytes: Uint8Array): FetchResult {
 
 /**
  * Classifies the HTTP response and extracts the content text from a successful one.
- *
  * @param response - the untyped result of fetch; every property read is guarded.
- * @param deadline - the operation-wide deadline for the body reads.
  * @returns a promise of ok with the string content property of the JSON body, or not ok with a fixed code.
- * Codes: bad-response, too-large, network, timeout, network-blocked, and http-NNN for the other non-2xx
- *   statuses.
+ * Codes: see contracts/plugin-interface.md section 2e.
  * Invariants: order is status check, non-2xx classification (body discarded unread), declared
  *   content-length against 1 MiB, then the capped stream read; the body is cancelled on every early exit
- *   and a failing cancel never changes the result; the reads of status, headers and body.getReader and
- *   cancel are guarded, but a throw from a hostile chunk passes up to fetchRemoteConfig, which maps it to
- *   network.
+ *   and a failing cancel never changes the result; property reads are guarded, but a throw from a hostile
+ *   chunk passes up to fetchRemoteConfig, which maps it to network.
  * @see ADR-0007 section 10
  * @see ADR-0020
  */
@@ -1310,18 +1250,14 @@ async function handleResponse(response: unknown, deadline: Deadline): Promise<Fe
 
 /**
  * Sends the one GET request with the fixed headers and hands the response to handleResponse.
- *
  * @param url - the Items API URL from buildItemsUrl.
  * @param fetchFn - the fetch function (global or injected).
  * @param authorization - the Authorization header value.
  * @param controller - the AbortController whose signal is passed to fetch.
- * @param deadline - the operation-wide deadline.
- * @returns a promise of the FetchResult.
- * Codes: network-unreachable (fetch failed), timeout (deadline), plus every code of handleResponse.
- * Invariants: exactly one request; redirect is manual, so a redirect is just a non-success status (never
- *   followed); the headers are Accept, Authorization and X-TFS-FedAuthRedirect only; the call is raced
- *   against the deadline and guarded against synchronous throws; the Authorization value is never logged or
- *   returned.
+ * Codes: see contracts/plugin-interface.md section 2e (network-unreachable when fetch fails).
+ * Invariants: exactly one request; redirect is manual, so a redirect is just a non-success status; the
+ *   headers are Accept, Authorization and X-TFS-FedAuthRedirect only; the call is raced against the
+ *   deadline and guarded against synchronous throws; the Authorization value is never logged or returned.
  * @see ADR-0007 section 5
  * @see ADR-0007 section 9
  */
@@ -1345,13 +1281,9 @@ async function performRequest(
 
 /**
  * Validates the settings, resolves the seams and the credential, and performs the single guarded request.
- *
- * @param settings - the settings object; the target is read through readTarget and the timeout through
- *   readTimeoutMs.
+ * @param settings - the settings object, read through readTarget and readTimeoutMs.
  * @param deps - the seams; a value that is not an object counts as empty.
- * @returns a promise of the FetchResult.
- * Codes: invalid-settings (target fields invalid), network (no usable fetch function), auth-unavailable (no
- *   credential), plus every code of performRequest.
+ * Codes: see contracts/plugin-interface.md section 2e; here: invalid-settings, network, auth-unavailable.
  * Invariants: settings are validated before any dependency is called; one AbortController and one deadline
  *   cover the whole operation and the timer is always cleared (finally). An unexpected throw propagates to
  *   fetchRemoteConfig, which maps it to network.
@@ -1379,11 +1311,8 @@ async function runFetch(settings: unknown, deps: unknown): Promise<FetchResult> 
 
 /**
  * Fetches the shared kilo.jsonc text from Azure DevOps with one authenticated Items API request.
- *
- * @param settings - the resolved settings; only own data properties are read and they are validated before
- *   any dependency is called.
- * @param deps - optional seams (fetch, runAz, env, setTimeout, clearTimeout); absent members fall back to
- *   the real ones.
+ * @param settings - the resolved settings; only own data properties are read, validated before any call.
+ * @param deps - optional seams (fetch, runAz, env, setTimeout, clearTimeout); absent ones use the real ones.
  * @returns a promise of ok with the response content text, unparsed, or not ok with a fixed error code.
  * Codes: invalid-settings, auth-unavailable, timeout, too-large, bad-response, network,
  *   network-unreachable, network-blocked, http-NNN.
@@ -1415,11 +1344,9 @@ function exceedsDepth(node: unknown, depth: number): boolean {
 
 /**
  * Validates fetched or cached text as a shared config (a plain JSONC object).
- *
  * @param text - the untrusted text; anything that is not a string is invalid.
- * @returns ok with the parsed plain object, or not ok with an error code.
- * Codes: invalid-jsonc (not a string or not parseable), invalid-shape (not a plain object, or a container
- *   at level 64 or deeper).
+ * @returns ok with the parsed plain object, or not ok with invalid-jsonc (not a string or not parseable) or
+ *   invalid-shape (not a plain object, or a container at level 64 or deeper).
  * Invariants: never throws; the parse error is discarded so no input text can leak.
  * @see ADR-0008 section 3
  * @see ADR-0009 section 2
@@ -1512,10 +1439,7 @@ function removeTemp(fs: CacheFs, tmp: string | undefined): void {
 
 /**
  * Builds the cache binding from the resolved settings.
- *
- * @param settings - the resolved settings.
  * @returns the five-field binding, or undefined unless org, project, repo, path and branch are all strings.
- * Codes: none.
  * Invariants: pure and never throws; the binding is built field by field (never spread or serialised from
  *   settings) and never holds mode, timeoutMs or the PAT.
  * @see ADR-0018 section 1
@@ -1546,15 +1470,12 @@ function matchesBinding(stored: Record<string, string>, current: CacheBinding): 
 
 /**
  * Validates the cache file text and compares its binding with the current settings.
- *
  * @param text - the cache file content.
  * @param current - the current settings binding.
- * @returns ok with the cached config, or not ok with a fixed code.
- * Codes: cache-invalid, cache-outdated, cache-mismatch.
- * Invariants: never throws; the checks run in order: parse, plain-object root, format marker
+ * @returns ok with the cached config, or not ok with cache-invalid, cache-outdated or cache-mismatch.
+ * Invariants: never throws; fail-closed; the checks run in order: parse, plain-object root, format marker
  *   (cache-outdated), exactly the keys format, binding and config, a binding of exactly five strings, a
- *   plain-object config of bounded depth, and only then the strict string comparison (cache-mismatch);
- *   every failure is fail-closed.
+ *   plain-object config of bounded depth, and only then the strict string comparison (cache-mismatch).
  * @see ADR-0018 section 2
  * @see contracts/plugin-interface.md section 2f-C
  */
@@ -1583,17 +1504,14 @@ function bindingCopy(binding: CacheBinding): CacheBinding {
 
 /**
  * Writes the validated shared config and its binding to the cache file atomically.
- *
  * @param shared - the validated shared config; it is stored sanitised and unresolved.
  * @param binding - the current settings binding.
  * @param homeFn - a function returning the absolute home directory.
  * @param rawFs - an injected file system, or undefined for the real one.
- * @returns ok, or not ok with a fixed code.
- * Codes: cache-unavailable, cache-too-large (more than 2 MiB), cache-write-failed.
+ * @returns ok, or not ok with cache-unavailable, cache-too-large (more than 2 MiB) or cache-write-failed.
  * Invariants: never throws; the file holds the format marker, a binding copied field by field and
  *   sanitizeShared(shared) (no apiKey, PAT, token or resolved placeholder); the directory is created with
- *   mode 0o700, a unique temp file with mode 0o600 and flag wx is renamed over the cache file, and the temp
- *   file is removed on failure.
+ *   mode 0o700, a unique 0o600 temp file (flag wx) is renamed over the cache file and removed on failure.
  * @see ADR-0018 section 4
  * @see contracts/plugin-interface.md section 2f-C
  */
@@ -1625,13 +1543,11 @@ function writeCache(
 
 /**
  * Reads the cached shared config, accepting it only when it is bound to the current settings.
- *
  * @param binding - the current org, project, repo, path and branch from cacheBindingOf.
  * @param homeFn - a function returning the absolute home directory.
  * @param rawFs - an injected file system, or undefined for the real one.
  * @returns ok with the cached config, or not ok with a fixed code.
- * Codes: cache-unavailable, cache-missing, cache-unreadable, cache-invalid, cache-outdated, cache-mismatch
- *   (cache-skipped is produced by the hook, never here).
+ * Codes: cache-unavailable, -missing, -unreadable, -invalid, -outdated and -mismatch; never cache-skipped.
  * Invariants: never throws; fail-closed; the file must be a regular file of at most 2 MiB; shape checks
  *   come before the binding comparison (see checkCacheEnvelope); no path, value or secret is returned.
  * @see ADR-0018 section 3
@@ -1675,7 +1591,6 @@ const MAX_LOGGED_NAME_CHARS = 200;
 
 /**
  * Creates the fire-and-forget logger that wraps the Kilo client.app.log function.
- *
  * @param input - the Kilo plugin input; only client.app.log is read, and it may be missing.
  * @returns a function taking a level and a message; it does nothing when no logger function exists.
  * Logs: none itself; it forwards exactly the message it is given (service azdo-remote-config).
@@ -1708,8 +1623,6 @@ function makeLogger(input: unknown): HookLog {
 
 /**
  * Chooses the fixed hint line for a failure reason.
- *
- * @param reason - the failure reason of the remote step.
  * @returns LOG_HINT_NETWORK, LOG_HINT_CREDENTIALS or undefined.
  * Codes: network-unreachable, network-blocked and timeout give the network hint; http-401, http-403 and
  *   auth-unavailable give the credentials hint; every other reason gives none.
@@ -1728,14 +1641,10 @@ function hintFor(reason: string): string | undefined {
 
 /**
  * Logs the hint for a failure reason, when there is one.
- *
  * @param log - the hook logger.
  * @param reason - the failure reason of the remote step.
- * @returns nothing.
- * Logs: at most one warn line, LOG_HINT_NETWORK or LOG_HINT_CREDENTIALS (L-HINT-NETWORK,
- *   L-HINT-CREDENTIALS).
- * Invariants: never throws; executeHook calls it immediately after the cache-fallback line or the no-cache
- *   line only, never on the success path and never twice.
+ * Logs: at most one warn line, L-HINT-NETWORK or L-HINT-CREDENTIALS.
+ * Invariants: never throws; executeHook calls it once, right after the cache-fallback or no-cache line.
  * @see ADR-0020 section 4
  */
 function logHint(log: HookLog, reason: string): void {
@@ -1783,13 +1692,11 @@ function pickDeps(all: HookDeps, keys: readonly string[]): HookDeps {
 
 /**
  * Fetches the shared config from Azure DevOps and validates its text: the one network step of the hook.
- *
  * @param settings - the resolved settings from resolveSettings.
  * @param deps - the hook seams; only fetch, env, runAz, setTimeout and clearTimeout are passed on.
  * @returns ok with the validated plain-object config, or not ok with a fixed reason string.
- * Codes: from fetchRemoteConfig: invalid-settings, auth-unavailable, timeout, too-large, bad-response,
- *   network, network-unreachable, network-blocked, http-NNN; from validateShared: invalid-jsonc,
- *   invalid-shape.
+ * Codes: those of fetchRemoteConfig (contracts/plugin-interface.md section 2e) and, from validateShared,
+ *   invalid-jsonc and invalid-shape.
  * Invariants: calls fetchRemoteConfig exactly once and never throws, because both collaborators contain
  *   their failures; the reason never holds a value, URL or secret.
  * @see ADR-0008 section 2
@@ -1807,21 +1714,17 @@ async function acquireRemote(settings: unknown, deps: HookDeps): Promise<Acquire
 
 /**
  * Performs the hook flow in order: settings, one fetch, cache write or fallback, merge.
- *
  * @param log - the fire-and-forget logger from makeLogger.
  * @param options - the raw plugin options for resolveSettings.
- * @param config - the Kilo config; when it is not a plain object only LOG_BADCONFIG is logged and nothing
- *   else runs.
+ * @param config - the Kilo config; when it is not a plain object only LOG_BADCONFIG is logged.
  * @param deps - the already filtered hook seams (HookDeps).
- * @returns a promise that resolves after the last log line.
- * Logs: L-BADCONFIG; the resolveSettings warnings (L-SET); L-MISSING and LOG_NO_SETTINGS (L-NONE with
- *   missing-settings and cache-skipped) before any fetch or cache read; L-REMOTE and, on a failed cache
- *   write, L-CACHE-WRITE; on a failed fetch L-CACHE or L-NONE, each followed by the hint from logHint; then
- *   L-UNRESOLVED, and L-APPLIED or LOG_MERGE (L-MERGE).
+ * Logs: L-BADCONFIG; L-SET; L-MISSING and LOG_NO_SETTINGS (L-NONE with missing-settings and cache-skipped)
+ *   before any fetch or cache read; L-REMOTE and, on a failed cache write, L-CACHE-WRITE; on a failed fetch
+ *   L-CACHE or L-NONE with its hint; then L-UNRESOLVED (if any) and L-APPLIED or LOG_MERGE (L-MERGE).
  * Invariants: at most one remote fetch per run; a validated remote config refreshes the cache and is used;
- *   the cache is read only after a failed fetch and is used only when its binding equals the current
- *   settings; placeholders are resolved after the source is chosen and the merge is transactional
- *   (applyShared). It may reject only when a collaborator throws unexpectedly; runConfigHook catches that.
+ *   the cache is read only after a failed fetch and used only when its binding equals the current settings;
+ *   placeholders are resolved after the source is chosen and the merge is transactional (applyShared). It
+ *   may reject only when a collaborator throws unexpectedly; runConfigHook catches that.
  * @see ADR-0008 section 2
  * @see ADR-0018 section 5
  * @see ADR-0020 section 4
@@ -1876,17 +1779,18 @@ async function executeHook(log: HookLog, options: unknown, config: unknown, deps
 
 /**
  * Runs the config hook once per Kilo start: settings, fetch, cache fallback, merge.
- *
  * @param input - the Kilo plugin input; only its optional client.app.log is used, through makeLogger.
  * @param options - the raw plugin options, passed on to resolveSettings.
  * @param config - the Kilo config object; it is changed in place only through applyShared.
- * @param deps - optional injected seams (env, fetch, runAz, setTimeout, clearTimeout, homedir, readFile,
- *   fs); other keys are ignored.
+ * @param deps - optional injected seams (the HOOK_DEP_KEYS); other keys are ignored.
  * @returns a promise that always resolves, with no value.
  * Logs: the fixed LOG_* constants and messages L-SET, L-MISSING, L-REMOTE, L-CACHE-WRITE, L-CACHE, L-NONE,
  *   L-UNRESOLVED, L-APPLIED, L-MERGE, L-BADCONFIG, L-UNEXPECTED and the two hints of contract 2f-L.
  * Invariants: never rejects (FR-10): an unexpected throw from executeHook is caught and logged as
- *   LOG_UNEXPECTED; every failure leaves the config unchanged or fully merged; no secret, URL, host or config value appears in any log (AC-9).
+ *   LOG_UNEXPECTED; for ordinary objects every failure leaves the config unchanged or fully merged (the
+ *   rollback is best-effort); no secret, PAT, token, Azure DevOps URL or host, or resolved config value
+ *   appears in any log (AC-9); L-UNRESOLVED logs placeholder NAMES copied as written (sanitised, shortened)
+ *   from the shared config, which may contain paths or hosts, but never their values.
  * @see ADR-0008 section 7
  * @see contracts/plugin-interface.md section 2f
  */
@@ -1903,10 +1807,8 @@ async function runConfigHook(input: unknown, options: unknown, config: unknown, 
 
 /**
  * Test and validator seam that exposes exactly six functions of this module.
- *
  * Invariants: the keys are parseJsonc, resolvePlaceholders, mergeConfig, resolveSettings, fetchRemoteConfig
- *   and runConfigHook; it never has a server key and never holds the entry point, and no function of this
- *   module is exported by name.
+ *   and runConfigHook; there is no server key and no other function is exported by name.
  * @see ADR-0002
  * @see contracts/plugin-interface.md section 2
  */
@@ -1921,12 +1823,9 @@ export const __internals = {
 
 /**
  * Plugin entry point: builds the hooks whose config hook applies the remote config.
- *
  * @param input - the Kilo plugin input; only used by the logger (client.app.log).
  * @param options - the raw plugin options from the plugin tuple; validated later by resolveSettings.
- * @returns a promise of a Hooks object whose config hook delegates to runConfigHook with this input and
- *   options.
- * Codes: none.
+ * @returns a promise of a Hooks object whose config hook delegates to runConfigHook.
  * Invariants: does no I/O itself (all work happens inside the config hook); the hook it returns never
  *   rejects (FR-10); it is the server of the default export and is not exported by name (ADR-0002).
  * @see ADR-0002

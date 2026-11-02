@@ -521,7 +521,14 @@ smoke bifrost: pass
 
 0. `network`: sends one anonymous `GET` (no credentials, redirects not followed, body not read) to `https://dev.azure.com/` and to the origin `/` of the Bifrost `baseURL` (https only; the origin, not the `/models` path). It tells a firewall or VPN problem apart from a credential problem. The line is `smoke network: pass` or `smoke network: fail <code>[,<code>]`.
 1. `azdo`: fetches the shared config from Azure DevOps the same way the plugin does (PAT, else `az` token) and parses it.
-2. `bifrost`: calls `GET <baseURL>/models` with your virtual key. The `baseURL` comes from the shared config and must be `https`; redirects are not followed.
+2. `bifrost`: calls `GET <baseURL>/models` with your virtual key sent in the `x-bf-vk` header (no `Authorization: Bearer` header is sent to Bifrost). The `baseURL` comes from the shared config: `provider.bifrost.options.baseURL`, or, when `provider.bifrost` has no `baseURL` property, `provider.azurefoundry.options.baseURL`. It must be `https`; redirects are not followed.
+
+Which key is checked:
+
+- Fresh install: the key you supplied in `KILO_BIFROST_KEY` (or the existing `provider.bifrost.options.apiKey`, or the placeholder, which skips the check).
+- Update of an existing personal config: `provider.azurefoundry.options.headers["x-bf-vk"]` when it is a non-empty string, otherwise `provider.bifrost.options.apiKey`.
+
+Known caveat: on update, a non-empty `x-bf-vk` header in your personal `provider.azurefoundry` block wins over a freshly supplied `KILO_BIFROST_KEY`. The installer still writes the new key to `provider.bifrost.options.apiKey`, but the smoke test checks the header value. If the header holds an old or placeholder key, edit or remove it (placeholder example: `sk-bf-<your-virtual-key>`).
 
 Each line is `pass`, `fail <code>` or `skipped <code>`. `skipped` never causes exit 4. Bifrost is skipped
 when `azdo` failed (`azdo-failed`), when your key is still the placeholder (`no-key`; the installer
@@ -562,7 +569,7 @@ Troubleshooting by code (a `fail` or `skipped` code on the line):
 | `network` | both | connection or DNS failure (hint printed for bifrost only) |
 | `invalid-jsonc` | azdo | the shared config is not valid JSONC |
 | `invalid-shape` | azdo | the shared config root is not an object |
-| `no-base-url` | bifrost | shared config has no `provider.bifrost.options.baseURL` string |
+| `no-base-url` | bifrost | shared config has no `baseURL` string in `provider.bifrost.options.baseURL` (or, if `provider.bifrost` has no `baseURL` property, in `provider.azurefoundry.options.baseURL`). A `baseURL` that is present but not a string does not fall back |
 | `invalid-base-url` | bifrost | `baseURL` is not a URL, or has credentials, query or fragment |
 | `insecure-base-url` | bifrost | `baseURL` is not `https`; the key is never sent over plain http |
 | `invalid-key` | bifrost | key is too long or has characters outside printable ASCII |

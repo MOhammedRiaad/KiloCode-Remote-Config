@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { PLACEHOLDER_KEY } from "../../installer/personal-config-edit.ts";
+import { PLACEHOLDER_KEY, storedApiKey } from "../../installer/personal-config-edit.ts";
 import type { Values } from "../../installer/personal-config-edit.ts";
 import {
   classifyKey,
@@ -292,7 +292,7 @@ test("runSmoke happy path: probe, items call, probe, models call in order with e
   assert.equal(bifrostCall.init.redirect, "manual");
   assert.deepEqual(bifrostCall.init.headers, {
     Accept: "application/json",
-    Authorization: `Bearer ${KEY}`,
+    "x-bf-vk": KEY,
   });
   assertNoLeak(report);
 });
@@ -319,7 +319,7 @@ test("runSmoke uses az token for AzDO when no PAT is set and never sends token t
   assert.equal(fake.calls[1]!.init.headers["Authorization"], `Bearer ${TOKEN}`);
   assert.deepEqual(fake.calls[3]!.init.headers, {
     Accept: "application/json",
-    Authorization: `Bearer ${KEY}`,
+    "x-bf-vk": KEY,
   });
   assert.equal(JSON.stringify(fake.calls[3]!.init.headers).includes(TOKEN), false);
   assertNoLeak(report);
@@ -1060,4 +1060,26 @@ test("T-035 AC-6: canaries in 470/407 and authenticated network answers never re
     const text = formatSmoke(report).join("\n");
     for (const secret of forbidden) assert.equal(text.includes(secret), false, secret);
   }
+});
+
+test("runSmoke falls back to provider.azurefoundry baseURL when bifrost declares none, and prefers bifrost when both exist", async () => {
+  const fallback = `{"provider":{"azurefoundry":{"options":{"baseURL":"https://gateway.example/v1"}},"bifrost":{"options":{"apiKey":"UNUSED"}}}}`;
+  const both = `{"provider":{"azurefoundry":{"options":{"baseURL":"https://other.example/v1"}},"bifrost":{"options":{"baseURL":"https://gateway.example/v1"}}}}`;
+  for (const content of [fallback, both]) {
+    const fake = makeFetch(({ url }) => {
+      if (isProbeUrl(url)) return new Response("", { status: 200 });
+      if (url.startsWith("https://dev.azure.com/")) return azdoJson(content);
+      return new Response(MODELS_OK, { status: 200 });
+    });
+    const report = await runSmoke(VALUES, KEY, { env: { AZDO_PAT: PAT }, fetch: fake.fn });
+    assert.deepEqual(report, { network: PASS_NET, azdo: { status: "pass" }, bifrost: { status: "pass" } });
+    assert.equal(fake.calls[3]!.url, "https://gateway.example/v1/models");
+  }
+});
+
+test("storedApiKey prefers the azurefoundry x-bf-vk header over the bifrost apiKey", () => {
+  const withHeader = { provider: { azurefoundry: { options: { headers: { "x-bf-vk": "sk-bf-header" } } }, bifrost: { options: { apiKey: "sk-bf-api" } } } };
+  assert.equal(storedApiKey(withHeader), "sk-bf-header");
+  const apiOnly = { provider: { bifrost: { options: { apiKey: "sk-bf-api" } } } };
+  assert.equal(storedApiKey(apiOnly), "sk-bf-api");
 });

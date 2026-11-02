@@ -8,6 +8,9 @@
 - Amended by: ADR-0019 (cycle-0022, F-020): an unauthenticated network pre-flight probe per target
   runs before its credential-bearing request; new first line `smoke network: ...`, skip code
   `network-blocked`, time bound `4 x timeoutMs` (contract `installer-cli.md` 1.3.0, section 9.0)
+- Amended by: ADR-0022 (cycle-0027): shared baseURL falls back to `provider.azurefoundry`, the
+  Bifrost request sends `x-bf-vk: <key>` instead of `Authorization: Bearer`, and the update-path
+  effective key prefers the personal `azurefoundry` `x-bf-vk` header (contract `installer-cli.md` 1.4.0)
 
 ## Context
 

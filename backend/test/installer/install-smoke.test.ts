@@ -107,7 +107,7 @@ test("AC-1 smoke test passes end-to-end with shipped shared config and Bifrost /
     assert.equal(bifrostReq.method, "GET");
     assert.equal(bifrostReq.redirect, "manual");
     assert.equal(bifrostReq.headers["accept"], "application/json");
-    assert.equal(bifrostReq.headers["authorization"], `Bearer ${KEY}`);
+    assert.equal(bifrostReq.headers["x-bf-vk"], KEY);
     assertNoSecretsOrStack(r);
   });
 });
@@ -288,7 +288,7 @@ test("AC-4 fresh install without key skips Bifrost with hint (exit 0); update wi
     assertLoaded(sb);
     const reqs = requests(sb);
     assert.equal(reqs.length, 4);
-    assert.equal(reqs[3]!.headers["authorization"], "Bearer sk-bf-existing");
+    assert.equal(reqs[3]!.headers["x-bf-vk"], "sk-bf-existing");
   });
 });
 
@@ -305,7 +305,7 @@ test("AC-5 without PAT, stub az supplies Bearer token for AzDO while Bifrost rec
     assertProbeRequest(reqs[0]!, "https://dev.azure.com/");
     assertProbeRequest(reqs[2]!, "https://bifrost.yourcompany.internal/");
     assert.equal(reqs[1]!.headers["authorization"], `Bearer ${AZ_TOKEN}`);
-    assert.equal(reqs[3]!.headers["authorization"], `Bearer ${KEY}`);
+    assert.equal(reqs[3]!.headers["x-bf-vk"], KEY);
     assert.equal(JSON.stringify(reqs[3]!.headers).includes(AZ_TOKEN), false);
     assert.equal(JSON.stringify([reqs[0], reqs[2]]).includes(AZ_TOKEN), false);
     assertNoSecretsOrStack(r);

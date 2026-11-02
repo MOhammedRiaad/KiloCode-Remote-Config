@@ -1,6 +1,8 @@
 # Contract: end-to-end startup harness (TEST ONLY)
 
-- Version: 1.1.0 (cycle-0022, F-020: fake-network gains optional `azdoProbe` / `bifrostProbe`
+- Version: 1.1.1 (cycle-0027, ADR-0022: the `auth` answer gains an optional `header` name, default
+  `authorization`; the e2e fake Bifrost checks `x-bf-vk: <key>` instead of
+  `Authorization: Bearer <key>`; section 3). 1.1.0 (cycle-0022, F-020: fake-network gains optional `azdoProbe` / `bifrostProbe`
   answers for origin-only requests, section 3a; ADR-0019). 1.0.1 (cycle-0019, T-013: `expectedCache` returns the bound cache envelope of
   plugin-interface 0.8.0 section 2f-C, `DEFAULT_BINDING` added; ADR-0018). 1.0.0 was cycle-0016,
   F-014. Decision record: ADR-0016.
@@ -73,12 +75,14 @@ export type FakeAnswer =
   | FakeStaticAnswer
   | { mode: "hang" }
   | { mode: "throw"; message?: string }
-  | { mode: "auth"; authorization: string; answer: FakeStaticAnswer };
+  | { mode: "auth"; authorization: string; header?: string; answer: FakeStaticAnswer };
+  // `header` added in 1.1.1 (cycle-0027, ADR-0022)
 ```
 
 | `auth` aspect | Contract |
 |---|---|
-| Match | `headers["authorization"] === authorization` (exact, case-sensitive value; header name lower-cased as already collected). |
+| Match | `headers[header ?? "authorization"] === authorization` (exact, case-sensitive value). `header` is the request header **name** to check and must be written **lower-case** (e.g. `"x-bf-vk"`), because the fixture collects header names lower-cased; a mixed-case name such as `"X-BF-VK"` never matches and always yields 401. Absent `header` -> `"authorization"` (pre-1.1.1 behaviour, byte-for-byte). The field name `authorization` is kept for compatibility: it holds the expected **value** of whichever header is checked. |
+| Scenario values used by the F-014 suite | fake AzDO: `{ mode: "auth", authorization: "Basic <base64(':' + PAT)>", answer: { status: 200, content } }` (header defaults to `authorization`). Fake Bifrost (1.1.1, ADR-0022): `{ mode: "auth", header: "x-bf-vk", authorization: <key>, answer: { status: 200, body: '{"object":"list","data":[]}' } }`, i.e. the request must carry `x-bf-vk: <key>`; up to 1.1.0 it was `Authorization: Bearer <key>`. Dropping `header` from the Bifrost scenario makes the e2e Bifrost check get 401. |
 | Match -> | `answer` rendered exactly like a top-level static answer (same code path). |
 | No match / header missing -> | `new Response('{"error":"unauthorized"}', { status: 401, headers: { "content-type": "application/json" } })`. |
 | Logging | The request is logged before the decision, as for every request. |

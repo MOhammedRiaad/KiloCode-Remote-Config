@@ -130,6 +130,9 @@ See [Windows troubleshooting in the user guide](user-guide.md#troubleshooting) f
 If the installer outputs `smoke bifrost: fail 401` or model requests in Kilo fail with HTTP 401:
 
 - Check that `provider.bifrost.options.apiKey` in your personal `~/.config/kilo/kilo.jsonc` is set to your assigned `sk-bf-...` key and is not still the `sk-bf-<your-virtual-key>` placeholder.
+- The installer smoke test sends the key in the `x-bf-vk` header to `GET <baseURL>/models`. On update it checks `provider.azurefoundry.options.headers["x-bf-vk"]` first (when a non-empty string) and only otherwise `provider.bifrost.options.apiKey`. A non-empty `x-bf-vk` header in your personal `provider.azurefoundry` block therefore wins over a freshly supplied `KILO_BIFROST_KEY`; if it holds an old or placeholder value, fix or remove it.
+- A gateway that accepts only `Authorization: Bearer` will answer 401 to the smoke test, because the installer does not send that header to Bifrost.
+- `smoke bifrost: fail no-base-url` means neither `provider.bifrost.options.baseURL` nor `provider.azurefoundry.options.baseURL` is a string in the shared config.
 - If the key matches what you were given, your virtual key may be expired or disabled. Contact the platform team to request a new or re-enabled virtual key.
 
 ## Asking for help
