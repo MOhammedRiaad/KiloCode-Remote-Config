@@ -2,7 +2,7 @@
   "status": "running",
   "cycle": 28,
   "max_cycles": 50,
-  "phase": "pr",
+  "phase": "docs",
   "current_item": "T-040",
   "branch": "factory/T-040-installer-skip-redundant-bifrost-block",
   "rework_iteration": 0,
