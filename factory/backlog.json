@@ -1442,7 +1442,7 @@
       "title": "Installer: align written key with the key the smoke test checks",
       "type": "bug",
       "priority": 2,
-      "status": "todo",
+      "status": "in_progress",
       "scope": {
         "backend": true,
         "frontend": false
@@ -1454,7 +1454,8 @@
         "Given an existing azurefoundry-shaped config, When the installer runs, Then no bifrost.apiKey placeholder is added."
       ],
       "source": "review",
-      "cycle_done": null
+      "cycle_done": null,
+      "notes": "Cycle 0028: user-directed. Installer skips the redundant provider.bifrost block when azurefoundry headers x-bf-vk already holds the key; a supplied KILO_BIFROST_KEY replaces that header value. Placeholder is still written on fresh installs (no azurefoundry entry)."
     },
     {
       "id": "T-041",
