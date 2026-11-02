@@ -130,7 +130,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer\install.ps1 -Org O
 test/e2e/startup.test.ts (node:test, skipped with a reason when bash is missing)
   -> temp sandbox: home/, bin/{node stub, az stub that fails}, work/
   -> install.sh in child bash (runInstall: allow-listed env, deny-all fetch preload, --no-smoke
-     unless the smoke scenario opts in; fake Bifrost/AzDO "auth" answers check the key / PAT)
+     unless the smoke scenario opts in; fake Bifrost/AzDO "auth" answers check the key / PAT:
+     Bifrost x-bf-vk: <key> (ADR-0022), AzDO Authorization: Basic <PAT>)
   -> per Kilo start: child node --import=fake-network.ts kilo-start-simulator.ts --out <file>
        env built from scratch (HOME/USERPROFILE = sandbox home, PATH = stub bin, AZDO_PAT, scenario)
        reads INSTALLED ~/.config/kilo/kilo.jsonc, resolves plugin entries against the config dir
@@ -253,6 +254,7 @@ backend/                     # the only package (ADR-0001 section 7)
   test/installer/fixtures/fake-network.ts  # TEST ONLY: --import preload replacing globalThis.fetch
                               # (loaded via NODE_OPTIONS by tests; never imported by product code)
                               # F-014: + "auth" answer (401 unless Authorization matches)
+                              # ADR-0022: + optional lower-case `header` name for "auth" (e2e Bifrost: x-bf-vk)
                               # F-020: + optional azdoProbe / bifrostProbe answers for origin "/" requests
   test/installer/fixtures/race-after-mkdir.ts  # TEST ONLY (T-019): preload that swaps a target for a
                               # symlink right after the helper's mkdirSync (POSIX race tests)

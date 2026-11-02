@@ -16,7 +16,7 @@ Owned by the **architect** agent.
   repository docs check (`backend/tools/check-docs.mjs`) in `contracts/docs-check.md` (since F-016).
 - Latest ADR: `ADR-0022-smoke-bifrost-azurefoundry-fallback-and-x-bf-vk.md` (cycle-0027; installer
   smoke test reads the gateway URL from `provider.azurefoundry` as fallback and authenticates
-  with `x-bf-vk`; `contracts/installer-cli.md` 1.4.0).
+  with `x-bf-vk`; `contracts/installer-cli.md` 1.4.0, `contracts/e2e-harness.md` 1.1.1).
 
 ADR template:
 

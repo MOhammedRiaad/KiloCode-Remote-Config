@@ -60,6 +60,10 @@ for the code to match the real config; the change was made in commit 7701a9b and
 - Tests updated in commit 7701a9b (`smoke.test.ts`, `install-smoke.test.ts`,
   `install-ps1-smoke.test.ts`, `e2e/startup.test.ts`, `fixtures/fake-network.ts`) including a
   fallback / precedence test and a `storedApiKey` precedence test.
+- Test-only fixture contract `contracts/e2e-harness.md` 1.1.0 -> 1.1.1: the fake-network `auth`
+  answer gains an optional lower-case `header` name (default `"authorization"`), matched as
+  `headers[header ?? "authorization"] === authorization`; the e2e fake Bifrost uses
+  `header: "x-bf-vk"`.
 
 ## Alternatives considered
 

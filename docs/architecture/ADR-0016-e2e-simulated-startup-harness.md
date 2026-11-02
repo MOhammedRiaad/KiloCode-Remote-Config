@@ -139,6 +139,12 @@ before. Used for:
 - fake AzDO: `{ mode: "auth", authorization: "Basic <base64(':' + PAT)>", answer: { status: 200, content } }`.
   This proves the PAT reached the plugin from the simulated engineer's environment.
 
+Amended by ADR-0022 (cycle-0027, `contracts/e2e-harness.md` 1.1.1): the `auth` answer gains an
+optional `header?: string` (a lower-case header name, default `"authorization"`) and matches
+`headers[header ?? "authorization"] === authorization`. The fake Bifrost is now
+`{ mode: "auth", header: "x-bf-vk", authorization: "<KEY>", answer: ... }`, i.e. it checks
+`x-bf-vk: <KEY>` instead of `Authorization: Bearer <KEY>`. The contract is authoritative.
+
 Content changes between starts need **no** fixture change. Each `runStart` writes its own
 scenario file `<root>/start-N.json` with its own log `<root>/start-N.net.log`. "Shared file
 changed", "AzDO throws", "AzDO 500" are just different scenario files for successive starts in
