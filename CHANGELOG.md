@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.16.4] - 2026-11-02
+
+### Fixed
+- T-040: the installer now writes the key that the smoke test checks (the key follows the `x-bf-vk` header), and skips the redundant Bifrost block (ADR-0023).
+
+## [0.16.3] - 2026-11-02
+
+### Changed
+- T-038: comment-only trim of the plugin JSDoc, plus wording fixes. No behaviour change.
+- The installer smoke test now falls back to the `provider.azurefoundry` baseURL and authenticates with the `x-bf-vk` header (ADR-0022).
+
+### Fixed
+- Test fix: the `[pwsh]` argv allow-list test now passes on Linux.
+
 ## [0.16.2] - 2026-11-01
 
 NOTE: the plugin source file grew from 1456 to about 1939 lines because of the added JSDoc. A trim pass is queued as T-038.
