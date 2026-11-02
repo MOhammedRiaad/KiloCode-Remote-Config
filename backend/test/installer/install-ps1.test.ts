@@ -6,7 +6,7 @@ import { __internals } from "../../plugin/azdo-remote-config.ts";
 import { backendRoot, backups, isWindows, snapshot } from "./helpers.ts";
 import {
   assertNoInstallerFootprint,
-  helperPath,
+  isAllowedNodeArgv,
   installPs1Path,
   psTest,
   readLog,
@@ -501,8 +501,7 @@ psTest(
   "AC-7 the key and PAT never reach output or argv logs (success, usage error, prerequisite failure)",
   (host) => {
     const env = { ...withPat, KILO_BIFROST_KEY: KEY };
-    const isAllowed = (line: string) =>
-      line === "-p process.versions.node" || line.toLowerCase() === `"${helperPath}"`.toLowerCase();
+    const isAllowed = isAllowedNodeArgv;
     withPsSandbox((sb) => {
       const ok = runInstallPs(sb, host, ARGS, env);
       assert.equal(ok.status, 0, ok.stderr);

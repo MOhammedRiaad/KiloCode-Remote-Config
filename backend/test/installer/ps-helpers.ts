@@ -211,6 +211,15 @@ export function assertNoInstallerFootprint(sb: PsSandbox): void {
   }
 }
 
+/**
+ * True for the only two node invocations install.ps1 may make: the version probe and the helper.
+ * The Windows cmd stub logs `%*` (quotes kept); the POSIX stub logs `$*` (quotes consumed by the shell).
+ */
+export function isAllowedNodeArgv(line: string): boolean {
+  const expected = isWindows ? `"${helperPath}"` : helperPath;
+  return line === "-p process.versions.node" || line.toLowerCase() === expected.toLowerCase();
+}
+
 export function readLog(sb: PsSandbox, name: "node-argv.log" | "az.log"): string[] {
   const path = join(sb.root, name);
   if (!existsSync(path)) return [];
