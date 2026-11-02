@@ -2,10 +2,10 @@
   "status": "running",
   "cycle": 27,
   "max_cycles": 50,
-  "phase": "release",
+  "phase": "idle",
   "current_item": null,
   "branch": null,
-  "rework_iteration": 3,
+  "rework_iteration": 0,
   "max_rework": 3,
   "consecutive_blocked": 0,
   "max_consecutive_blocked": 3,
@@ -177,7 +177,7 @@
       "item": "T-038",
       "result": "released",
       "version": "v0.16.3",
-      "rework": 2
+      "rework": 3
     }
   ]
 }

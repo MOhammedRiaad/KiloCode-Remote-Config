@@ -13,3 +13,5 @@
 
 Notes: root kilo.jsonc (contains a real key) was excluded via .git/info/exclude and never committed.
 The out-of-band change exceeds T-038 AC-2 by user direction. Follow-ups: T-040, T-041.
+
+Rework 3 (during ship): quality-gate failed on 7 [pwsh] installer tests on the Linux runner. The same 7 fail on main at v0.16.2 (stub node logs the bare helper path on POSIX, tests expected it quoted). Fixed in backend/test/installer (isAllowedNodeArgv); security and review PASS. Rework total: 3 of 3.
