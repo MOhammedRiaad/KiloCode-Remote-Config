@@ -143,6 +143,11 @@ replaces `globalThis.fetch` with a deterministic fake. It reads a JSON scenario 
 scenario it denies every call. `smoke.test.ts` covers the smoke module; `install-smoke.test.ts` runs
 `install.sh` end to end (exit codes, output lines, no leaks, installation unchanged on failure). The
 other installer tests pass `--no-smoke`.
+ADR-0022 (contract installer-cli.md 1.4.0, T-038): the Bifrost smoke request takes its base URL from
+`provider.bifrost.options.baseURL`, else `provider.azurefoundry.options.baseURL`, and authenticates with
+`x-bf-vk: <key>` instead of `Authorization: Bearer`. The fake network and the e2e fake Bifrost therefore check
+the `x-bf-vk` header (the e2e fake-network scenario gains an optional lower-case `header` name, see
+contract e2e-harness.md 1.1.1). Tests use placeholder keys only.
 F-020 (ADR-0019, contract installer-cli.md 1.3.0 section 9.0) adds the network pre-flight to `smoke.ts`. The
 fake network scenario also answers the anonymous probes of `https://dev.azure.com/` and the Bifrost
 origin `/` (403/407, connection error, hang until the deadline). `smoke.test.ts` and
