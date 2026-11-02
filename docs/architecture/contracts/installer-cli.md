@@ -1,6 +1,14 @@
 # Contract: bootstrap installers (`install.sh`, `install.ps1`) and install helper
 
-- Version: 1.3.2 (cycle-0024, T-035: (a) the fixed network hint of section 7 is also printed,
+- Version: 1.4.0 (cycle-0027, out-of-band with T-038, ADR-0022: the smoke test (a) reads the
+  gateway URL from shared `provider.bifrost.options.baseURL`, falling back to
+  `provider.azurefoundry.options.baseURL` when bifrost declares none; (b) sends the Bifrost
+  request with `x-bf-vk: <effective key>` instead of `Authorization: Bearer <effective key>`;
+  (c) on update takes the effective key from the personal config's
+  `provider.azurefoundry.options.headers["x-bf-vk"]` when a non-empty string, else
+  `provider.bifrost.options.apiKey`. Sections 7, 9 and 9.2. No new input, line, code or exit
+  code; write phase unchanged.)
+  1.3.2: cycle-0024, T-035: (a) the fixed network hint of section 7 is also printed,
   at most once, when the pre-flight passed but an authenticated line failed for a network
   reason (`smoke azdo: fail network-unreachable|network-blocked|timeout`,
   `smoke bifrost: fail network|timeout|407|470`); exact rule in section 9.4; (b) a probe answer
@@ -220,13 +228,17 @@ Backup of the previous personal config: <path>   (only when a backup was written
 Personal config already up to date: <path>
 Note: dropped plugin options from the previous entry: <names>
 Set your Bifrost virtual key: re-run with KILO_BIFROST_KEY set, or edit provider.bifrost.options.apiKey in <path>.
-                                                 (whenever apiKey equals the placeholder after the run)
+                                                 (whenever the effective key, section 9, equals the placeholder after the run;
+                                                  1.4.0: on update that can be the azurefoundry x-bf-vk header value)
 smoke network: pass | smoke network: fail <code>[,<code>]
                                                  (1.3.0, smoke phase only, always the first smoke line, section 9.0)
 smoke azdo: <result>                             (1.1.0, smoke phase only, section 9)
 smoke bifrost: <result>
 Smoke test: set KILO_BIFROST_KEY and re-run install.sh to check your Bifrost virtual key.
-                                                 (only after "smoke bifrost: skipped no-key")
+                                                 (only after "smoke bifrost: skipped no-key"; wording unchanged in 1.4.0.
+                                                  Known gap, ADR-0022: when the personal config's azurefoundry
+                                                  x-bf-vk header holds the placeholder, re-running with
+                                                  KILO_BIFROST_KEY does not change the effective key)
 Smoke test: a network check failed; connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run install.sh.
                                                  (1.3.0, only when the network line is "fail" with a code other than "internal";
                                                   1.3.2: also after a qualifying authenticated-line code; at most once; rule: section 9.4)
@@ -247,7 +259,8 @@ Fixed prerequisite messages (must contain these fixes):
 - Existing invalid config: `<path> is not valid JSONC (<parser message>); fix or move it, then re-run.` (the parser message contains only line/column, ADR-0003)
 - (1.2.1) Helper missing next to `install.sh` (exit 3): `installer sources are missing (expected install-helper.ts next to install.sh).` (same wording as `install.ps1`, section 10.2 step 5)
 
-**Never printed**: the value of `KILO_BIFROST_KEY` or of the effective `apiKey`, any PAT, its
+**Never printed**: the value of `KILO_BIFROST_KEY` or of the effective key (whether taken from
+`apiKey` or, 1.4.0, from the `x-bf-vk` header), any PAT, its
 Basic credential, any az token, any argument text of an unknown option, any content of an existing
 config file or of the fetched shared config, any fetch error text or HTTP response body, stack
 traces. All errors are caught at the top of the helper and mapped to a fixed message.
@@ -266,9 +279,14 @@ Runs in the helper after a successful write phase when the `smoke` record is `on
 normalised `org/project/repo/path/branch` of this install; `settings = resolveSettings(values,
 { env })` and `fetchRemoteConfig(settings, { env })` with `env` = only `AZDO_PAT`,
 `AZURE_DEVOPS_EXT_PAT`, `KILO_AZDO_PAT`, `KILO_AZDO_TIMEOUT_MS` copied from the process env;
-`timeoutMs = settings.timeoutMs` (default 5000) per check; the **effective key** = the `apiKey` the
-personal config holds after this run (fresh: `KILO_BIFROST_KEY` or the placeholder; update: the
-supplied key, else the existing value).
+`timeoutMs = settings.timeoutMs` (default 5000) per check; the **effective key** = the Bifrost
+virtual key the personal config holds after this run. Fresh: `KILO_BIFROST_KEY` or the
+placeholder. Update (1.4.0, ADR-0022): `provider.azurefoundry.options.headers["x-bf-vk"]` when it
+is a non-empty string; otherwise `provider.bifrost.options.apiKey` (the supplied key, else the
+existing value). Note: on update a non-empty `x-bf-vk` header wins over a `KILO_BIFROST_KEY`
+supplied on this run (the supplied key is still written to `bifrost.options.apiKey`, section 5,
+but is not the one the smoke test checks). The same effective key decides the
+`Set your Bifrost virtual key` line of section 7.
 
 Result line format: `smoke <check>: pass` | `smoke <check>: fail <code>` |
 `smoke <check>: skipped <code>`. Checks run and print in the order `azdo`, `bifrost`.
@@ -344,7 +362,7 @@ Evaluated in this order; the first matching row decides. Only rows 7a (probe, no
 | # | Condition | Line |
 |---|---|---|
 | 1 | azdo is not `pass` | `smoke bifrost: skipped azdo-failed` |
-| 2 | shared `provider.bifrost.options.baseURL` is not an own string property of plain objects | `smoke bifrost: fail no-base-url` |
+| 2 | the selected shared baseURL (below) is not a string | `smoke bifrost: fail no-base-url` |
 | 3 | `new URL(baseURL.trim())` throws, or the URL has a username, password, query or fragment | `smoke bifrost: fail invalid-base-url` |
 | 4 | protocol is not `https:` | `smoke bifrost: fail insecure-base-url` |
 | 5 | effective key is not a string, is empty, or equals `sk-bf-<your-virtual-key>` | `smoke bifrost: skipped no-key` (+ the `Smoke test: set KILO_BIFROST_KEY ...` line) |
@@ -354,10 +372,18 @@ Evaluated in this order; the first matching row decides. Only rows 7a (probe, no
 | 8 | request made (below) and fails | `smoke bifrost: fail <code>` |
 | 9 | request made, 2xx, body is UTF-8 JSON with a plain-object root, <= 1 MiB | `smoke bifrost: pass` |
 
+Selected shared baseURL (1.4.0, ADR-0022): the value of `provider.bifrost.options.baseURL` in the
+fetched shared config when that path is reachable as own properties of plain objects; only when it
+is not (absent at any level, or a level is not a plain object), the value of
+`provider.azurefoundry.options.baseURL` read the same way; else none. `bifrost` wins when both are
+present. A present but non-string `bifrost` value does not fall back (row 2 fails). Rows 3 and 4
+apply to the selected value unchanged.
+
 Request (exactly one): `GET <models URL>` where the models URL is the parsed baseURL with every
 trailing `/` removed from its pathname and `/models` appended
 (`https://bifrost.yourcompany.internal/v1` -> `https://bifrost.yourcompany.internal/v1/models`);
-headers exactly `Accept: application/json` and `Authorization: Bearer <effective key>`;
+headers exactly `Accept: application/json` and (1.4.0, ADR-0022) `x-bf-vk: <effective key>`
+(no `Authorization` header is sent to Bifrost; up to 1.3.2 it was `Authorization: Bearer <effective key>`);
 `redirect: "manual"`; one AbortController and one `timeoutMs` timer for request and body.
 Fail codes (row 8): HTTP status outside 200-299 -> the bare status number (e.g. `fail 401`,
 `fail 302`; redirects are not followed); status not an integer 100-599 or body not JSON object ->

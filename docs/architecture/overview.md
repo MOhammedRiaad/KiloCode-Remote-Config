@@ -97,10 +97,12 @@ bash installer/install.sh --org O --project P --repo R [--path --branch --mode] 
                error -> azdo-unreachable, deadline -> azdo-timeout => azdo skipped network-blocked (no PAT, no az)
       azdo:    __internals.resolveSettings(values, {env: PAT vars + KILO_AZDO_TIMEOUT_MS only})
                -> __internals.fetchRemoteConfig (fixed host, PAT|az token, deadline, 1 MiB) -> parseJsonc
-      bifrost: shared provider.bifrost.options.baseURL, https only, key present ->
+      bifrost: shared provider.bifrost.options.baseURL, else provider.azurefoundry.options.baseURL
+               (ADR-0022), https only, key present ->
                probe GET <origin>/ (same rule; bifrost-blocked|unreachable|timeout => skipped network-blocked,
                key never sent) -> GET <baseURL>/models,
-               Bearer <effective apiKey>, redirect manual, timeoutMs, 1 MiB, JSON object body
+               x-bf-vk: <effective key> (personal azurefoundry headers["x-bf-vk"], else bifrost apiKey;
+               ADR-0022), redirect manual, timeoutMs, 1 MiB, JSON object body
       prints "smoke network: pass|fail <codes>" first, then "smoke azdo|bifrost: pass|fail <code>|skipped <code>",
       then the no-key hint, then at most one VPN/allow-list hint (network fail, or azdo fail
       network-unreachable|network-blocked|timeout, or bifrost fail network|timeout|407|470;
