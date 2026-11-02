@@ -478,7 +478,9 @@ you to set it (re-run with the variable, or edit the file).
 - `~/.config/kilo/azdo/azdo-remote-config.ts`: a copy of the plugin (mode 0644).
 - `~/.config/kilo/kilo.jsonc`: your personal config, mode 0600. Created from the template, or updated:
   the azdo plugin entry is replaced (other plugins and settings are kept) and your `apiKey` is kept
-  unless `KILO_BIFROST_KEY` is set. Comments in an existing file are lost on update.
+  unless `KILO_BIFROST_KEY` is set. If `provider.azurefoundry.options.headers["x-bf-vk"]` is already
+  non-empty, no `provider.bifrost` block is added and the key is kept in, or (with `KILO_BIFROST_KEY`)
+  written to, that header (see "Smoke test"). Comments in an existing file are lost on update.
 - Before changing an existing `kilo.jsonc`, a backup `~/.config/kilo/kilo.jsonc.bak-<timestamp>` (mode
   0600). Backups contain your old keys. Delete old backups once you have checked the result.
 - If `XDG_CONFIG_HOME` is set (absolute path), `$XDG_CONFIG_HOME/kilo` is used instead of `~/.config/kilo`.
@@ -528,7 +530,13 @@ Which key is checked:
 - Fresh install: the key you supplied in `KILO_BIFROST_KEY` (or the existing `provider.bifrost.options.apiKey`, or the placeholder, which skips the check).
 - Update of an existing personal config: `provider.azurefoundry.options.headers["x-bf-vk"]` when it is a non-empty string, otherwise `provider.bifrost.options.apiKey`.
 
-Known caveat: on update, a non-empty `x-bf-vk` header in your personal `provider.azurefoundry` block wins over a freshly supplied `KILO_BIFROST_KEY`. The installer still writes the new key to `provider.bifrost.options.apiKey`, but the smoke test checks the header value. If the header holds an old or placeholder key, edit or remove it (placeholder example: `sk-bf-<your-virtual-key>`).
+The key the installer writes is always the key the smoke test checks:
+
+- If your personal config already has a non-empty `provider.azurefoundry.options.headers["x-bf-vk"]`, the installer adds no `provider.bifrost` block (an existing one is never deleted). Without `KILO_BIFROST_KEY` the header is kept as it is.
+- If you also set `KILO_BIFROST_KEY`, its value replaces the `x-bf-vk` header value, and the smoke test checks that value.
+- If there is no such header, the key goes to `provider.bifrost.options.apiKey` as before (the supplied key, the existing key, or the placeholder `sk-bf-<your-virtual-key>`). Fresh installs always use the placeholder unless you supply a key.
+
+Known limitation: when the key lives in the header, the installer's hint text (for a placeholder or missing key) still names `provider.bifrost.options.apiKey`. That wording is a known follow-up; edit or set the `x-bf-vk` header value in that case.
 
 Each line is `pass`, `fail <code>` or `skipped <code>`. `skipped` never causes exit 4. Bifrost is skipped
 when `azdo` failed (`azdo-failed`), when your key is still the placeholder (`no-key`; the installer
