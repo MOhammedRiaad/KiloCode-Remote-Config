@@ -1442,7 +1442,7 @@
       "title": "Installer: align written key with the key the smoke test checks",
       "type": "bug",
       "priority": 2,
-      "status": "in_progress",
+      "status": "done",
       "scope": {
         "backend": true,
         "frontend": false
@@ -1454,7 +1454,7 @@
         "Given an existing azurefoundry-shaped config, When the installer runs, Then no bifrost.apiKey placeholder is added."
       ],
       "source": "review",
-      "cycle_done": null,
+      "cycle_done": 28,
       "notes": "Cycle 0028: user-directed. Installer skips the redundant provider.bifrost block when azurefoundry headers x-bf-vk already holds the key; a supplied KILO_BIFROST_KEY replaces that header value. Placeholder is still written on fresh installs (no azurefoundry entry)."
     },
     {
@@ -1472,6 +1472,43 @@
       "acceptance_criteria": [
         "Given bifrost.baseURL = 123 and an azurefoundry baseURL, When the smoke runs, Then it reports fail no-base-url.",
         "Given an empty x-bf-vk header and a bifrost apiKey, When storedApiKey runs, Then it returns the apiKey."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-042",
+      "title": "Installer key hint names the x-bf-vk header when the key lives there",
+      "type": "bug",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [],
+      "description": "Cycle 0028 review/security follow-up: when provider.azurefoundry.options.headers[\"x-bf-vk\"] holds the placeholder or key, the hint \"Set your Bifrost virtual key ... or edit provider.bifrost.options.apiKey\" (install-helper.ts ~L408, installer-cli.md section 7) still names only the bifrost apiKey location. Name the header location when that is where the key is read from; update contract, install.sh/install.ps1 wording and docs.",
+      "acceptance_criteria": [
+        "Given an update where the azurefoundry x-bf-vk header holds the placeholder, When the installer prints the key hint, Then it names provider.azurefoundry.options.headers[\"x-bf-vk\"]."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-043",
+      "title": "Installer tests: header-first key rules and powershell5 timeout",
+      "type": "test",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [],
+      "description": "Cycle 0028 review/security follow-ups: add unit tests for (a) an existing bifrost block is kept when a key header is present, (b) a non-object provider.bifrost with a key header is not exit 3, (c) an empty x-bf-vk header falls back to the bifrost path; add an end-to-end helper/install.sh/install.ps1 test with an azurefoundry-shaped existing config and a supplied KILO_BIFROST_KEY (smoke request carries that key); give the powershell5 spawn in install-ps1.test.ts (~L442) a longer timeout or one retry because it timed out once under load.",
+      "acceptance_criteria": [
+        "Given each of (a)-(c), When planUpdate runs, Then the contract section 5 step 2 outcome holds.",
+        "Given an azurefoundry-shaped config and KILO_BIFROST_KEY, When the helper runs with smoke on, Then the fake Bifrost sees x-bf-vk equal to the supplied key."
       ],
       "source": "review",
       "cycle_done": null
