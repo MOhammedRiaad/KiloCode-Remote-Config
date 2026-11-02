@@ -174,4 +174,1306 @@
         "Given no PAT from any source, When fetching, Then the injected az runner is invoked once with arguments starting `account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` (no shell), the trimmed returned token is sent as `Authorization: Bearer <token>`; and Given the runner throws, exits non-zero, times out or returns empty output, Then no HTTP request is sent and the result is `{ ok: false }` with a fixed auth-unavailable error.",
         "Given a fake fetch that never responds, When fetching with timeoutMs 50, Then the request's AbortSignal is aborted at the timeout and the result is `{ ok: false }` with a timeout error within a bounded time (no hang), and the default timeout when settings come from resolveSettings defaults is 5000 ms (FR-8).",
         "Given a non-2xx response (e.g. 401, 404, 500), or a fetch that rejects with an error whose message contains the PAT, When fetching, Then the result is `{ ok: false }` and the error includes the HTTP status number for non-2xx responses, while no returned error contains the PAT, the bearer token, the Authorization header value or the underlying error's message.",
-        "Given a response larger than 1 MiB (declared by Content-Length or actual body length when the header is missing or lies), or a 200 body that is not JSON or lacks a string `content` field, When fetching, Then the result is `{ ok: false }` with a too-large or bad-response error and no oversized text is returned (cap enforced before any parsing; parseJsonc memory is about 50x input size)."
+        "Given a response larger than 1 MiB (declared by Content-Length or actual body length when the header is missing or lies), or a 200 body that is not JSON or lacks a string `content` field, When fetching, Then the result is `{ ok: false }` with a too-large or bad-response error and no oversized text is returned (cap enforced before any parsing; parseJsonc memory is about 50x input size).",
+        "Given settings with missing org/project/repo, or a value containing a lone surrogate (e.g. org `\ud800`) that passed resolveSettings, When fetching, Then no URIError or other exception escapes, neither fetch nor the az runner is called, and the result is `{ ok: false }` with an invalid-settings error that names no values.",
+        "Given any input including hostile values (null/non-object settings or deps, throwing fetch, throwing env proxy), When `fetchRemoteConfig` runs, Then the returned promise always resolves (never rejects) and the settings/env objects are not mutated; and When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0, backend/package.json has no runtime `dependencies`, and the only new export surface is the `fetchRemoteConfig` key on `__internals`."
+      ],
+      "source": "vision",
+      "cycle_done": 7
+    },
+    {
+      "id": "F-006",
+      "title": "Plugin: cache, fallback, logging and never-crash wiring",
+      "type": "feature",
+      "priority": 2,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-001",
+        "F-002",
+        "F-003",
+        "F-004",
+        "F-005"
+      ],
+      "description": "FR-7 / FR-9 / FR-10 / AC-3 / AC-4 / AC-6 / AC-7 / AC-8 / AC-9, startup steps 2-6. Wire the shipped helpers (resolveSettings, fetchRemoteConfig, parseJsonc, resolvePlaceholders, mergeConfig) into the plugin's exported `config` hook inside the single file backend/plugin/azdo-remote-config.ts. Flow: resolve settings from plugin options + env; if `missing` is non-empty skip the fetch (log setting names only) and use the cache path; otherwise fetch; parse and validate the fetched text (root must be a plain object); on success write the cache, on any failure read the cache; resolve placeholders on the chosen config; merge in place with settings.mode. Cache: `<home>/.cache/kilo-azdo/remote-config.json`, holding the parsed shared config BEFORE placeholder resolution (PO decision: resolved {env:}/{file:} values may be secrets and must never be written to disk); directory created if missing; file mode 0600 on POSIX; written atomically (temp file + rename) so a crash never leaves a half-written cache; the cache content is validated on read exactly like fetched content. Logging goes through Kilo's logger with `service: azdo-remote-config` (Architect decides the exact Kilo logger API and keeps an injectable logger seam for tests); only fixed messages, setting names, error codes and placeholder names are logged, never values, and `settings` is never passed to the logger as an object. Trust boundary (cycle 0007 security info 4): the Architect records in an ADR which Kilo config layers may supply org/project/repo/path/pat and that fetched and cached content is treated as untrusted input (validated before merge; apiKey never applied, already enforced by mergeConfig). Deps (home dir, fs, fetch, env, runAz, logger) are injectable; tests never touch the real home directory or network. The Windows case-insensitive process.env note moved to T-012. Zero runtime npm deps (FR-11).",
+      "acceptance_criteria": [
+        "Given complete settings in plugin options, a fake fetch returning a shared JSONC with comments and `{\"model\":\"shared\",\"small_model\":\"s\",\"provider\":{\"bifrost\":{\"options\":{\"baseURL\":\"https://b/v1\",\"apiKey\":\"sk-bf-shared\"}}}}`, and a Kilo config `{model:'local', provider:{bifrost:{options:{apiKey:'sk-bf-local'}}}}`, When the plugin's `config` hook runs in `defaults` mode, Then the same config object is mutated in place with model `local`, small_model `s`, baseURL `https://b/v1` and apiKey `sk-bf-local`; and in `enforce` mode model becomes `shared` while apiKey stays `sk-bf-local` (AC-6, AC-7).",
+        "Given a successful fetch and a fake home directory without `.cache/kilo-azdo/`, When the hook runs, Then `<home>/.cache/kilo-azdo/remote-config.json` is created containing the parsed shared config with placeholders still unresolved (no resolved env/file value is written to disk), the write is atomic (temp file + rename), and on POSIX the file mode is 0600; and an info log with service `azdo-remote-config` states the remote source was used.",
+        "Given the fetch fails (e.g. timeout or http-500) and a valid cache file exists, When the hook runs, Then the cached config is placeholder-resolved and merged into the config, the cache is not overwritten, and a warn-level log with service `azdo-remote-config` names the fixed error code (AC-3).",
+        "Given the fetch fails and no cache exists, or the cache file is corrupt, not JSON, or has a non-object root, When the hook runs, Then the config deep-equals its original value, an error-level log is written with a fixed message, and a corrupt cache is never merged (AC-4).",
+        "Given resolved settings with `missing` non-empty, When the hook runs, Then neither fetch nor the az runner is called, the log names only the missing setting names (e.g. `org`), the cache fallback of the previous criteria applies, and each resolveSettings warning is logged at warn level; and Given fetched text that is invalid JSONC or whose root is not a plain object (array, string, number, null), When the hook runs, Then it is neither merged nor cached and the cache fallback applies.",
+        "Given a shared file containing `\"x\": \"{env:MISSING}\"` and `\"y\": \"{env:SECRET_VAR}\"` with SECRET_VAR set to `s3cr3t-value`, When the hook runs, Then config.x is not set, config.y is `s3cr3t-value`, and the logs name `env:MISSING` but contain neither `s3cr3t-value` nor any other placeholder value (AC-8).",
+        "Given a run with a PAT in plugin options, a bearer token returned by a fake az runner (PAT-less run), an `sk-bf-` apiKey in the local config and a resolved secret placeholder, across the success, cache-fallback and exception paths, When every argument of every logger call is captured and serialised (including util.inspect with showHidden), Then none contains any of those secret values, and the logger never receives the settings object (AC-9, FR-9).",
+        "Given each internal failure in turn (fetch dependency rejecting, parseJsonc throwing, unwritable cache directory, cache write throwing, logger throwing, a frozen Kilo config making mergeConfig throw TypeError, options null or non-object), When the hook runs, Then it resolves without throwing, any logged message is fixed text (never err.message), and Kilo's config is left either unchanged or fully merged (FR-10); and When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0, backend/package.json has no runtime `dependencies`, and docs/architecture contains an ADR stating which config layers may supply org/project/repo/path/pat and that fetched/cached content is validated as untrusted before merge."
+      ],
+      "source": "vision",
+      "cycle_done": 8
+    },
+    {
+      "id": "F-007",
+      "title": "Shared config repo: example kilo.jsonc and validation script",
+      "type": "feature",
+      "priority": 1,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-001"
+      ],
+      "description": "FR-12 / FR-13 / AC-13, plus cycle 0005 security follow-ups. Two deliverables for C1 (shared config repo): (a) an example shared config, e.g. backend/shared-config/kilo.jsonc, based on VISION Appendix A (Bifrost provider with baseURL and models, no apiKey, no secrets); (b) a zero-runtime-dependency validator CLI under backend/validator/ (ADR-0001 layout, Node >=22.18 built-ins only, run e.g. as `node backend/validator/validate-kilo-config.ts <file>...`), used later by the Azure Pipelines PR gate (F-008) and the template check (F-009). The validator must reuse the plugin's JSONC parser (`__internals.parseJsonc` or an Architect-approved import) rather than a second copy, and must NOT change the plugin's export surface. Rules: parse JSONC; root must be a plain object; check a vendored Kilo config schema subset (Architect defines it, pinned to SUPPORTED_KILO_RANGE, stored under backend/validator/); reject any `apiKey` key at any depth (key name compared case-insensitively); reject `sk-bf-` secret patterns in string values and comments without echoing the secret; reject own keys `__proto__`/`constructor`/`prototype`; warn on other Object.prototype member names (e.g. hasOwnProperty, toString), on `{file:}` paths that never resolve (relative, bare `~`, `~user`, UNC / `//host`), and on top-level `plugin` (ignored by the merge); optional `--allowed-hosts h1,h2` flag rejects provider `options.baseURL` values that are not https or whose host is not in the set. Exit codes (PO decision): 0 = valid (warnings allowed), 1 = validation errors in any file, 2 = usage or I/O error. Output names files, JSON paths and rule ids, never secret values. Tests live in backend/test/validator/ and are run by `bash scripts/ci.sh`.",
+      "acceptance_criteria": [
+        "Given the shipped example shared config (e.g. backend/shared-config/kilo.jsonc, Appendix A content with comments and an https baseURL), When the validator CLI runs on it in a child process, Then it exits 0, reports the file as valid, and the parsed example has provider.bifrost.options.baseURL as a string and provider.bifrost.models keys `azure/gpt-5` and `azure/gpt-5-mini` and no `apiKey` anywhere.",
+        "Given files containing an `apiKey` key at top level, at `provider.bifrost.options.apiKey`, inside an array element, and spelled `APIKEY`, When validated, Then each run exits 1 and the output names the JSON path of the offending key (e.g. `provider.bifrost.options.apiKey`) and does not contain the key's value.",
+        "Given a file with the string `sk-bf-AbCdEf1234567890` as a nested value, inside a longer string, inside an array, or in a `//` or `/* */` comment, When validated, Then the run exits 1, the output names the JSON path (or the line number for a comment), and the output never contains `AbCdEf1234567890`.",
+        "Given invalid JSONC (unterminated string, unterminated block comment, malformed JSON) or a root that is an array, string, number or null, When validated, Then the validator exits 1 with a parse/shape error naming the file and no stack trace; and Given no file argument or a path that does not exist, When run, Then it exits 2 with a usage or I/O message.",
+        "Given files violating the vendored Kilo schema subset (`provider` not an object, `provider.bifrost` not an object, `provider.bifrost.options` or `provider.bifrost.models` not an object, `model` not a string), When validated, Then each exits 1 naming the JSON path; and an automated check confirms the vendored subset file exists under backend/validator/ and records the Kilo version range it was taken from.",
+        "Given a shared config whose `{file:}` placeholders use a relative path, bare `~`, `~user/x`, or a UNC / `//host/share` path, When validated, Then the run exits 0 (no other errors) and prints one warning per placeholder naming the JSON path and stating it will never resolve; and `{file:~/x}`, absolute paths and `{env:VAR}` produce no such warning.",
+        "Given own keys `__proto__`, `constructor` or `prototype` at any depth, When validated, Then the run exits 1 naming the path and Object.prototype is not polluted; Given keys `hasOwnProperty` or `toString`, Then a warning names the path; and Given `--allowed-hosts bifrost.yourcompany.internal`, When a provider `options.baseURL` is non-https, unparseable, or has another host, Then the run exits 1 naming the path, while without the flag no host error is raised.",
+        "Given two files where one is valid and one has an error, When the validator runs on both in one call, Then it exits 1 and reports a result for each file; and When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0, runs the validator tests under backend/test/validator/, backend/package.json has no runtime `dependencies`, and the plugin's export surface is unchanged."
+      ],
+      "source": "vision",
+      "cycle_done": 9
+    },
+    {
+      "id": "F-008",
+      "title": "Shared config repo: Azure Pipelines PR gate and branch policy setup",
+      "type": "feature",
+      "priority": 2,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-007"
+      ],
+      "description": "FR-13 / FR-14 / AC-13, C1 (shared config repo). Cycle 0015 PO: priority raised to 2 (critical path; F-015 depends on it). Two deliverables under backend/shared-config/ (the template of the C1 `kilo-config` repo; Architect fixes exact file names and records them in an ADR + contract, e.g. a new contracts/shared-config-repo.md): (a) `azure-pipelines.yml`, the PR validation pipeline: `trigger: none` (or main only), `pr` on branch main, installs/uses Node >= 22.18 (e.g. UseNode@1 / NodeTool@0, no npm install, zero runtime deps), and runs the F-007 validator CLI with `--allowed-hosts <host list>` (host list from a pipeline variable with a documented default; cycle 0009: host check is opt-in and ignores ports) over `kilo.jsonc` plus every `teams/*/kilo.jsonc` that exists (no teams directory, or an empty one, must not cause a usage error/exit 2); a non-zero validator exit fails the job. The validator needs `validator/` and `plugin/azdo-remote-config.ts` in the same relative layout plus a package.json with \"type\": \"module\" (ADR-0010): the Architect decides how C1 gets them (PO suggestion: a zero-dependency assemble/export script, e.g. `node backend/tools/assemble-shared-repo.ts <outdir>`, that writes the complete C1 repo tree: kilo.jsonc, azure-pipelines.yml, the policy script, the validator files, the plugin file and package.json, byte-identical copies, refusing a non-empty outdir) so the pipeline's exact command line is testable end to end. (b) A branch-policy script for the platform team (Architect picks bash or a zero-dependency Node .ts; it must run on macOS/Linux and Git Bash) that applies FR-14 to `main` with `az repos policy`: approver-count (minimum 1 reviewer, blocking), required-reviewer for the platform-team group, and build validation bound to the pipeline's build definition id (blocking). Inputs: org (URL or name), project, repository id or name, reviewer group id/descriptor, build definition id, all REQUIRED as flags; `--dry-run` prints the exact az commands without invoking az. It never takes a PAT/token as an argument (az login or AZURE_DEVOPS_EXT_PAT env only), never echoes env values, and passes each value as a single argv element (no eval / shell interpolation). PO decision: idempotency (detecting existing policies) is out of scope for this slice; the usage text states that re-running creates duplicate policies. Tests (node:test under backend/test/) inspect the YAML as text or with a tiny dev-only parser, run the pipeline's validator command in a temp copy/assembled tree, and run the policy script in child processes with a stub `az` on PATH that records argv; they never call real az, Azure DevOps or the network. The plugin file, its export surface, the validator rules/CLI behaviour, the installers and the personal config template are unchanged. Zero runtime npm deps (FR-11). Out of scope: per-team example files and team-specific validation behaviour (F-015).",
+      "acceptance_criteria": [
+        "Given backend/shared-config/azure-pipelines.yml, When a test inspects it, Then it has a `pr` trigger including branch `main`, CI-push triggering is disabled or limited to main, it selects Node 22.18 or later, contains no `npm install`/`npm ci` step, and has a script step that invokes the validator CLI (`validate-kilo-config.ts`) with `--allowed-hosts` and the files `kilo.jsonc` and `teams/*/kilo.jsonc`.",
+        "Given the C1 repo tree in a temp directory (as assembled by the Architect's chosen mechanism) containing the example kilo.jsonc and no teams directory, When the pipeline's validator script step is executed in bash from the repo root with the default allowed-hosts value, Then it exits 0; and Given a `teams/payments/kilo.jsonc` that is valid, Then it exits 0 and the output reports both files.",
+        "Given the same temp C1 tree, When kilo.jsonc (or teams/x/kilo.jsonc) gains an `apiKey` field, an `sk-bf-AbCdEf1234567890` string, or a baseURL on a host not in the allowed-hosts list, When the pipeline's validator script step runs, Then it exits non-zero (failing the PR, AC-13) and the output never contains `AbCdEf1234567890`.",
+        "Given the C1 tree, When it is inspected, Then validator/validate-kilo-config.ts, validator/kilo-config-rules.ts, validator/kilo-schema-subset.json and plugin/azdo-remote-config.ts are byte-identical to the backend/ sources and their relative layout matches backend/, and a package.json with `\"type\": \"module\"` and no `dependencies` is present.",
+        "Given the branch-policy script with all required inputs and `--dry-run`, When executed with a stub az on PATH, Then it exits 0, the stub az is never invoked, and stdout lists exactly three `az repos policy` commands: `approver-count create` with `--minimum-approver-count 1` and `--blocking true`, `required-reviewer create` naming the supplied reviewer group, and `build create` naming the supplied build definition id with `--blocking true`, each scoped to `--branch main` and the supplied repository, org and project.",
+        "Given the branch-policy script without `--dry-run`, When executed with a recording stub az, Then az is invoked exactly three times with the same arguments as the dry-run output (each value as one argv element, so a value like `team; rm -rf x` or `$(id)` is passed literally and nothing else is executed), and Given the stub az fails on any call, Then the script stops at that call and exits non-zero with a fixed message naming the failing policy, without echoing az's output.",
+        "Given the branch-policy script with any required input missing, an empty value, an unknown flag, or a positional argument, When executed, Then it exits 2 with usage help that does not echo the offending value, and az is never invoked; and Given AZURE_DEVOPS_EXT_PAT set to a sentinel value on any path, Then the sentinel appears in no stdout/stderr, and the script accepts no flag for a PAT or token.",
+        "Given the repository after the change, When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0 and runs the new pipeline and policy-script tests, backend/package.json has no runtime `dependencies`, backend/plugin/azdo-remote-config.ts, backend/validator/*, backend/personal-config/kilo.jsonc and backend/installer/* are unchanged, and docs/architecture documents the C1 repo layout, the pipeline and the policy script's flags and exit codes."
+      ],
+      "source": "vision",
+      "cycle_done": 15
+    },
+    {
+      "id": "F-009",
+      "title": "Personal config template",
+      "type": "feature",
+      "priority": 2,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-001",
+        "F-007"
+      ],
+      "description": "FR-16 / FR-17, C3. Ship the personal config template matching VISION Appendix B as a JSONC file under backend/ (PO default: backend/personal-config/kilo.jsonc; Architect may pick another path under backend/ and record it). It is the file the installers (F-010/F-011) copy to `~/.config/kilo/kilo.jsonc`. Content: `$schema`, one `plugin` entry `[\"./azdo/azdo-remote-config.ts\", {org, project, repo, path, branch, mode}]` with example values (contoso / platform / kilo-config / /kilo.jsonc / main / defaults; org, project and repo written explicitly because repo has no default since contract 0.5.0; no `pat` option, PAT and az login come from env/az per FR-3), and `provider.bifrost.options.apiKey` holding a placeholder (PO default `sk-bf-<your-virtual-key>`) that does NOT match the validator's SECRET_PATTERN. A comment states the file belongs in the global config directory only, never in a project directory (FR-17). The template legitimately contains `apiKey`, so it is NOT checked with the full shared-config rule set: tests reuse the F-007 validator library (`validateConfigText` from backend/validator/kilo-config-rules.ts) and filter its findings (secret-pattern must be absent; api-key and plugin-ignored are expected for this file). No change to the plugin file or its export surface, and no change to the validator's rules or CLI behaviour. Tests live under backend/test/ and run via `bash scripts/ci.sh`. Zero runtime npm deps (FR-11).",
+      "acceptance_criteria": [
+        "Given the shipped template file, When it is read and parsed with the plugin's `__internals.parseJsonc`, Then it parses without error, the root is a plain object whose top-level keys are exactly `$schema`, `plugin` and `provider`, `$schema` equals `https://app.kilo.ai/config.json`, and the raw text contains a comment mentioning `~/.config/kilo/kilo.jsonc` and that the file must not be placed in a project directory (FR-17).",
+        "Given the parsed template, When `plugin` is inspected, Then it is an array with exactly one entry, that entry is a two-element array whose first element is `./azdo/azdo-remote-config.ts` and whose second element is an object with exactly the keys org, project, repo, path, branch and mode (no `pat`), each a non-empty string, with path starting with `/` and mode equal to `defaults` or `enforce`.",
+        "Given the template's plugin options, When passed to `__internals.resolveSettings` with an empty injected env, Then `missing` is empty, `warnings` is empty, and settings.org/project/repo/path/branch/mode equal the template's values (the template alone is a complete configuration).",
+        "Given the parsed template, When `provider` is inspected, Then its only key is `bifrost`, `provider.bifrost` has only the key `options`, `provider.bifrost.options` has only the key `apiKey`, and apiKey is a string that starts with `sk-bf-` but does not match the validator's exported `SECRET_PATTERN` (e.g. `sk-bf-<your-virtual-key>`), so no baseURL, models or other shared values are duplicated locally.",
+        "Given the template text, When validated with the F-007 library `validateConfigText`, Then there is no `secret-pattern` finding and no error finding other than the expected `api-key` rule; and Given a copy of the template text with the placeholder replaced by `sk-bf-AbCdEf1234567890`, When validated the same way, Then a `secret-pattern` finding is reported and no finding field contains `AbCdEf1234567890` (the check is not vacuous).",
+        "Given the template as the local Kilo config and the shipped shared example (F-007 backend/shared-config/kilo.jsonc) parsed with parseJsonc, When `__internals.mergeConfig` runs in `defaults` and in `enforce` mode, Then provider.bifrost.options.apiKey still equals the template placeholder, provider.bifrost.options.baseURL and the models `azure/gpt-5` and `azure/gpt-5-mini` are added from the shared file, and the local `plugin` and `$schema` values are unchanged.",
+        "Given the repository after the change, When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0 and runs the new template tests, backend/package.json has no runtime `dependencies`, backend/plugin/azdo-remote-config.ts is unchanged, and the validator CLI behaviour on the shared example is unchanged (exit 0)."
+      ],
+      "source": "vision",
+      "cycle_done": 10
+    },
+    {
+      "id": "F-010",
+      "title": "Bootstrap installer for macOS/Linux (install.sh): plugin copy, personal config, prerequisite check",
+      "type": "feature",
+      "priority": 2,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-006",
+        "F-009"
+      ],
+      "description": "FR-18 (install.sh half) / FR-19 / FR-20 / FR-21 / FR-23 / AC-12 / AC-14 for POSIX (macOS, Linux; also runnable under Git Bash for CI). Cycle 0011 PO split: the FR-22 smoke test (fetch shared file + Bifrost /v1/models) moved to F-019 so this slice stays small. Location: backend/installer/install.sh (ADR-0001 layout); the Architect records in an ADR how the installer locates the plugin source (e.g. relative to the script, ../plugin/azdo-remote-config.ts, or an explicit source option) and the personal config template (backend/personal-config/kilo.jsonc). Inputs (PO decision): org, project and repo are REQUIRED (repo has no default since contract 0.5.0) and are given as flags (e.g. --org/--project/--repo) or KILO_AZDO_ORG/PROJECT/REPO env vars; optional path/branch/mode with the plugin defaults. The engineer's virtual key is supplied ONLY via the env var KILO_BIFROST_KEY (never a CLI argument, so it never appears in argv / process listings); when absent, an existing apiKey is kept, or the template placeholder is written for a new config and a message tells the engineer to set it. Editing an existing JSONC personal config (FR-20): the Architect may delegate parsing/editing to a zero-dependency Node helper reusing the plugin's parseJsonc (Kilo CLI ships on npm, so Node is assumed present; the installer checks for it and prints a fix if missing) or another approach; comments in an existing personal config need not be preserved, but a byte-identical timestamped backup is written before any modification. Cycle 0010 security/architect/docs follow-ups: the personal config is written with user-only permissions (0600; ~/.config/kilo/azdo/ not group/world-writable), an existing personal config is never overwritten without a backup, and the plugin entry path ./azdo/azdo-remote-config.ts resolves relative to the Kilo global config dir (~/.config/kilo/, honouring XDG_CONFIG_HOME if the Architect confirms Kilo does). Prerequisites are checked BEFORE anything is written. Tests run install.sh in a child bash process with a temp HOME and a fake PATH containing stub az/node as needed; they never touch the real home directory, network, az or Kilo. The plugin file, its export surface and the validator rules are unchanged. Zero runtime npm deps (FR-11).",
+      "acceptance_criteria": [
+        "Given a temp HOME with no ~/.config/kilo/, org/project/repo supplied, KILO_BIFROST_KEY set and a stub `az` on PATH that reports a logged-in account, When install.sh runs, Then it exits 0, `~/.config/kilo/azdo/azdo-remote-config.ts` is byte-identical to backend/plugin/azdo-remote-config.ts, and `~/.config/kilo/kilo.jsonc` parses with the plugin's `__internals.parseJsonc` to an object with exactly one plugin entry `[\"./azdo/azdo-remote-config.ts\", {...}]` whose org/project/repo equal the supplied values and whose path/branch/mode are `/kilo.jsonc`/`main`/`defaults`, and provider.bifrost.options.apiKey equals KILO_BIFROST_KEY; and on POSIX the personal config's mode is 0600.",
+        "Given any run with KILO_BIFROST_KEY set to `sk-bf-AbCdEf1234567890` and AZDO_PAT set to a sentinel value, When the full stdout and stderr of install.sh are captured, Then neither value appears in the output; and Given a fresh HOME and KILO_BIFROST_KEY unset, When install.sh runs, Then apiKey equals the template placeholder `sk-bf-<your-virtual-key>` and the output tells the engineer to set their virtual key.",
+        "Given an existing ~/.config/kilo/kilo.jsonc (with comments) containing `model`, `provider.other`, `provider.bifrost.options.headers`, `provider.bifrost.options.apiKey: 'sk-bf-existing'`, another plugin entry `my-other-plugin` and an outdated azdo-remote-config entry, When install.sh runs with KILO_BIFROST_KEY unset, Then every other key deep-equals its previous value, `my-other-plugin` is still present, there is exactly one azdo-remote-config entry carrying the supplied options, apiKey is still `sk-bf-existing`, and a backup file byte-identical to the original exists next to it; and When run with KILO_BIFROST_KEY set, Then apiKey is updated to that value.",
+        "Given any install.sh run (fresh or update), When the temp HOME is inspected afterwards, Then nothing exists under `~/.config/kilo/plugin/` that was created by the installer and the personal config references azdo-remote-config.ts exactly once (plugin loads exactly once, AC-12, FR-19).",
+        "Given a PATH without `az` and no AZDO_PAT / AZURE_DEVOPS_EXT_PAT / KILO_AZDO_PAT, or a stub `az` whose `account show` exits non-zero, When install.sh runs, Then it exits non-zero, stderr names the fix (install the Azure CLI and run `az login`, or set AZDO_PAT), and no file or directory is created under the temp HOME; and Given no az but AZDO_PAT set, Then the prerequisite check passes (FR-21).",
+        "Given install.sh has run successfully once, When it is run a second time with the same inputs, Then it exits 0, and a recursive byte comparison of ~/.config/kilo/ before and after shows no change except (at most) the plugin file, and no additional backup file is created (AC-14, FR-23).",
+        "Given missing org, project or repo (no flag and no env var), an unknown flag, or an existing personal config that is not valid JSONC or whose root is not an object, When install.sh runs, Then it exits non-zero with a usage or fixed error message (no stack trace, no file contents echoed) and every pre-existing file under the temp HOME is byte-identical afterwards.",
+        "Given the repository after the change, When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0 and runs the installer tests (or skips POSIX-permission assertions on Windows with a clear message), backend/package.json has no runtime `dependencies`, and backend/plugin/azdo-remote-config.ts and backend/personal-config/kilo.jsonc are unchanged."
+      ],
+      "source": "vision",
+      "cycle_done": 11
+    },
+    {
+      "id": "F-011",
+      "title": "Bootstrap installer for Windows (install.ps1)",
+      "type": "feature",
+      "priority": 2,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-010",
+        "F-019"
+      ],
+      "description": "FR-18 (install.ps1 half) / FR-19..FR-23 / AC-10 (simulated) / AC-12 / AC-14 for Windows, behaviour parity with install.sh (F-010) and its smoke test (F-019). PO decision (cycle 0014): backend/installer/install.ps1 is a THIN front end like install.sh: it parses parameters, applies env/defaults, checks prerequisites, then pipes the NUL-terminated stdin records of contract installer-cli section 4 (org, project, repo, path, branch, mode, apiKey, smoke) to the existing `node install-helper.ts`, whose exit code it returns. All file work, personal-config editing, backups, permissions and the smoke test stay in the shared helper (no second implementation in PowerShell). Parameters: -Org, -Project, -Repo, -Path, -Branch, -Mode, -NoSmoke, -Help (Architect fixes exact names and records them as a contract amendment, e.g. installer-cli 1.2.0); env fallbacks KILO_AZDO_ORG/PROJECT/REPO/PATH/BRANCH/MODE; the virtual key comes ONLY from env KILO_BIFROST_KEY (no parameter, never in argv) and secrets travel on stdin only. Same exit codes 0-4 and same fixed messages as install.sh (script name may read install.ps1). Must run under Windows PowerShell 5.1 and PowerShell 7+ (pwsh), with no module installs (no Pester requirement). Prerequisites (FR-21): node >= 22.18 on PATH; one of AZDO_PAT / AZURE_DEVOPS_EXT_PAT / KILO_AZDO_PAT non-empty, else `az` on PATH and `az account show` succeeding; all checked before anything is written. Plugin path: <config dir>\\azdo\\azdo-remote-config.ts with config dir from the helper (XDG_CONFIG_HOME or <USERPROFILE>\\.config\\kilo), referenced as ./azdo/azdo-remote-config.ts. Cycle 0010 security: personal config written user-only (the helper's Windows behaviour is documented by the Architect; no new ACL code required unless the Architect decides otherwise), never overwritten without a backup. Tests: node:test suites under backend/test/installer/ spawn `pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File install.ps1` (or powershell.exe when pwsh is absent) with a temp USERPROFILE/HOME, an allow-listed env and stub az/node shims, reusing the F-019 fake-network preload (test/installer/fixtures/fake-network.ts) for smoke cases; when no PowerShell is available the suite skips with a clear message. Tests never touch the real home directory, network, az or Kilo. The plugin file, its export surface, the validator rules, the personal config template and install.sh behaviour are unchanged. Zero runtime npm deps (FR-11).",
+      "acceptance_criteria": [
+        "Given a temp USERPROFILE (and HOME) with no Kilo config, -Org/-Project/-Repo supplied, KILO_BIFROST_KEY set, AZDO_PAT set and -NoSmoke, When install.ps1 runs under PowerShell, Then it exits 0, `<profile>/.config/kilo/azdo/azdo-remote-config.ts` is byte-identical to backend/plugin/azdo-remote-config.ts, and `<profile>/.config/kilo/kilo.jsonc` is byte-identical to the file install.sh produces for the same inputs in another temp home (one plugin entry `[\"./azdo/azdo-remote-config.ts\", {org, project, repo, path:'/kilo.jsonc', branch:'main', mode:'defaults'}]`, apiKey equal to KILO_BIFROST_KEY).",
+        "Given org/project/repo/path/branch/mode supplied only through KILO_AZDO_* env vars, and separately both a parameter and an env var for the same setting, When install.ps1 runs, Then env values are used when parameters are absent and the parameter wins when both are set; and Given a missing org, project or repo, an unknown parameter (e.g. -ApiKey or -Key), or a positional argument, When it runs, Then it exits 2 with a usage message that does not echo the offending argument text and nothing is created under the temp profile.",
+        "Given an existing personal config (with comments) containing `model`, `provider.other`, `provider.bifrost.options.headers`, apiKey `sk-bf-existing`, a `my-other-plugin` entry and an outdated azdo-remote-config entry, When install.ps1 runs with KILO_BIFROST_KEY unset, Then every other key deep-equals its previous value, `my-other-plugin` is still present, exactly one azdo-remote-config entry carries the supplied options, apiKey is still `sk-bf-existing`, and a backup byte-identical to the original exists next to it (FR-20).",
+        "Given any install.ps1 run (fresh or update), When the temp profile is inspected, Then nothing exists under `.config/kilo/plugin/` or `.config/kilo/plugins/` that was created by the installer and the personal config references azdo-remote-config.ts exactly once (FR-19, AC-12); and Given install.ps1 has run successfully once, When it runs a second time with the same inputs, Then it exits 0, a recursive byte comparison of the config dir shows no change except (at most) the plugin file, and no additional backup is created (FR-23, AC-14).",
+        "Given a PATH without `az` and no AZDO_PAT / AZURE_DEVOPS_EXT_PAT / KILO_AZDO_PAT, or a stub az whose `account show` exits non-zero, or no node / a node reporting version 22.17.0 on PATH, When install.ps1 runs, Then it exits 1, stderr names the fix (install the Azure CLI and run `az login`, or set AZDO_PAT; install Node.js 22.18 or later), and nothing is created under the temp profile; and Given no az but AZDO_PAT set, Then the prerequisite check passes (FR-21).",
+        "Given the F-019 fake network (AzDO Items API serving backend/shared-config/kilo.jsonc, Bifrost GET /v1/models) and smoke enabled, When install.ps1 runs, Then with succeeding fakes it exits 0 and prints `smoke azdo: pass` and `smoke bifrost: pass` with exactly one Bifrost request carrying `Authorization: Bearer <KILO_BIFROST_KEY>`; with Bifrost returning 401 it prints `smoke bifrost: fail 401` and exits 4 leaving the installed files byte-identical to the success run (AC-10 simulated); and with -NoSmoke no smoke request is sent and no `smoke` line is printed.",
+        "Given runs on the success, usage-error, prerequisite-failure and smoke-failure paths with KILO_BIFROST_KEY `sk-bf-AbCdEf1234567890` and AZDO_PAT set to a sentinel value, When the full stdout and stderr are captured and the command line of every process spawned by install.ps1 is checked (e.g. via the stub node/az shims recording their argv), Then neither value appears in any output or argv, and install.ps1 has no parameter that accepts a key or PAT.",
+        "Given the repository after the change, When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0 and runs the install.ps1 tests (or skips them with a clear message when no PowerShell is installed), the existing install.sh, smoke and helper tests still pass, backend/package.json has no runtime `dependencies`, backend/plugin/azdo-remote-config.ts, backend/personal-config/kilo.jsonc and backend/installer/install.sh are unchanged, and docs/architecture/contracts/installer-cli.md documents install.ps1's parameters, env inputs and exit codes."
+      ],
+      "source": "vision",
+      "cycle_done": 14
+    },
+    {
+      "id": "F-012",
+      "title": "Key provisioning: create virtual key per engineer",
+      "type": "feature",
+      "priority": 3,
+      "status": "blocked",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-001"
+      ],
+      "description": "FR-24 / FR-27. CLI calling Bifrost governance API (faked in tests).",
+      "acceptance_criteria": [
+        "Given an email, budget, rate limit and model list, When `create` runs, Then one POST to the governance virtual-keys endpoint is made with name = email and those limits.",
+        "Given a successful create, When output and logs are captured, Then the key value is never printed to stdout/logs; it is written only to a per-engineer file with 0600 permissions (or delivered via a pluggable secure-channel hook).",
+        "Given a governance API error, When `create` runs, Then it exits non-zero with the HTTP status and no admin token in output.",
+        "Given the admin token, When the tool runs, Then it is read from an env var, never from a CLI argument or the shared repo."
+      ],
+      "source": "vision",
+      "cycle_done": null,
+      "notes": "SKIPPED by user instruction (cycle 0012): do not select. Bifrost virtual-key creation and bulk CSV import/list/disable are out of scope for now. Reinstate by setting status back to todo. Architect draft for F-012 is in git stash 'F-012 architect draft'."
+    },
+    {
+      "id": "F-013",
+      "title": "Key provisioning: bulk CSV, list and disable (offboarding)",
+      "type": "feature",
+      "priority": 3,
+      "status": "blocked",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-012"
+      ],
+      "description": "FR-25 / FR-26 / AC-11.",
+      "acceptance_criteria": [
+        "Given a CSV of engineers where some already have keys, When `bulk` runs, Then keys are created only for engineers without one (no duplicates).",
+        "Given `bulk` is run twice with the same CSV, Then the second run creates nothing.",
+        "Given `list`, When run, Then it prints engineer names and key status without key values.",
+        "Given `disable alice@x`, When run, Then only alice's key is disabled and no other key is modified (AC-11).",
+        "Given `disable` for an unknown email, When run, Then it exits non-zero and modifies nothing."
+      ],
+      "source": "vision",
+      "cycle_done": null,
+      "notes": "SKIPPED by user instruction (cycle 0012): do not select. Bifrost virtual-key creation and bulk CSV import/list/disable are out of scope for now. Reinstate by setting status back to todo. Architect draft for F-012 is in git stash 'F-012 architect draft'."
+    },
+    {
+      "id": "F-014",
+      "title": "End-to-end simulated startup test",
+      "type": "feature",
+      "priority": 2,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-006",
+        "F-007",
+        "F-010",
+        "F-019"
+      ],
+      "description": "Vision AC-1 / AC-2 / AC-3 / AC-4 / AC-6 / AC-7 / AC-9 / AC-10 / AC-12, simulated end to end (startup sequence steps 1-7). Cycle 0016 PO: priority raised to 2 (critical path; last vision verification slice before docs). TEST-ONLY item: a new node:test suite (PO default backend/test/e2e/; Architect fixes the location and records the harness design in an ADR or contract note) that chains the shipped pieces exactly as an engineer's machine would: (1) run backend/installer/install.sh in a child bash process with a temp HOME (and USERPROFILE), an allow-listed env, AZDO_PAT and KILO_BIFROST_KEY set (so no az is needed); (2) a test-only 'Kilo start simulator' (child Node process, test code under backend/test/, never product code) that reads the INSTALLED personal config `<home>/.config/kilo/kilo.jsonc` with the plugin's parseJsonc, resolves each plugin entry path relative to the Kilo global config dir, dynamically imports the INSTALLED plugin file `<home>/.config/kilo/azdo/azdo-remote-config.ts` (not the backend/ source), calls its default export's `server(input, options)` with the entry's options and a capturing fake logger, runs the returned `config` hook on the parsed personal config, and writes the resulting config and captured log records to a file/stdout for assertions. Network is faked with the F-019 preload (backend/test/installer/fixtures/fake-network.ts via --import, scenario file per start); the Architect may extend that fixture (e.g. a Bifrost answer that returns 401 unless `Authorization: Bearer <expected key>` matches, and a way to change the AzDO content between starts) but it stays under backend/test/. The plugin reads its cache from `<temp home>/.cache/kilo-azdo/`; tests never touch the real home directory, real network, real az or real Kilo. When bash is unavailable the suite skips with a clear message. Product files (backend/plugin/, backend/validator/, backend/installer/, backend/personal-config/, backend/shared-config/, backend/tools/) are NOT changed; if a product defect is found the engineer records it as a finding instead of weakening the test. Zero runtime npm deps (FR-11).",
+      "acceptance_criteria": [
+        "Given a fresh temp HOME, install.sh run with --org/--project/--repo, AZDO_PAT, KILO_BIFROST_KEY and --no-smoke, and a fake AzDO Items API serving backend/shared-config/kilo.jsonc, When the Kilo start simulator loads the installed personal config and the installed plugin and runs its config hook, Then the resulting config has provider.bifrost.options.baseURL equal to the shared value, provider.bifrost.models with keys `azure/gpt-5` and `azure/gpt-5-mini`, provider.bifrost.options.apiKey equal to KILO_BIFROST_KEY, and exactly one AzDO request was sent to the dev.azure.com Items API with the installed org/project/repo, path `/kilo.jsonc`, branch `main` and api-version=7.1 (AC-1, simulated).",
+        "Given the installed personal config, When the simulator resolves its plugin entries, Then exactly one entry resolves to `<home>/.config/kilo/azdo/azdo-remote-config.ts`, the plugin server is invoked exactly once per simulated start, and nothing exists under `<home>/.config/kilo/plugin/` or `plugins/` (AC-12).",
+        "Given a first successful simulated start, When the shared file served by the fake AzDO is changed (e.g. a new model `azure/gpt-5-nano` added and a top-level `small_model` value changed) and the simulator starts again with no installer re-run, Then the new model and value are in effect, every other resulting key deep-equals the first start's result, the personal config and installed plugin file are byte-identical to before, and `<home>/.cache/kilo-azdo/remote-config.json` holds the new shared content (AC-2).",
+        "Given a successful start has written the cache, When the next start's fake AzDO fails (request throws, and separately returns HTTP 500), Then the resulting config deep-equals the result of the successful start and a warn-level record with service `azdo-remote-config` was logged; and Given a fresh install with no cache and a failing fake AzDO, When the simulator starts, Then the resulting config deep-equals the installed personal config as parsed (local config only), an error-level record was logged, and the simulator exits 0 (AC-3, AC-4, FR-10).",
+        "Given a personal config edited after install to add a local top-level `model: 'local-model'` and a shared file that sets `model: 'azure/gpt-5'`, When the simulator starts with the installed mode `defaults` and again after re-running install.sh with --mode enforce, Then defaults keeps `local-model`, enforce yields `azure/gpt-5`, and in both runs provider.bifrost.options.apiKey still equals KILO_BIFROST_KEY even if the shared file carries an `apiKey` (AC-6, AC-7).",
+        "Given a fake Bifrost that enforces auth (401 unless `Authorization: Bearer <the engineer's key>`), When install.sh runs with smoke enabled and the matching KILO_BIFROST_KEY, Then it prints `smoke bifrost: pass` and exits 0; When it runs with a different key (simulating another or a disabled key), Then it prints `smoke bifrost: fail 401` and exits 4 with the installed files unchanged; and When a request to `<baseURL>/models` without an Authorization header is sent through the same fake, Then it gets 401 (AC-10, simulated).",
+        "Given every scenario above with KILO_BIFROST_KEY `sk-bf-AbCdEf1234567890` and AZDO_PAT set to a sentinel, When all installer stdout/stderr, simulator stdout/stderr and every captured logger record are serialised, Then none contains the key, the PAT sentinel or the base64 Basic credential (AC-9).",
+        "Given the repository after the change, When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0 and runs the new end-to-end suite (or skips it with a clear message when bash is unavailable), all existing suites still pass, no real network or az call is made, backend/package.json has no runtime `dependencies`, and backend/plugin/, backend/validator/, backend/installer/, backend/personal-config/ and backend/shared-config/ are unchanged."
+      ],
+      "source": "vision",
+      "cycle_done": 16
+    },
+    {
+      "id": "F-015",
+      "title": "Per-team config files support",
+      "type": "feature",
+      "priority": 4,
+      "status": "blocked",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-006",
+        "F-008"
+      ],
+      "description": "FR-15. Example /teams/<team>/kilo.jsonc and validation coverage; plugin `path` option selects it.",
+      "acceptance_criteria": [
+        "Given path `/teams/payments/kilo.jsonc`, When the plugin fetches, Then the request targets that path.",
+        "Given an example team file, When validated, Then the validator exits 0.",
+        "Given a team file with an apiKey, When the pipeline validator runs over teams/*, Then it fails."
+      ],
+      "source": "vision",
+      "cycle_done": null,
+      "notes": "SKIPPED by user instruction (cycle 0017): do not select. Per-team config files are out of scope for now. Reinstate by setting status back to todo. Architect draft (if any) is in git stash 'F-015 architect draft'."
+    },
+    {
+      "id": "F-016",
+      "title": "User and operator documentation",
+      "type": "feature",
+      "priority": 3,
+      "status": "done",
+      "scope": {
+        "backend": false,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-010",
+        "F-011",
+        "F-008",
+        "F-014"
+      ],
+      "description": "Engineer setup guide, platform-team runbook (config change, key provisioning, offboarding), KILO_PURE caveat, supported Kilo version range, Phase 0 assumptions A1-A3 checklist. User decision (cycle 0012): F-012/F-013 are skipped, so treat the F-013 dependency as waived and omit key-provisioning/offboarding runbook content. Cycle 0013 architect follow-up: document installer exit code 4, --no-smoke (and the Windows equivalent once F-011 ships) and each smoke fixed code with what to do. Cycle 0014: also document install.ps1 ExecutionPolicy/Unblock-File guidance (already in the user guide), the 'Rewritten by install.sh' header note, and Windows ACL residual risk. Cycle 0015: the platform runbook should cover setting up the C1 repo, the PR pipeline and the branch-policy script from F-008 (if shipped by then). Cycle 0015 security: runbook should tell platform engineers to restrict the 'Bypass policies' and 'Edit policies' permissions on the shared config repo (a PR can alter its own gate). Cycle 0016: fold the manual Phase 0 checklist from docs/development.md ('What stays manual (Phase 0)': real Kilo CLI /models and VS Code model list against real AzDO + Bifrost, Kilo's own loading of the .ts plugin and path resolution, disabled key rejected at request time) into the platform runbook. Also note the repo now has a GitHub origin; document the PR/branch flow if the factory moves to remote mode. User decision (cycle 0017): F-015 (per-team files) is SKIPPED too - do not document per-team files as a feature; the generic `path` option may be mentioned only as the existing plugin/installer setting.",
+      "acceptance_criteria": [
+        "Given the repository, When the automated docs check (wired into `bash scripts/ci.sh`) runs, Then docs/engineer-setup.md, docs/platform-runbook.md and docs/troubleshooting.md exist, each links to the other two via relative links that resolve to existing files, and README.md links to all three; and Given any of these pages or links is removed (fixture/negative control), Then the check exits non-zero naming the missing item.",
+        "Given docs/troubleshooting.md, When the check scans it, Then it mentions `KILO_PURE=1` (with the note that CI jobs needing the shared config must not set it), `az login`, the cache path `~/.cache/kilo-azdo/remote-config.json`, and installer exit code 4 together with `--no-smoke` and its Windows equivalent.",
+        "Given docs/engineer-setup.md, When the check scans it, Then it contains the supported Kilo range read at check time from `SUPPORTED_KILO_RANGE` in backend/plugin/azdo-remote-config.ts (not hard-coded in the check), and it covers both install.sh and install.ps1 including the ExecutionPolicy/Unblock-File guidance.",
+        "Given docs/platform-runbook.md, When the check scans it, Then it contains a Phase 0 checklist naming assumptions A1, A2 and A3 and the manual checks from docs/development.md (real Kilo CLI `/models` and VS Code model list, Kilo loading the .ts plugin and its path resolution, disabled key rejected by Bifrost at request time), plus sections on setting up the shared config repo, the PR pipeline and the branch-policy script, and on restricting the 'Bypass policies' and 'Edit policies' permissions.",
+        "Given all Markdown files under docs/ plus README.md, When scanned for `sk-bf-` followed by real-looking key material (16 or more consecutive alphanumeric characters; `<placeholder>` and `...` forms allowed), Then none is found; and Given a temporary fixture containing such a key (built at test time, never committed), Then the scan fails (negative control).",
+        "Given the skipped scope (F-012, F-013, F-015), When the check scans docs/engineer-setup.md and docs/platform-runbook.md, Then they contain no key-provisioning or offboarding procedure and no per-team config file (`teams/`) instructions, and the runbook states that Bifrost virtual keys are issued and disabled manually by the platform team outside this project."
+      ],
+      "source": "vision",
+      "cycle_done": 18,
+      "notes": "Selected in cycle 0018 (last remaining vision feature). F-013 dependency waived by user decision; depends_on now lists the shipped features whose behaviour is documented. Docs-only (scope.backend/frontend false): the only code is the automated docs check; the Architect decides where it lives (recommended: a dependency-free Node script under scripts/ called from scripts/ci.sh, with fixture-based negative controls). Must omit key provisioning, offboarding and per-team files (SKIPPED by user instruction)."
+    },
+    {
+      "id": "F-019",
+      "title": "Bootstrap installer smoke test (install.sh)",
+      "type": "feature",
+      "priority": 2,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-010"
+      ],
+      "description": "FR-22 / AC-10 (simulated), split out of F-010 in cycle 0011. After a successful install (exit 0 path of contract installer-cli 1.0.0), install.sh runs a smoke test with two checks: (1) `azdo`: fetch the shared file with the plugin's own `__internals.fetchRemoteConfig` (same URL, PAT/az-token rules and fixed error codes as FR-2/FR-3; no second HTTP/auth implementation) and parse it with `__internals.parseJsonc`; (2) `bifrost`: GET `<provider.bifrost.options.baseURL>/models` (baseURL from the fetched shared config, trailing slash normalised; with the Appendix A value this is `https://bifrost.yourcompany.internal/v1/models`) with `Authorization: Bearer <apiKey>` where apiKey is the value now in the personal config. PO decisions (conservative): the key is never sent over non-https, so a non-https or unparseable baseURL makes the bifrost check fail with a fixed code without any request; when the personal config still holds the template placeholder `sk-bf-<your-virtual-key>` (no key set) the bifrost check reports `skipped` with a message to set KILO_BIFROST_KEY and sends nothing; when the azdo check fails the bifrost check is `skipped`. Each request is bounded by the plugin timeout (settings.timeoutMs, default 5000 ms) and response bodies are capped (1 MiB). Exit codes (contract amendment, Architect records it): 0 = installed and every check passed or was skipped; 4 = installed but at least one smoke check failed; a failed smoke test NEVER undoes or modifies the installation. A `--no-smoke` flag skips the smoke test (for offline machines and for the existing F-010 installer tests, which must not touch the network). Output is one line per check: `smoke <check>: pass|fail|skipped [<fixed code or HTTP status>]`. Test seam (Architect decides; PO suggestion): the smoke logic lives in a pure module under backend/installer/ with injectable fetch/runAz/env, unit-tested with fakes, plus child-process tests of install.sh that replace globalThis.fetch via a test-only preload (e.g. NODE_OPTIONS=--import <fixture>) or local fake HTTP servers; no product-level option may redirect the AzDO host or relax the https rule. Tests never touch the real network, az, Kilo or home directory. The plugin file and its export surface, the validator rules and the personal config template are unchanged. Zero runtime npm deps (FR-11).",
+      "acceptance_criteria": [
+        "Given a temp HOME, valid org/project/repo, AZDO_PAT set, KILO_BIFROST_KEY set, a fake AzDO Items API returning the shipped example shared config (backend/shared-config/kilo.jsonc) and a fake Bifrost returning 200 for GET /v1/models, When install.sh runs, Then it exits 0, prints `smoke azdo: pass` and `smoke bifrost: pass`, the AzDO request was made via the plugin's fetchRemoteConfig URL rules (dev.azure.com Items API, api-version=7.1, the configured path/branch), and exactly one Bifrost request was sent to `https://bifrost.yourcompany.internal/v1/models` carrying `Authorization: Bearer <KILO_BIFROST_KEY>`.",
+        "Given the fake Bifrost returns 401 (AC-10, simulated) or the fake AzDO returns 404, When install.sh runs, Then the failing check prints `fail` with the HTTP status (e.g. `smoke bifrost: fail 401`, `smoke azdo: fail http-404`), when azdo fails the bifrost check is reported `skipped` and no Bifrost request is sent, the script exits 4, and the personal config and plugin file are byte-identical to those of a successful run with the same inputs (installation is not undone).",
+        "Given a fetch that never responds, or a fetched shared file that is invalid JSONC, has no string provider.bifrost.options.baseURL, or has an `http://` or unparseable baseURL, When the smoke test runs, Then the relevant check fails with a fixed code (e.g. timeout, invalid-jsonc, no-base-url, insecure-base-url) within a bounded time (timeoutMs), no request carrying the virtual key is sent to a non-https URL, and the script exits 4.",
+        "Given a fresh HOME with KILO_BIFROST_KEY unset (personal config holds the placeholder `sk-bf-<your-virtual-key>`), When install.sh runs with succeeding fakes, Then the bifrost check is reported `skipped` with a message telling the engineer to set KILO_BIFROST_KEY, no Bifrost request is sent, and the script exits 0; and Given an existing personal config with apiKey `sk-bf-existing` and KILO_BIFROST_KEY unset, Then the Bifrost request carries `Bearer sk-bf-existing`.",
+        "Given no PAT from any source and a stub az that returns a token, When the smoke test runs, Then the AzDO request carries `Authorization: Bearer <token>` (same rules as FR-3 through fetchRemoteConfig) and the Bifrost request carries only the virtual key, never the az token or PAT.",
+        "Given smoke test runs on the success, 401, 404, timeout and exception paths with KILO_BIFROST_KEY `sk-bf-AbCdEf1234567890`, AZDO_PAT and an az token set to sentinel values, When the full stdout and stderr are captured, Then none of those values (nor the base64 Basic credential) appears, and no error message text from fetch or the response body is echoed.",
+        "Given `--no-smoke`, When install.sh runs, Then no HTTP request and no az token call for the smoke test is made, no `smoke` line is printed and the exit code follows the F-010 contract; and Given an install that fails before writing (exit 1, 2 or 3), Then the smoke test does not run.",
+        "Given the repository after the change, When `bash scripts/ci.sh` (including the FR-11 lint) runs, Then it exits 0, runs the new smoke-test tests and the existing F-010 installer tests (which make no real network call), backend/package.json has no runtime `dependencies`, backend/plugin/azdo-remote-config.ts and backend/personal-config/kilo.jsonc are unchanged, and docs/architecture/contracts/installer-cli.md documents the smoke test output, exit code 4 and `--no-smoke`."
+      ],
+      "source": "po",
+      "cycle_done": 13
+    },
+    {
+      "id": "T-002",
+      "title": "Harden FR-11 lint against import evasions",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-001"
+      ],
+      "description": "Security/review: backend/tools/check-fr11.mjs regexes can be bypassed (template-literal or variable import(), createRequire, a \"/*\" string literal). Use ts.preProcessFile/AST, reject non-literal import() and createRequire, and add fixtures for these plus untested branches (export-from, bare import, missing/invalid package.json, missing plugin/, --root without value). Cycle 0009 security low 2: rule 5 (validator imports) scans only .ts files directly in validator/, not subdirectories; scan recursively or fail when subdirectories exist.",
+      "acceptance_criteria": [
+        "Given a plugin file using import(`lodash`), import(variable), createRequire, or a \"/*\" string hiding an import, When check-fr11 runs, Then it exits 1.",
+        "Given fixtures for export-from, bare import, missing/invalid package.json, missing plugin/ and --root without a value, When tests run, Then each is covered and behaves as specified."
+      ],
+      "source": "security",
+      "cycle_done": null,
+      "notes": "Cycle 0020 PO: lowered to 4; check-fr11 is a dev-time guard against accidental dependencies, not a security boundary; evasions require a deliberate act that code review would catch."
+    },
+    {
+      "id": "T-003",
+      "title": "Release build step packaging the plugin file",
+      "type": "chore",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-001"
+      ],
+      "description": "Copy plugin/azdo-remote-config.ts to backend/dist/ so release.yml attaches it as an artefact; fits with the installer items.",
+      "acceptance_criteria": [
+        "Given a release, When release.yml runs, Then backend/dist/azdo-remote-config.ts is attached and byte-identical to the source."
+      ],
+      "source": "architect",
+      "cycle_done": null
+    },
+    {
+      "id": "T-004",
+      "title": "Escape raw BOM literal and lint invisible characters",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [],
+      "description": "PO cycle 0005: the BOM constant is already written as the ASCII escape (verified, line 43; cycle 0004 review confirmed), so AC1 is a regression check only. Remaining work: add a CI check (e.g. in check-fr11 or a script) that flags invisible characters in source files. Optionally copy unchanged text runs by slice in parseJsonc to cut memory (security low finding, cycle 0003).",
+      "acceptance_criteria": [
+        "Given the plugin source, When inspected, Then the BOM constant is written as the ASCII escape \"\\ufeff\" and the file contains no raw U+FEFF.",
+        "Given a source file containing a raw invisible character, When the CI check runs, Then it exits non-zero."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-005",
+      "title": "CHANGELOG missing v0.1.0 (F-001) entry",
+      "type": "chore",
+      "priority": 4,
+      "status": "done",
+      "scope": {
+        "backend": false,
+        "frontend": false
+      },
+      "depends_on": [],
+      "description": "state.json records v0.1.0 released in cycle 3 for F-001, but CHANGELOG.md only lists 0.0.1. CI releaser should backfill the [0.1.0] entry (can be done alongside the next release).",
+      "acceptance_criteria": [
+        "Given CHANGELOG.md, When an automated check reads it, Then it has a `## [0.1.0]` section mentioning F-001 and the version in VERSION has a matching section."
+      ],
+      "source": "po",
+      "cycle_done": 4
+    },
+    {
+      "id": "T-006",
+      "title": "Placeholder resolver test hardening",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-002"
+      ],
+      "description": "Review info findings (cycle 0004) on backend/test/plugin/placeholders.test.ts: the inherited-env-names test would pass without the own-property check; the 1 MiB cap is only tested at cap+1. Security info finding 5 (cycle 0004): also check length after reading to cover /proc pseudo-files reporting size 0 and files grown after stat (TOCTOU).",
+      "acceptance_criteria": [
+        "Given an env created via Object.create({INH:'x'}), When {env:INH} is resolved, Then it is unresolved (test fails if the own-property check is removed).",
+        "Given a file of exactly 1 MiB, When read with the default reader, Then it resolves; at 1 MiB + 1 it does not.",
+        "Given a reader result longer than the cap, When resolved, Then it is treated as unresolved.",
+        "Given shared {toString:'x'} merged into {} in defaults mode, When mergeConfig runs, Then target.toString is the own value 'x' (test fails if the own-property read guard is removed)."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "F-017",
+      "title": "Optional allowlist for {file:} and {env:} placeholders",
+      "type": "security",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-002",
+        "F-004"
+      ],
+      "description": "Security finding 2 (accepted risk in cycle 0004): the shared config can read any env var or user-readable file. Add an optional allowlist/path-prefix limit configurable in settings to reduce exfiltration blast radius.",
+      "acceptance_criteria": [
+        "Given an allowlist of env names and path prefixes, When a placeholder outside it is resolved, Then it is unresolved and reported by name only.",
+        "Given no allowlist configured, When resolving, Then behaviour is unchanged (backwards compatible)."
+      ],
+      "source": "security",
+      "cycle_done": null,
+      "notes": "Cycle 0020 PO: kept at 3 but deferred; the shared config repo is PR-gated by Azure Pipelines and branch policy (F-008), which is the primary control for this accepted risk. Worth doing later if the shared repo gains writers outside the platform team. Cycle 0021 PO: lowered to 4 at factory close (DONE). It is an optional defence-in-depth control for an accepted risk, not a vision capability; first in the recommended order of later work."
+    },
+    {
+      "id": "T-007",
+      "title": "mergeConfig hardening: visited set and sparse arrays",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-003"
+      ],
+      "description": "Security/review low+info findings in backend/plugin/azdo-remote-config.ts: containsApiKey keeps no visited set (exponential on local graphs with shared references); sanitizeShared uses node.map which keeps sparse holes instead of null per ADR-0005 (copy with an index loop).",
+      "acceptance_criteria": [
+        "Given a local config reusing the same object in many places (30 levels, 2 refs each), When mergeConfig runs in enforce mode with a conflict, Then it completes quickly (WeakSet visited tracking).",
+        "Given a sparse array in shared input, When sanitized, Then holes become null as the ADR states."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-008",
+      "title": "CHANGELOG missing v0.3.0 (F-003) entry",
+      "type": "chore",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": false,
+        "frontend": false
+      },
+      "depends_on": [],
+      "description": "Cycle 0006 backfilled CHANGELOG [0.3.0]. Remaining: make release prepare (scripts/ci.sh or a check script) fail when VERSION has no matching CHANGELOG section, so this cannot recur (0.1.0 and 0.3.0 were both missed).",
+      "acceptance_criteria": [
+        "Given VERSION is X.Y.Z and CHANGELOG.md has no [X.Y.Z] section, When bash scripts/ci.sh runs, Then it exits non-zero with a clear message.",
+        "Given matching sections exist, When ci.sh runs, Then the check passes."
+      ],
+      "source": "release",
+      "cycle_done": null,
+      "notes": "Cycle 0020 PO: lowered to 4; CHANGELOG sections have matched VERSION for every release since v0.3.0, so recurrence risk is low. Cheap to fold into any future ci.sh change."
+    },
+    {
+      "id": "T-009",
+      "title": "resolveSettings optional hardening",
+      "type": "tech-debt",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-004"
+      ],
+      "description": "Optional security info items from cycle 0006: extend hasControlChar to C1 controls and bidi overrides; cap string setting values at about 1024 characters with W2. (Lone surrogates are handled in F-005.)",
+      "acceptance_criteria": [
+        "Given an org/project/repo/branch/path value with C1 controls or bidi overrides, When resolved, Then it is ignored with the fixed W2 warning.",
+        "Given a value longer than the cap, When resolved, Then it is ignored with W2."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-010",
+      "title": "Test default az runner and kill az process tree on Windows",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-005"
+      ],
+      "description": "Cycle 0007 security low 1 / info 3 and review info 1+2: defaultRunAz (POSIX and Windows cmd.exe path) has no automated test, and a Windows timeout kills only cmd.exe so az may keep running. Kill the process tree (taskkill /T) or pass the shared AbortSignal to execFile; add tests with a stub az / az.cmd.",
+      "acceptance_criteria": [
+        "Given a stub az on PATH, When the default runner runs, Then it returns the stub's trimmed stdout and sends no shell metacharacters.",
+        "Given an az that hangs on Windows, When the timeout fires, Then the whole process tree is terminated."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-011",
+      "title": "Document MAX_EMPTY_CHUNKS in the plugin contract",
+      "type": "chore",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-005"
+      ],
+      "description": "Cycle 0007 review info 3: the 1024 consecutive empty-chunk limit in fetchRemoteConfig is not in the contract; Architect to add it (plugin-interface.md / ADR-0007). Also list fileTooLargeFinding() in validator-cli.md section 8 (cycle 0009 review info 4).",
+      "acceptance_criteria": [
+        "Given the plugin contract, When read, Then it states the consecutive empty-chunk limit and the resulting error code."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-012",
+      "title": "Document and test Windows case-insensitive env lookup for {env:} placeholders",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-006"
+      ],
+      "description": "Moved out of F-006 (cycle 0008 PO) to keep F-006 at 8 ACs. On Windows, process.env lookups are case-insensitive while injected test envs are case-sensitive; document the behaviour of {env:NAME} through the hook and test it.",
+      "acceptance_criteria": [
+        "Given the plugin contract and user docs, When read, Then they state that {env:NAME} lookups follow process.env semantics (case-insensitive on Windows, case-sensitive elsewhere).",
+        "Given a Windows CI runner and process.env with `Path` set, When `{env:PATH}` is resolved through the default env, Then it resolves; on non-Windows the test is skipped with a clear message."
+      ],
+      "source": "po",
+      "cycle_done": null
+    },
+    {
+      "id": "T-013",
+      "title": "Bind cache to the settings that produced it",
+      "type": "security",
+      "priority": 2,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-006"
+      ],
+      "description": "Cycle 0008 security low 1: the cache (~/.cache/kilo-azdo/remote-config.json, FR-7) is one fixed file not linked to org/project/repo/path/branch, so on fetch failure a cache written for another org or repo can be applied. Store a non-secret settings fingerprint (org, project, repo, path, branch; never the PAT or any token) with the cached config and verify it on read; apply the cache only on an exact match. Scope (cycle 0019): plugin cache write/read and hook fallback in backend/plugin/azdo-remote-config.ts, its tests, and the plugin-interface contract section 2f (cache file format). The ADR-0009 question (can a Kilo project-level config override the global plugin options) is split out to T-029 because it needs a real Kilo and cannot be verified by an automated test.",
+      "acceptance_criteria": [
+        "Given a cache written by a successful fetch with settings for org A / project P / repo R, When the hook runs with settings that differ in any one of org, project, repo, path or branch and the fetch fails, Then the cached config is NOT merged (config object unchanged), and an error-level log with a fixed message (e.g. reason `cache-mismatch`) is written that contains none of the settings values.",
+        "Given a cache written for settings S, When the hook runs again with identical settings S and the fetch fails, Then the cached config is applied exactly as before this change (AC-3 / FR-7 behaviour preserved) and the existing 'using cached config' warning is logged.",
+        "Given a successful fetch with a PAT supplied via options or env, When the cache file is written, Then the file contains the binding fields (org, project, repo, path, branch) and the shared config, and does NOT contain the PAT value, any Authorization/bearer token, or the az access token (asserted by searching the written bytes for the test secret values).",
+        "Given a legacy cache file in the pre-change format (bare shared-config object with no binding) or a cache whose binding is malformed (missing field, wrong type), When the fetch fails, Then the cache is treated as unusable (not applied, never throws), and When the next fetch succeeds, Then the cache is rewritten in the new bound format.",
+        "Given required settings are missing (org, project or repo unset), When the hook runs and a cache exists, Then the cache is not applied (no binding can be verified), the existing missing-settings warning is logged, and the hook completes without throwing with the config unchanged.",
+        "Given binding values that differ only by letter case or surrounding whitespace, When the fetch fails, Then the outcome follows the comparison rule documented in the plugin-interface contract (exact match on the values as normalised by resolveSettings) and a test pins that rule.",
+        "Given the full suite, When `bash scripts/ci.sh` runs, Then it exits 0, the plugin remains one TypeScript file with zero runtime npm dependencies (FR-11), and the e2e simulated startup test still passes its cache-fallback scenario."
+      ],
+      "source": "security",
+      "cycle_done": 19,
+      "notes": "Selected in cycle 0019. All vision features are done or SKIPPED by user instruction (F-012, F-013, F-015); this is the highest-value remaining security follow-up: a stale cache from another org/repo can silently apply the wrong models/providers. Not applying the cache when settings are missing is a deliberate conservative PO decision; record it in the contract and CHANGELOG. Versioning: patch (security fix)."
+    },
+    {
+      "id": "T-029",
+      "title": "Verify and document whether a Kilo project config can override global plugin options",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": false,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-013"
+      ],
+      "description": "Split from T-013 (cycle 0019). ADR-0009 accepted risk: a project-level Kilo config in a cloned repo might override the global plugin options (org/project/repo/path/branch) and redirect the fetch. Verify against a real Kilo during Phase 0 and add the result to the platform runbook Phase 0 checklist; add a code guard only if an automated test can reproduce it.",
+      "acceptance_criteria": [
+        "Given docs/platform-runbook.md, When the docs check runs, Then the Phase 0 checklist contains an item to verify whether a project-level Kilo config can override the plugin options, with the expected safe outcome."
+      ],
+      "source": "security",
+      "cycle_done": null,
+      "notes": "Cycle 0021 PO: NEEDS A HUMAN with a real Kilo install (Phase 0); cannot be closed autonomously (factory declared DONE). The doc half (runbook checklist line) can be bundled with the next docs change."
+    },
+    {
+      "id": "T-014",
+      "title": "Cache and log hardening (cleanName, temp files, TOCTOU)",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-006"
+      ],
+      "description": "Cycle 0008 security/review info: cleanName should also map U+2028, U+2029 and bidi controls to '?'; remove stale *.tmp files after a successful cache write; read the cache through one fd or check length after reading (2 MiB cap TOCTOU); document cache dir permission behaviour on Windows. Also (cycle 0008 security info 4): document that an existing ~/.cache/kilo-azdo keeps its mode and that file mode is ignored on Windows.",
+      "acceptance_criteria": [
+        "Given a placeholder name containing U+2028 or a bidi override, When logged, Then those characters are replaced.",
+        "Given an orphan cache temp file, When a write succeeds, Then it is removed.",
+        "Given a cache file that grows past 2 MiB between stat and read, When read, Then it is rejected."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-015",
+      "title": "Hook test hygiene: temp dirs, env allow-list, formatting",
+      "type": "tech-debt",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-006"
+      ],
+      "description": "Cycle 0008 security/review info: hook.test.ts never removes its temp home dirs (use t.after); child-process tests should pass an allow-listed env, and the KILO_AZDO_* filter must be case-insensitive on Windows; fix formatting nits (hook.test.ts:19 'OPTIONS ={', mis-indented logsAfterServer in the smoke test). Cycle 0008 review info 3-5 (added cycle 0009 PO): the 'failing collaborators' loop should also assert cfg is unchanged or fully merged; the deep-nesting test should assert the exact error code instead of `invalid-(jsonc|shape)`; add a smoke test that `server()` makes no logger calls (contract 3).",
+      "acceptance_criteria": [
+        "Given the hook tests, When they finish, Then no temp home directories remain.",
+        "Given lowercase kilo_azdo_project in the parent env on Windows, When the hostile-deps child runs, Then it is not passed through.",
+        "Given the 'failing collaborators' cases, When each runs, Then the test asserts cfg deep-equals either the original or the fully merged value, and the smoke test asserts server() makes no logger calls."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-016",
+      "title": "Validator output sanitiser: Unicode format chars, shared helper, safer file read",
+      "type": "security",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-007"
+      ],
+      "description": "Cycle 0009 security low 1 / info 3 and review info 3: sanitising in validator output covers C0/DEL/C1 only; also replace \\p{Cf}, \\p{Zl}, \\p{Zp} with '?'. cleanName in validate-kilo-config.ts duplicates sanitize in kilo-config-rules.ts: share one helper. Optionally read files via bounded open+fstat and reject symlinks.",
+      "acceptance_criteria": [
+        "Given a key or file name containing U+202E, U+2028 or a zero-width character, When a finding is printed, Then those characters appear as '?'.",
+        "Given the CLI and library, When output is sanitised, Then both use the same helper."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-017",
+      "title": "Validator test nits",
+      "type": "tech-debt",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-007"
+      ],
+      "description": "Cycle 0009 review low 1+2: schema-subset.test.ts:43 path.replace(/\\./g, \"\\.\") is a no-op (use \"\\.\"); cli.test.ts:84 !r.all.includes(\"host\") scans the temp path and fails when it contains 'host' (check host/share or \\host only). Info 5: document or fix --help with an unknown option giving exit 2.",
+      "acceptance_criteria": [
+        "Given the CLI path check in schema-subset.test.ts, When run, Then dots are matched literally.",
+        "Given a temp path containing 'host', When the UNC test runs, Then it still passes."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-018",
+      "title": "Shared test helpers module",
+      "type": "tech-debt",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-009"
+      ],
+      "description": "Cycle 0010 review info: test/personal-config/template.test.ts imports backendRoot, FAKE_SECRET, SECRET_TAIL from test/validator/helpers.ts. Move shared helpers into backend/test/helpers.ts once more suites use them.",
+      "acceptance_criteria": [
+        "Given the validator and personal-config test suites, When they run, Then both import shared helpers from backend/test/helpers.ts and all tests still pass."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-019",
+      "title": "Installer hardening: CDPATH-safe helper lookup, symlink re-check, Node version test fix",
+      "type": "tech-debt",
+      "priority": 3,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-010"
+      ],
+      "description": "Cycle 0011 security+review follow-ups for backend/installer, trimmed in cycle 0020 to the items with real value. IN SCOPE: (1, review low 2 / sec low 2) install.sh resolves script_dir with `cd \"$script_dir\" && pwd`; when CDPATH is set and the script is invoked via a relative path containing '/', bash cd searches CDPATH and echoes the directory, so script_dir can be wrong or multi-line and the hand-off to install-helper.ts breaks. Fix: `script_dir=$(CDPATH= cd -- \"$script_dir\" && pwd)`, then check that \"$script_dir/install-helper.ts\" is a regular file before handing off; if missing print a fixed one-line error to stderr and exit 3 (no node invocation, no stack trace). (2, sec low 1) install-helper.ts applyPlan: after mkdirSync(azdoDir) and before any chmod/write in configDir/azdoDir (including the no-change chmod of kilo.jsonc), re-lstat configDir, azdoDir and the config file and refuse (existing fixed refusal message/exit code per installer contract) if any became a symlink, never following it. (3, review low 1) the 'Node 22.18 and newer pass the version check' test uses --help which exits before the version check: run it with required args plus AZDO_PAT so the version check really executes, and add a 22.17.x case expecting exit 1. (4, review info 3) run the existing key-leak test also with an sk-bf- prefixed KILO_BIFROST_KEY. OUT OF SCOPE (left for later / not worth a cycle): safe-character printing of plugin/ file names (sec info 3), backup-deletion docs note (sec info 4), extra e2e AC-3 fixture fields (review info 4), optional shellcheck/check-lf in ci.sh. install.ps1 is unchanged (T-022).",
+      "acceptance_criteria": [
+        "Given CDPATH is set to a directory that contains a subdirectory with the same relative name as the installer's directory, When install.sh is invoked via a relative path containing '/' (e.g. `bash installer/install.sh ...`) with valid args, Then it locates and runs the real install-helper.ts next to install.sh and exits 0, and stdout contains no extra directory line printed by cd.",
+        "Given install-helper.ts is absent next to install.sh (test copies install.sh alone into a temp dir), When install.sh runs with valid args and prerequisites satisfied, Then it exits 3, stderr is exactly the fixed one-line message documented in the installer contract, node is not invoked on the missing file, and no stack trace appears.",
+        "Given the config directory (or the kilo-azdo plugin directory, or kilo.jsonc) is replaced by a symlink after planning but before writing (simulated via a test hook or by pre-creating the symlink so the post-mkdir re-lstat sees it), When the installer applies its plan on POSIX, Then it refuses with the contract's fixed refusal message and exit code, and the symlink target is not created, modified or chmod-ed.",
+        "Given a fake node reporting v22.17.1, When install.sh runs with required args and AZDO_PAT set (no --help), Then it exits 1 with the documented version error; and Given fake node v22.18.0 and v23.0.1 with the same args, Then the version check passes (no version error on stderr).",
+        "Given KILO_BIFROST_KEY set to an sk-bf- prefixed test value, When install.sh runs successfully, Then that value appears in neither stdout nor stderr (it is written only to kilo.jsonc).",
+        "Given the full suite, When `bash scripts/ci.sh` runs, Then it exits 0, the installer contract documents the exit-3 missing-helper message and the post-mkdir symlink re-check, and existing installer tests (including install.ps1 tests where the platform runs them) still pass."
+      ],
+      "source": "security",
+      "cycle_done": 20,
+      "notes": "Selected in cycle 0020. Rationale: the only remaining item with a user-facing correctness defect (installer breaks for engineers whose shell exports CDPATH) plus a test that gives false assurance (version check never executed). PO intends to declare DONE in cycle 0021 unless this cycle surfaces medium+ findings. Versioning: patch (fix)."
+    },
+    {
+      "id": "T-020",
+      "title": "Smoke test and lint follow-ups",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-019"
+      ],
+      "description": "Cycle 0013 review/security follow-ups: (review low 1) install-smoke.test.ts:282-293 AC-6 leak loop should also assert the exit code, the expected smoke line and assertLoaded(sb) per scenario; (review low 2) remove or test MAX_EMPTY_CHUNKS in installer/smoke.ts (not in the design); (review info 3) add child-process tests for `--org --no-smoke` (flag takes it as value) and repeated --no-smoke; (security/review info) make FR-11 lint rules 5-7 scan subfolders of validator/ and installer/ (also covers T-002); add a global test preload or lint rule that blocks real fetch/child_process execFile in backend/test/**.",
+      "acceptance_criteria": [
+        "Given each AC-6 scenario, When the leak test runs, Then it also asserts the exit code, smoke line and that the fake network loaded.",
+        "Given a file in an installer/ or validator/ subfolder importing a forbidden module, When check-fr11 runs, Then it exits non-zero.",
+        "Given a test that calls real fetch or execFile, When the suite runs, Then it fails."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-021",
+      "title": "Fix installer contract 10.1 wording and overview.md NUL bytes",
+      "type": "chore",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-011"
+      ],
+      "description": "Cycle 0014 review (architect-owned docs): contract installer-cli.md 10.1 says `-Name:value` is a usage error, but under `-File` PowerShell splits it into two tokens first, so limit that rule to in-process calls; docs/architecture/overview.md line ~90 contains literal NUL bytes (git treats the file as binary) and lost the backslash in `$PSScriptRoot\\install-helper.ts`: write the text `\u0000` and restore the backslash.",
+      "acceptance_criteria": [
+        "Given overview.md, When git diff is run, Then it is treated as text and contains no NUL bytes.",
+        "Given contract 10.1, When read, Then the colon-form rule applies only to in-process calls."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-022",
+      "title": "install.ps1 hardening and Windows installer follow-ups",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-011"
+      ],
+      "description": "Cycle 0014 security/review follow-ups: (sec low L-1) when node is a .cmd shim, cmd.exe expands %VAR% in the helper path: reject % in the helper path with the existing exit-3 message or prefer node.exe over a .cmd shim; (review low 3) node .cmd shim in a path with spaces plus a helper path with spaces breaks the command line: resolve real node.exe first or document; (review info 4) install-helper-frontend.test.ts:36 \"C:\\Windows\" should be \"C:\\Windows\"; (review info 5) add the no-secrets check to the AC-7 node-version prerequisite test; (sec info I-1) optionally remove KILO_BIFROST_KEY from the child env of node/az checks; explicit Windows ACL hardening of the config dir/file; a Windows CI job that runs the install.ps1 tests.",
+      "acceptance_criteria": [
+        "Given a helper path containing %, When install.ps1 runs with a node .cmd shim, Then it exits 3 with a fixed message and no stack trace.",
+        "Given the AC-7 node-version prerequisite failure, When it runs, Then the output is checked for the key and PAT sentinels."
+      ],
+      "source": "security",
+      "cycle_done": null
+    },
+    {
+      "id": "T-023",
+      "title": "Branch-policy script idempotency",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-008"
+      ],
+      "description": "Cycle 0015 PO split from F-008: re-running the branch-policy script creates duplicate policies. Use `az repos policy list` to detect an existing approver-count / required-reviewer / build policy on main for the repo and update it (or skip) instead of creating a duplicate.",
+      "acceptance_criteria": [
+        "Given a stub az whose `repos policy list` reports the three policies already present on main, When the script runs, Then no `create` command is invoked and it exits 0.",
+        "Given a stub az reporting only the approver-count policy, When the script runs, Then only the missing required-reviewer and build policies are created."
+      ],
+      "source": "po",
+      "cycle_done": null
+    },
+    {
+      "id": "T-024",
+      "title": "Branch-policy script and assemble tool hardening",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-008"
+      ],
+      "description": "Cycle 0015 follow-ups: (sec low 1 / review low 3) set-branch-policies.sh text_ok must reject a value starting with '@' (az reads @<path> from a file) with a test and contract 4.1 update; (review info 1) usage() printf format contains a real line break: use printf '%s\n' \"$line\"; (review low 2) add assemble tests for missing source file (exit 1), symlinked output dir refused (POSIX), and the 'cannot write output' message.",
+      "acceptance_criteria": [
+        "Given --project @/some/file, When set-branch-policies.sh runs, Then it exits 2 without calling az.",
+        "Given a missing source file or a symlinked outdir, When assemble-shared-repo.ts runs, Then it exits per the contract with the fixed message."
+      ],
+      "source": "security",
+      "cycle_done": null,
+      "notes": "Cycle 0020 PO: lowered to 4; set-branch-policies.sh is run by the operator with the operator's own arguments, so '@file' expansion by az is self-inflicted and not an attacker-reachable path."
+    },
+    {
+      "id": "T-025",
+      "title": "Verify branch-policy semantics in a real org",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-008"
+      ],
+      "description": "Cycle 0015 security/architect follow-ups needing a real Azure DevOps org (manual or documented check): (sec low 2) confirm what --valid-duration 0 --queue-on-source-update-only false means for build validation expiry and correct the script if needed; (sec info 4 / architect) az cannot set creatorVoteCounts on the required-reviewer policy: check whether a platform-team author's own approval satisfies the group and, if so, set it through the REST API; optionally protect the gate with a required `extends` template in a separate repo so a PR cannot edit its own pipeline; suggest ShellCheck in ci.sh when available and extend check-lf to backend/**/*.sh and *.yml.",
+      "acceptance_criteria": [
+        "Given a documented real-org check, When performed, Then the validity-duration and creator-vote behaviour are recorded in ADR-0015 and the script/contract corrected if they differ."
+      ],
+      "source": "security",
+      "cycle_done": null,
+      "notes": "Cycle 0021 PO: NEEDS A HUMAN with a real Azure DevOps org; cannot be closed autonomously (factory declared DONE). Do it during Phase 0 / first rollout of the shared config repo."
+    },
+    {
+      "id": "T-026",
+      "title": "E2E harness test nits",
+      "type": "tech-debt",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-014"
+      ],
+      "description": "Cycle 0016 security/review follow-ups: backend/test/e2e/helpers.ts:69-70 Windows fallbacks \"C:\\Windows\" and \"C:\\Windows\\System32\\cmd.exe\" need escaped backslashes (as in installer/helpers.ts); the simulator guard test does not need bash and should not be skipped with the suite; probeFetch shares the start counter with runStart (harmless); assert 'plugin server called once' for every start, not only T1.",
+      "acceptance_criteria": [
+        "Given a host without SYSTEMROOT/ComSpec, When the e2e helpers build the child env, Then the fallback paths are valid absolute Windows paths.",
+        "Given no bash on PATH, When the e2e suite runs, Then the simulator guard test still runs."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-027",
+      "title": "Sync docs-check contract with rework 1 and extend docs check rules",
+      "type": "chore",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-016"
+      ],
+      "description": "Cycle 0018 architect/security/review follow-ups for check-docs: (review info 1) sync docs/architecture/contracts/docs-check.md with rework 1 additions (`line-too-long` rule for lines over 10,000 characters, `realpathSync` target containment, and finding-message redaction); (architect) optionally check that every `>=X.Y.Z <A.B.C` range in README.md and docs/*.md equals `SUPPORTED_KILO_RANGE`; (security info 4) consider adding PAT/bearer pattern coverage or gitleaks to the docs gate.",
+      "acceptance_criteria": [
+        "Given docs/architecture/contracts/docs-check.md, When read, Then it documents the `line-too-long` rule, `realpathSync` link target containment, and finding-message redaction.",
+        "Given any `>=X.Y.Z <A.B.C` version range in README.md or docs/*.md that differs from `SUPPORTED_KILO_RANGE`, When check-docs runs, Then it exits 1."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-028",
+      "title": "Deduplicate platform sections in user-guide.md and optional .gitattributes LF rule for Markdown",
+      "type": "chore",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": false,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-016"
+      ],
+      "description": "Cycle 0018 architect follow-ups: consider moving the platform sections of `docs/user-guide.md` (validator usage, shared config repo setup) into `docs/platform-runbook.md` with redirect stubs so existing anchors keep working; optionally add `*.md text eol=lf` to `.gitattributes` to stop CRLF warnings on Windows checkouts.",
+      "acceptance_criteria": [
+        "Given docs/user-guide.md and docs/platform-runbook.md, When check-docs runs after deduplicating the platform sections with redirect anchors, Then all cross-links and anchors still pass with exit 0."
+      ],
+      "source": "architect",
+      "cycle_done": null
+    },
+    {
+      "id": "T-030",
+      "title": "T-013 follow-ups: stale comments and single-handle cache read",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-013"
+      ],
+      "description": "Cycle 0019 review/security info: (backend) the comment on validateShared in backend/plugin/azdo-remote-config.ts (~line 1122) still says cache text passes through it - reword, cache text goes through checkCacheEnvelope; (architect) plugin-interface.md 2f 'Validation' row says it applies to fetched text and cache text alike - point it to 2f-C for the cache; (security, optional, low value) read the cache through one file handle to close the existing stat-then-read gap (also covers the 2 MiB cap TOCTOU in T-014).",
+      "acceptance_criteria": [
+        "Given the plugin source and the contract, When read, Then neither claims cache text goes through validateShared.",
+        "Given a cache that grows past 2 MiB between stat and read, When read, Then it is rejected (if the single-handle read is done)."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-031",
+      "title": "T-019 follow-ups: descriptor-path race test, doc wording, Linux CI confirmation",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-019"
+      ],
+      "description": "Cycle 0020 review/security follow-ups: (backend, low) the race fixture swaps right after mkdir so the re-check always refuses first - add a trigger that wraps openSync and swaps on the first O_NOFOLLOW open (after the re-check) to cover adjustMode refusal and rename-over-link in install-sh.test.ts; (backend, info) merge posixOnly with skipOnWindows (one helper with a message) and reuse fs-guard's type rule in install-helper.ts checkedFile/checkedDir; (architect, low/info) ADR-0012 section 6 calls the guard checkTargets (code: firstUnsafeTarget) and installer-cli.md section 6 'Residual' should say explicitly that a swap of configDir/azdo after the re-check redirects writes (accepted, same-user precondition, Node has no openat/renameat). NEEDS A LINUX RUN (cannot be closed on the Windows dev host): confirm the 5 POSIX symlink/race tests (AC-3) show as PASSED, not skipped, on ubuntu-latest CI; this repo's .github/workflows/ci.yml runs scripts/ci.sh there on pull_request/push to main.",
+      "acceptance_criteria": [
+        "Given a swap after the re-check, When the installer applies the plan, Then the descriptor-level O_NOFOLLOW open refuses and the target is untouched (Linux).",
+        "Given the 5 AC-3 tests, When ubuntu-latest CI runs, Then they report passed, not skipped."
+      ],
+      "source": "review",
+      "cycle_done": null,
+      "notes": "Cycle 0021 PO: AC2 NEEDS A LINUX RUN (push/PR to GitHub so ubuntu-latest CI runs scripts/ci.sh and confirm the 5 AC-3 POSIX tests report passed). The AC1 test and doc wording are low-value follow-ups for later (factory declared DONE)."
+    },
+    {
+      "id": "F-020",
+      "title": "Installer smoke test: network pre-flight for Azure IP firewall / VPN before any credential is sent",
+      "type": "feature",
+      "priority": 1,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-019",
+        "F-011"
+      ],
+      "description": "USER requirement (cycle 0022): the Bifrost gateway (and possibly other Kilo-facing endpoints) sit behind an Azure IP firewall / IP allow-list. An engineer who is not on the VPN or whose public IP is not allow-listed today gets a confusing smoke failure (timeout, reset, or HTTP 403 that reads like a bad key) and the virtual key / AzDO credential is sent anyway. Add a pre-flight 'network' check to backend/installer/smoke.ts (shared by install.sh and install.ps1) that runs BEFORE the authenticated Azure DevOps fetch and BEFORE GET <baseURL>/models: one unauthenticated, bounded HTTPS probe per target (the fixed Azure DevOps host https://dev.azure.com/ and the origin of the validated https Bifrost baseURL). Classification (fixed, value-free codes): HTTP 403 or 407 -> '<target>-blocked'; network error (DNS, refused, reset, TLS) -> '<target>-unreachable'; deadline -> '<target>-timeout'; any other HTTP status (2xx, 3xx, 401, 404, 5xx...) -> reachable (rationale: an allowed client that sends no credentials normally gets 401/404/redirect, whereas an Azure firewall / Front Door / App Service access restriction answers 403 or drops the connection). target is 'azdo' or 'bifrost'. When a target fails the probe, its authenticated check is skipped with code 'network-blocked' and the credential for it is never sent. Output adds a first line 'smoke network: pass' or 'smoke network: fail <code>[,<code>]' and, on failure, one fixed hint line: connect to the corporate VPN or ask the platform team to add your public IP to the Azure firewall allow-list, then re-run <front end>. Exit code stays 4 when the network check fails. No new runtime dependencies; plugin file untouched; tests use injected fake fetch / clock only (never real network, az, or home).",
+      "acceptance_criteria": [
+        "Given a fake fetch where the unauthenticated probes of https://dev.azure.com/ and of the Bifrost baseURL origin answer with a non-403/407 HTTP status (e.g. 200, 302, 401, 404), When runSmoke runs, Then report.network is pass, formatSmoke prints 'smoke network: pass' as the first line, and the azdo and bifrost authenticated checks run and are reported exactly as before.",
+        "Given a fake fetch whose probe of the Bifrost origin answers HTTP 403, When runSmoke runs, Then the network line is 'smoke network: fail bifrost-blocked', bifrost is 'skipped network-blocked', the fake records no request to <baseURL>/models and no request carrying the virtual key, the fixed VPN / IP allow-list hint line naming the front end is printed, and smokeFailed returns true (installer exit code 4).",
+        "Given a fake fetch whose probe of https://dev.azure.com/ rejects with a network error, or never settles until a fake clock passes timeoutMs, When runSmoke runs, Then the network code is 'azdo-unreachable' or 'azdo-timeout' respectively, the fake az runner is never invoked, no PAT or bearer token is sent, azdo is 'skipped network-blocked', and runSmoke resolves (never hangs, never rejects).",
+        "Given any probe, When the fake fetch records it, Then it is a GET (or HEAD) to an https: origin only (no path beyond '/', no query), with redirect 'manual', an AbortSignal, no body, and no Authorization, api-key, x-api-key or Cookie header.",
+        "Given a missing, invalid or non-https baseURL, or no key / a key reference, When runSmoke runs, Then the Bifrost probe is not sent and the existing bifrost codes (no-base-url, invalid-base-url, insecure-base-url, no-key, key-reference) are reported unchanged; and Given --no-smoke, Then no probe or other network call is made.",
+        "Given any probe outcome (including a probe response whose body contains a key-like or HTML string, or an internal exception), When the report is formatted, Then every printed line comes from the fixed code set and contains no key, PAT, token, baseURL, host name or response body text; an internal error yields 'smoke network: fail internal' instead of a throw.",
+        "Given the same blocked fake for front ends 'install.sh' and 'install.ps1', When formatSmoke runs, Then both produce identical network and hint lines except the front-end name, and all existing smoke, installer and e2e tests still pass with 'bash scripts/ci.sh' exiting 0."
+      ],
+      "source": "user",
+      "cycle_done": 22,
+      "notes": "Cycle 0022 PO: selected first because it is the literal 'validate before we fetch the URL' request for both URLs (AzDO + Bifrost) and it stops the key being sent to a host that will reject it. Plugin-side classification is F-021, docs F-022."
+    },
+    {
+      "id": "F-021",
+      "title": "Plugin: classify Azure firewall / network-blocked failures in the remote fetch with an actionable log hint",
+      "type": "feature",
+      "priority": 1,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-020"
+      ],
+      "description": "USER requirement (cycle 0022, verbatim: 'my current KILO and Bifrost URL is running behind AZURE IP firewall, so we need to make sure that is validated before we fetch the URL as that will cause error'), plugin side. fetchRemoteConfig today reports 'network', 'timeout' or 'http-<status>', so a firewall / IP allow-list / corporate proxy block of the Azure DevOps fetch looks like an auth problem or a generic error. Cycle 0023 PO decisions (no human available): (1) NO unauthenticated probe in the plugin - it runs inside Kilo at every start, a probe would add a second round trip to every startup, and the authenticated fetch's own failure already carries the signal; the PAT / az token only ever goes to the fixed https://dev.azure.com/ host over TLS. Classification is done on the single existing authenticated fetch within the single existing timeoutMs budget, still exactly one fetch call per hook run. (2) New fixed, value-free FetchErrorCode values: 'network-unreachable' = the fetch() call itself rejects before the deadline (DNS, refused, reset, TLS). 'network-blocked' = HTTP 407 (proxy auth; Azure DevOps itself never answers 407) with any body, or HTTP 403 whose Content-Type is absent, unreadable or not JSON (media type before ';', trimmed, case-insensitive, is neither 'application/json' nor ends with '+json'), i.e. the HTML / plain-text page of a firewall, proxy, WAF or Front Door. Azure DevOps answers real permission failures with a JSON 403, which stays 'http-403'; 401 always stays 'http-401'. Decision is made from the status and the Content-Type header only; the body is never read or inspected (discarded unread exactly as today), so no response text can reach a log. 'timeout' is unchanged (a deadline is still 'timeout', also when fetch rejects after the deadline). 'network' remains the catch-all for a missing fetch, an unexpected internal throw and a body-stream failure after headers arrived (the connection was open, so not a firewall). (3) Config hook: the existing 'Remote config unavailable (<code>) ...' lines are unchanged in format; in addition exactly ONE fixed warn-level hint line is logged right after it: NETWORK hint for network-unreachable, network-blocked and timeout (a silently dropping firewall shows up as a timeout), e.g. 'Azure DevOps could not be reached from this network: connect to the corporate VPN or ask the platform team to allow your public IP, then restart Kilo.'; CREDENTIALS hint for http-401, http-403 and auth-unavailable, e.g. 'Azure DevOps rejected or lacks credentials: run az login or replace your PAT, and check your access to the shared config repository.'; no hint for any other code. Exact texts are pinned by the Architect in the plugin-interface contract and contain no values (no URL, host, org/project/repo, PAT, token, header or body). (4) Cache order unchanged (ADR-0008: remote first, cache only on failure) - a cache-first order would serve stale enforce-mode config and is not requested. Cache fallback (AC-3 / FR-7) and the T-013 / ADR-0018 settings binding are unchanged. (5) FR-10 never throws, FR-11 one TypeScript file with zero runtime deps and no new import, no new __internals key, AC-9 no secret in any log. The installer smoke (smoke.ts) passes plugin codes through unchanged, so 'smoke azdo: fail network-unreachable' / 'network-blocked' can appear only when the F-020 probe passed but the authenticated fetch failed; smoke.ts needs no code change. Scope: backend/plugin/azdo-remote-config.ts, backend/test/plugin/*, the e2e/smoke tests that pin the old 'network' text for a fetch rejection, plugin-interface contract (+ ADR or ADR-0007 amendment). User-facing docs are F-022.",
+      "acceptance_criteria": [
+        "Given a fake fetch whose call rejects (connection error) before the deadline, When fetchRemoteConfig runs with a PAT or az token, Then it resolves { ok: false, error: 'network-unreachable' }; and Given a fake fetch that never settles until a fake clock passes timeoutMs (or rejects after the deadline fired), Then the error is still 'timeout'; and Given no usable fetch function, an unexpected internal throw, or a body stream that fails after a 2xx status, Then the error is still 'network'.",
+        "Given a fake fetch answering HTTP 407 (any Content-Type), or HTTP 403 with Content-Type absent, 'text/html; charset=utf-8', 'text/plain', or a headers.get that throws or returns a non-string, When fetchRemoteConfig runs, Then it resolves { ok: false, error: 'network-blocked' }, the body's getReader is never called and body.cancel is invoked (body discarded unread, as for any non-2xx).",
+        "Given a fake fetch answering HTTP 403 with Content-Type 'application/json', 'Application/JSON; charset=utf-8' or 'application/problem+json', or HTTP 401 with any Content-Type (including text/html), When fetchRemoteConfig runs, Then the error is 'http-403' / 'http-401' respectively; and every other non-2xx status (e.g. 404, 500, 503) still yields 'http-<status>' exactly as before.",
+        "Given the config hook and a fetch failure with code network-unreachable, network-blocked or timeout, When the hook runs, Then the existing 'Remote config unavailable (<code>) ...' line is logged unchanged in format followed by exactly one warn-level line equal to the fixed NETWORK hint constant (VPN / ask the platform team to allow your public IP); Given http-401, http-403 (JSON) or auth-unavailable, Then exactly one warn line equal to the fixed CREDENTIALS hint (az login / PAT / repository access) and no network hint; Given any other code (http-404, http-5xx, too-large, bad-response, network, invalid-settings, a validation error), Then no hint line is logged.",
+        "Given a valid cache bound to the current settings (T-013) and a fetch failing with network-unreachable or network-blocked, When the hook runs, Then the cached config is merged exactly as before, the 'Remote config unavailable (<code>); using cached config.' warning and the NETWORK hint are logged, and the fake fetch was called exactly once (no extra probe request, remote-first order of ADR-0008 unchanged); Given a cache bound to different settings, Then it is not applied (cache-mismatch) and the config object is unchanged.",
+        "Given failures whose fake response carries canary values in the body, in the Content-Type and other headers, and a PAT / az token canary, When the hook runs (including with throwing header getters and a throwing log sink), Then runConfigHook resolves without throwing and no log line contains the PAT, token, Authorization value, URL, host name, org/project/repo values, any header value or any body text.",
+        "Given the plugin after the change, When the FR-11 lint and 'bash scripts/ci.sh' run, Then the plugin is still ONE TypeScript file with zero runtime npm dependencies and no new import, the __internals key set is unchanged, the installer smoke reports a plugin-side code verbatim (a reachable F-020 probe followed by a rejecting authenticated fetch gives 'smoke azdo: fail network-unreachable'), existing tests change only where a fetch rejection's code moved from 'network' to 'network-unreachable', and CI exits 0."
+      ],
+      "source": "user",
+      "cycle_done": 23,
+      "notes": "Cycle 0022 PO: second slice of the Azure IP firewall requirement. Cycle 0023 PO: selected (priority raised to 1 as the remaining code slice of the active USER requirement; F-020 shipped in v0.15.0). Decisions recorded in the description: no plugin-side probe (startup latency at every Kilo start), classify the single authenticated fetch; 407 always and non-JSON 403 -> network-blocked, JSON 403 / 401 stay http-*; timeout keeps its code but gets the network hint; cache order unchanged. Known limitation to document (F-022): an Azure DevOps organisation IP conditional-access policy answers with JSON 401/403 and therefore shows the credentials hint, not the network hint; a TLS-inspecting corporate proxy that answers 403 with a JSON body would likewise read as http-403. Versioning: minor (feature)."
+    },
+    {
+      "id": "F-022",
+      "title": "Docs: Azure IP firewall / VPN requirement, allow-listing runbook and how to tell a firewall block from a bad key",
+      "type": "feature",
+      "priority": 2,
+      "status": "done",
+      "scope": {
+        "backend": false,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-020",
+        "F-021"
+      ],
+      "description": "USER requirement (cycle 0022), docs slice. The F-020 docs pass (cycle 0022) already wrote the installer-side network-codes table, curl self-check, VPN prerequisite and the allow-listing runbook section (troubleshooting.md, engineer-setup.md, platform-runbook.md, user-guide.md). Cycle 0023 PO: reduced to the REMAINING plugin-side docs for F-021: the plugin codes network-unreachable and network-blocked (and timeout with its network hint), the two fixed hint lines (network / credentials) Kilo logs, how they differ from http-401 / http-403 (JSON 403 = permission, non-JSON 403 or 407 = firewall/proxy), the known limitation that an Azure DevOps IP conditional-access policy still shows as http-401/http-403 with the credentials hint, that the cached config keeps Kilo working while blocked, and the security note (cycle 0022 security follow-up) that the installer probe targets the origin '/' so path-routed gateways (App Gateway / APIM path rules) can mislead. Covered by check-docs.mjs. If the F-021 docs pass already covers all of this, the PO closes F-022 as done in the next grooming.",
+      "acceptance_criteria": [
+        "Given docs/troubleshooting.md, When the docs check runs, Then the plugin codes 'network-unreachable' and 'network-blocked' each appear with an action (VPN / ask the platform team to allow-list the public IP), and 'timeout' mentions that a silently dropping firewall shows up as a timeout.",
+        "Given docs/troubleshooting.md (or the user guide section it links), When read, Then it quotes both fixed plugin hint lines exactly as in the plugin-interface contract and explains that a JSON 403 / 401 is a credential or permission problem while a 407 or non-JSON 403 is a firewall or proxy block, including the IP conditional-access limitation.",
+        "Given docs/troubleshooting.md or docs/platform-runbook.md, When read, Then it states that the installer network probe targets the origin '/' of the Bifrost baseURL and that path-routed gateways can produce false 'blocked' or 'reachable' verdicts, and that Kilo keeps using the bound cached config while the network is blocked.",
+        "Given all docs, When 'bash scripts/ci.sh' runs, Then the docs check passes and no doc contains a real key, PAT, company IP address or internal host name."
+      ],
+      "source": "user",
+      "cycle_done": 23,
+      "notes": "Cycle 0022 PO: the docs writer will touch these files incidentally while shipping F-020; this item closes the full runbook. Cycle 0023 PO: ACs reduced to plugin-side codes/hints and the origin-probe caveat; installer-side docs already shipped with F-020 (v0.15.0)."
+    },
+    {
+      "id": "T-032",
+      "title": "F-020 follow-ups: probe body-cancel test, test anchors, diagnostics",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-020"
+      ],
+      "description": "Cycle 0022 review/security follow-ups: (review low R1) add a test that records the probe body's cancel() call so removing discardBody in smoke.ts is caught; (R2) restore the `Done.\n$` end anchor in the install-smoke.test.ts AC-3 Bifrost-probe-hang regex; (R3) add a smoke.test.ts case with a working probe and runAz: 42 so the fetchRemoteConfig-with-bad-runAz path stays covered; (R4, optional) checkBifrost reports network codes by mutating a passed-in array - return the code instead; (security I2, optional) skip the AzDO probe when org/project/repo are missing so the user sees invalid-settings rather than network-blocked.",
+      "acceptance_criteria": [
+        "Given the probe response, When the probe finishes, Then a test asserts body.cancel() was called.",
+        "Given runAz: 42 with a reachable probe, When runSmoke runs, Then azdo reports the auth-unavailable code without spawning anything."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-033",
+      "title": "F-021 test nits",
+      "type": "tech-debt",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-021"
+      ],
+      "description": "Cycle 0023 review: (low) backend/test/plugin/hook.test.ts ~L929 the AC5 cache test checks the line count and lines [1],[2] but not line [0] (the 'using cached config' line with the code) - assert the full message array; (info) hook.test.ts ~L842 AC-4 lists invalid-settings as a no-hint code but HINT_CASES has no row for it - add the row.",
+      "acceptance_criteria": [
+        "Given the AC5 cache test, When it runs, Then it asserts the full message array including line 0.",
+        "Given HINT_CASES, When read, Then it has an invalid-settings row expecting no hint."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-034",
+      "title": "Classify an Azure DevOps 203 HTML sign-in page (needs real-environment evidence)",
+      "type": "tech-debt",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-021"
+      ],
+      "description": "Cycle 0023 follow-up (review): an Azure DevOps 203 answer carrying an HTML sign-in page currently yields bad-response with no hint; consider the CREDENTIALS hint or network-blocked. NEEDS REAL-ENVIRONMENT EVIDENCE (what exactly Azure DevOps returns to a PAT / az token under conditional access or an expired session) before any contract change. Cycle 0024 PO split: the code-only parts of the old T-034 (HTTP 470 classification and the smoke network hint for authenticated-line network failures) moved to T-035.",
+      "acceptance_criteria": [
+        "Given a captured real Azure DevOps 203 HTML sign-in response, When the plugin fetches, Then the code and hint match the evidence-backed contract decision."
+      ],
+      "source": "architect",
+      "cycle_done": null,
+      "notes": "Cycle 0024 PO: split; parts (1) 470 and (3) smoke hint moved to T-035. The remaining part needs real-environment evidence; do not select without it."
+    },
+    {
+      "id": "T-035",
+      "title": "Firewall hint on the authenticated smoke lines and Azure Firewall HTTP 470 classified as blocked",
+      "type": "tech-debt",
+      "priority": 2,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "F-020",
+        "F-021"
+      ],
+      "description": "Cycle 0024 PO, split from T-034 (code-only parts), for the USER's Azure IP firewall scenario. Two remaining gaps where an engineer who is off the VPN or not allow-listed still gets a confusing installer/plugin result. (A) The installer smoke test prints its fixed VPN / allow-list hint only when the anonymous pre-flight fails ('smoke network: fail ...'). When the origin probe passes but the authenticated request then fails for a network reason (a WAF / path rule or a drop on the API path, a proxy), the output is 'smoke network: pass' followed by 'smoke azdo: fail network-unreachable|network-blocked|timeout' or 'smoke bifrost: fail network|timeout|407|470' with NO hint (installer-cli 1.3.1 section 9.1 says these codes do not add the hint). Change formatSmoke so the SAME fixed network hint line (installer-cli section 7, text unchanged) is also printed for those authenticated-line codes, at most once per run. Bifrost 401/403/other statuses stay hint-free (key / permission problems, see troubleshooting 'Bifrost 401'). (B) Azure Firewall answers an application-rule deny (no rule matched; for HTTPS only with TLS inspection) with the non-standard HTTP 470 'Action: Deny' body (community-reported, not in Microsoft docs; relevant when an engineer's egress goes through Azure Firewall, e.g. Azure Virtual Desktop / Dev Box / forced-tunnel VPN). Today the installer probe treats 470 as reachable, so the PAT / az token / virtual key is then SENT, and the result reads 'smoke azdo: fail http-470' / 'smoke bifrost: fail 470' with no hint; the plugin logs 'http-470' with no hint. 470 is not a status Azure DevOps or Bifrost answer, so classifying it as a block has no realistic false positive: classifyProbeStatus(470) -> blocked (credential never sent, network line azdo-blocked / bifrost-blocked); the plugin fetch maps HTTP 470 (any Content-Type, body discarded unread) to network-blocked with the existing NETWORK hint. Out of scope (later items, not this cycle): 203 HTML sign-in (T-034, needs evidence); a plugin-side Bifrost reachability check at Kilo start (Kilo's own runtime model calls to Bifrost are not controlled by the plugin; documented limitation). Constraints: FR-10 never throws; FR-11 one plugin file, zero runtime deps, no new import, __internals key set unchanged; no secret or value in any log or output line; exactly one fetch per plugin hook run (no new probe); cache order (ADR-0008) and T-013 binding unchanged; hint texts unchanged. Contracts: installer-cli minor bump (sections 7 / 9.0 / 9.1: hint rule and 470 verdict), plugin-interface minor bump (470 row), ADR-0019 / ADR-0020 amendments. Docs (docs-writer): troubleshooting / runbook rows for 470 and the new hint behaviour. Versioning: patch (fix of user-facing diagnostics).",
+      "acceptance_criteria": [
+        "Given a smoke report with network pass and azdo 'fail network-unreachable', 'fail network-blocked' or 'fail timeout', When formatSmoke runs, Then the output is the network line, the azdo line, the bifrost line and then exactly one line equal to the existing fixed VPN / allow-list hint (installer-cli section 7 text, unchanged); and Given azdo fails with http-401, http-403, http-404, auth-unavailable, invalid-settings, network or bad-response, Then no network hint line is printed.",
+        "Given a smoke report with network pass, azdo pass and bifrost 'fail network', 'fail timeout', 'fail 407' or 'fail 470', When formatSmoke runs, Then exactly one network hint line is printed; and Given bifrost 'fail 401', 'fail 403', 'fail 404', 'fail 500', 'fail bad-response', 'fail invalid-key' or any skipped code, Then no network hint line is printed.",
+        "Given a report with both a failed pre-flight (network fail with a non-internal code) and a qualifying authenticated-line code, When formatSmoke runs, Then the network hint appears exactly once and the existing no-key hint behaviour is unchanged; and Given network fail with only 'internal', Then no network hint is printed (unchanged).",
+        "Given a fake probe fetch answering HTTP 470 for the Azure DevOps origin (or the Bifrost origin), When runSmoke runs, Then the network line reads 'smoke network: fail azdo-blocked' (or 'bifrost-blocked'), the corresponding check is 'skipped network-blocked', the authenticated fetch / az runner (or the GET models request) is never called so no credential or key is sent, and the installer exits with code 4; and classifyProbeStatus(470) returns 'blocked' while 200, 301, 401 and 404 stay 'reachable'.",
+        "Given a fake plugin fetch answering HTTP 470 with any Content-Type (text/plain, text/html, application/json, absent), When fetchRemoteConfig runs, Then it resolves { ok: false, error: 'network-blocked' }, the body's getReader is never called and body.cancel is invoked; and Given the config hook with that failure, Then the unchanged 'Remote config unavailable (network-blocked) ...' line is followed by exactly one NETWORK hint line, the fake fetch was called exactly once, and a valid bound cache is still applied as before.",
+        "Given failure responses carrying canary values in body and headers plus PAT / az token / virtual-key canaries, When runSmoke and the config hook run, Then no output or log line contains any credential, URL, host name, org/project/repo value, header value or body text, and neither function throws.",
+        "Given the change, When the FR-11 lint and 'bash scripts/ci.sh' run, Then the plugin is still ONE TypeScript file with zero runtime npm dependencies and no new import, the __internals key set is unchanged, existing tests change only where they pinned the old no-hint / http-470 behaviour, and CI exits 0."
+      ],
+      "source": "user",
+      "cycle_done": 24,
+      "notes": "Cycle 0024 PO: selected. Justification: the user's scenario is engineers behind an Azure IP firewall; these are the last code-only places where a firewall / VPN problem still shows without the actionable hint, or (470) where a credential is sent after a firewall deny. Small, hermetic, no real environment needed."
+    },
+    {
+      "id": "T-036",
+      "title": "Harden smoke formatLine; hint for Azure DevOps conditional-access IP blocks",
+      "type": "tech-debt",
+      "priority": 5,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-035"
+      ],
+      "description": "Cycle 0024 security/review follow-ups: (info) backend/installer/smoke.ts formatLine/networkLine read status/code unguarded so a hand-built report with a throwing getter or Symbol code makes formatSmoke throw (no real runSmoke path produces one; install-helper's try/catch keeps exit 4) - guard with attempt and show non-string codes as `internal`; read the network outcome fields once; (needs a contract decision first) a specific hint for Azure DevOps organisation IP conditional-access blocks (JSON 401/403), which today show the credentials hint that mentions the VPN.",
+      "acceptance_criteria": [
+        "Given a hand-built report with a throwing getter or non-string code, When formatSmoke runs, Then it does not throw and prints `internal` for that field."
+      ],
+      "source": "review",
+      "cycle_done": null,
+      "notes": "Cycle 0025 PO: not selected; factory declared DONE. The formatLine guard is defence-in-depth only (no real runSmoke path produces such a report; install-helper's catch keeps exit 4). The conditional-access (JSON 401/403, VS403463-style) hint needs real-environment evidence and a contract decision first. Optional extra from the cycle 0024 architect: a PowerShell child-process 470 smoke test in install-ps1-smoke.test.ts if pwsh is available on CI."
+    },
+    {
+      "id": "T-037",
+      "title": "Organise the single plugin file (TOC, numbered section banners, co-located helpers) and JSDoc every hot path - zero behaviour change",
+      "type": "tech-debt",
+      "priority": 1,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-035"
+      ],
+      "description": "Cycle 0026 PO, USER request (factory reopened after DONE at v0.16.1). The USER asked whether backend/plugin/azdo-remote-config.ts (~1456 lines) should be split into smaller modules or stay one file, and chose OPTION A: KEEP ONE FILE and organise it better inside; USER addendum: 'add jsdoc comments for all hot paths' in the same pass. FR-11 stays fully in force: one TypeScript file, zero runtime npm dependencies, no relative imports, only node: imports, no build step, shipped artefact path unchanged, no new __internals key. PART 1 - organisation: (1) a table-of-contents header comment at the top listing numbered sections; (2) consistent numbered section banners in a dependency-friendly order, e.g. 1 types/constants -> 2 low-level guards/helpers -> 3 JSONC parser (ADR-0003) -> 4 placeholders (ADR-0004) -> 5 merge (ADR-0005) -> 6 settings (ADR-0006) -> 7 fetch/auth (ADR-0007, ADR-0020) -> 8 cache (ADR-0008, ADR-0018) -> 9 logging/hints (ADR-0008) -> 10 config hook -> 11 exports/__internals (the Architect fixes the exact list; TOC and banners match 1:1 and in order); (3) related helpers moved next to their primary users; (4) stale or duplicated comments trimmed while every contract / ADR / FR / AC reference is kept; (5) no dead code (an unused declaration is removed only if provably unreferenced AND not exported / not in __internals; otherwise reported). PART 2 - JSDoc on hot paths. Definition: a HOT PATH is a function or constant that runs on every Kilo start (plugin load + config hook) or on every credential-bearing request. The FIXED hot-path list for this item (names verified against the current file by the PO): AzdoRemoteConfig (the default export's `server`), runConfigHook, executeHook, acquireRemote, resolveSettings, fetchRemoteConfig, runFetch, performRequest, buildItemsUrl, resolveAuthorization, findPat, basicHeader, azAuthorization, defaultRunAz, startDeadline, handleResponse, codeForStatus, readContentType, isJsonMediaType, codeForInterrupted, readCappedBody, extractContent, parseJsonc, resolvePlaceholders, mergeConfig, applyShared, validateShared, readCache, writeCache, checkCacheEnvelope, cacheBindingOf, makeLogger, logHint, hintFor, __internals. Each hot-path declaration gets a preceding /** ... */ block with: a one-sentence purpose; @param / @returns described in prose (do NOT repeat TypeScript types); the fixed error codes / log messages it can produce (e.g. FetchErrorCode values, LOG_* lines, hint lines) where applicable; an invariants line starting 'Invariants:' (as applicable: never throws (FR-10); no secret, URL, host or config value in any log (AC-9); response body discarded unread on non-success; exactly one request per hook run; cache order / binding per ADR-0008 / ADR-0018); and at least one @see pointer to an existing ADR file or contract section (e.g. ADR-0007, ADR-0008, ADR-0018, ADR-0020; plugin-interface.md 2e / 2f / 2f-C). JSDoc must describe the CURRENT code (verified against it, not memory), be ASCII-only, contain no secrets or realistic example keys (any Bifrost key example only as `sk-bf-<...>`), and must not change any code token. HARD CONSTRAINTS: ZERO behaviour change - a pure move-and-comment change: no logic edits, no renames, no signature changes, identical exported surface and __internals key set; declaration order changes must be safe for module evaluation (no top-level const/let read before initialisation at load time; only function declarations may rely on hoisting). All existing tests (~692) pass UNCHANGED - no existing test file is edited (tests import the plugin by path); NEW dev-only tests/scripts may be added. Proof required: a before/after comparison (dev-only script or node:test, output recorded in the engineer report) showing the sorted top-level declaration names, the export list and the __internals keys are identical, and that a normalised comparison (comments and whitespace stripped, top-level statements compared as a sorted multiset) is identical. Optional, ONLY if cheap: a dev-only check (extend backend/tools/check-fr11.mjs or a sibling wired into scripts/ci.sh) that the TOC entries and banners exist in order. No contract version bump (no behaviour change). Versioning: patch (refactor/docs). F-012 / F-013 / F-015 remain blocked/skipped; remote mode stays OFF.",
+      "acceptance_criteria": [
+        "Given the reorganised backend/plugin/azdo-remote-config.ts, When its source is scanned as text by a dev-only test or check, Then the header contains a table-of-contents comment listing N numbered sections and the file contains exactly N section banner comments in one consistent format whose numbers and titles match the TOC 1:1 and in the same order.",
+        "Given the fixed hot-path list in this item (AzdoRemoteConfig (the default export's `server`), runConfigHook, executeHook, acquireRemote, resolveSettings, fetchRemoteConfig, runFetch, performRequest, buildItemsUrl, resolveAuthorization, findPat, basicHeader, azAuthorization, defaultRunAz, startDeadline, handleResponse, codeForStatus, readContentType, isJsonMediaType, codeForInterrupted, readCappedBody, extractContent, parseJsonc, resolvePlaceholders, mergeConfig, applyShared, validateShared, readCache, writeCache, checkCacheEnvelope, cacheBindingOf, makeLogger, logHint, hintFor, __internals), When a dev-only node:test (e.g. under backend/test/tools) reads the plugin source as text, Then every listed declaration is immediately preceded by a /** ... */ JSDoc block that contains a purpose sentence, an 'Invariants:' line and at least one @see tag, and the test fails if any listed name is missing its block or no longer exists in the file.",
+        "Given every JSDoc block in the plugin file, When the dev-only test inspects them, Then each @see ADR-NNNN reference names a file that exists in docs/architecture/, the blocks are ASCII-only, and no block contains a secret-like value (no 'sk-bf-' followed by anything other than '<', no 'Basic ' or 'Bearer ' followed by a credential-like token, no dev.azure.com URL with a real-looking organisation).",
+        "Given the file before (git main at v0.16.1) and after the change, When the top-level declarations (function, const, let, type, interface, class names) are extracted and sorted, Then the two sorted name lists are identical, and the exported names and the sorted __internals key list are identical.",
+        "Given both versions with all comments (including the new JSDoc) and whitespace removed, When their top-level statements are normalised and compared as a sorted multiset, Then the multisets are identical (proving a move-and-comment-only change with no logic edits); the command and its output are recorded in the engineer report.",
+        "Given the existing backend test suite (~692 tests), When it runs against the reorganised file, Then every test passes, no pre-existing test file is modified in the cycle diff, and importing the plugin in a fresh process succeeds without a ReferenceError / temporal-dead-zone error with the default export still { id, server } and the same named exports.",
+        "Given the change, When the FR-11 lint (backend/tools/check-fr11.mjs), check-docs and 'bash scripts/ci.sh' run, Then all exit 0: the plugin is still ONE TypeScript file at the unchanged path with zero runtime npm dependencies, no relative imports, only node: imports and no new __internals key; and any optional TOC/banner check added is dev-only (not shipped) and fails when a banner is missing or out of order."
+      ],
+      "source": "user",
+      "cycle_done": 26,
+      "notes": "Cycle 0026 PO: selected (priority 1, USER request; factory reopened after cycle 0025 DONE). Decision recorded: OPTION A (keep one file, organise inside) - FR-11 single-file packaging is preserved because the plugin ships as one file copied into the Kilo plugin folder. USER addendum merged into this same item: JSDoc for all hot paths. Hot-path names were verified by the PO against the current file: the default export is { id: PLUGIN_ID, server: AzdoRemoteConfig }; URL building is buildItemsUrl; auth header selection is resolveAuthorization / findPat / basicHeader / azAuthorization (plus defaultRunAz); the deadline/timer is startDeadline; capped body reading is readCappedBody; the logger factory is makeLogger. One-cycle sized: move + comment edits plus dev-only proof/check tests; no logic, existing-test, contract or behaviour changes."
+    },
+    {
+      "id": "T-038",
+      "title": "Plugin JSDoc trim pass and wording fixes (comment-only)",
+      "type": "tech-debt",
+      "priority": 1,
+      "status": "done",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-037"
+      ],
+      "description": "Cycle 0026 review/security follow-ups, COMMENT-ONLY in backend/plugin/azdo-remote-config.ts (zero behaviour change, re-proved with compare-plugin-shape vs v0.16.2). The ONLY file that may change under backend/ is backend/plugin/azdo-remote-config.ts; no test, tool, contract or ADR edits (T-039 owns the tool/ADR follow-ups). (1) TRIM: delete every `Codes: none.` line (16; source-layout.test.ts does NOT check Codes: lines, it only requires a purpose sentence ending in '.', an `Invariants:` line and an `@see ` line per hot path); collapse the qualified `Codes: none (...)` / `Codes: none directly...` lines into the Invariants/purpose text or drop them; replace repeated fetch error-code enumerations (handleResponse, readCappedBody, runFetch, fetchRemoteConfig, resolveSettings-related blocks) with a reference such as `Codes: see contracts/plugin-interface.md section 2e.` keeping the full list in at most ONE JSDoc block; shorten the 6 `@param deadline - the operation-wide deadline` lines to a minimal form or drop them; wrap every comment line longer than 110 chars (24 today, incl. the rework-1 run-ons of 133-217 chars). Must keep verbatim the mutation anchors used by source-layout.test.ts: the line ` * Invariants: pure and never throws.` (codeForInterrupted), the text ` * @see ADR-0007 section 6\\n */\\nfunction basicHeader`, `@param text - the JSONC`, `Parses JSON with comments and trailing commas.`, a JSDoc block directly before `async function runFetch`, `function noop(): void {}`, the TOC and the 15 `// ==== N. Title ====` banners. (2) WORDING (six fixes): (a) line ~394 Phase 1 comment 'The only phase that throws' contradicts the mergeConfig JSDoc (the write phase can also throw when the target rejects a write); (b) ~515 'as does a target whose getter throws' - a throwing getter propagates the getter's own error, not a TypeError; (c) ~1223 readCappedBody 'nothing beyond the 1 MiB cap is accumulated' assumes each chunk reports an honest byteLength; (d) ~490 applyShared 'a failed merge leaves the config unchanged' holds for ordinary objects only (rollback is best-effort); (e) ~1889 runConfigHook 'every failure leaves the config unchanged or fully merged' - same ordinary-objects/best-effort qualifier; (f) ~1889 'no ... config value appears in any log' - qualify that L-UNRESOLVED logs sanitised placeholder NAMES (never values). The user's original concern was file size (1456 -> 1939 lines in v0.16.2); target at least 100 fewer lines.",
+      "acceptance_criteria": [
+        "Given the trimmed plugin, When `node tools/compare-plugin-shape.mjs --base-ref v0.16.2` runs from backend/, Then it prints PASS (not SKIP) and exits 0 with identical declarations, exports, __internals keys and statement multiset.",
+        "Given the branch, When `git diff --name-only v0.16.2 -- backend` runs, Then it lists only backend/plugin/azdo-remote-config.ts, and `git diff --exit-code v0.16.2 -- backend/test backend/tools docs/architecture` exits 0 (source-layout.test.ts unchanged).",
+        "Given the unchanged source-layout.test.ts, When the backend test suite and `bash scripts/ci.sh` run, Then all tests pass (35 hot paths keep a purpose sentence, an Invariants: line and an @see line; 15 banners and TOC intact).",
+        "Given the trimmed file, When `wc -l backend/plugin/azdo-remote-config.ts` runs, Then it reports at most 1839 lines (at least 100 fewer than 1939), and no comment line (starting with optional whitespace then `*`, `/**` or `//`) is longer than 110 characters.",
+        "Given the trimmed file, When searched, Then `^ \\* Codes: none` matches 0 lines, the full fetch error-code list (bad-response, too-large, network, timeout, network-blocked) appears in at most one JSDoc block, and every other fetch-path block that mentions codes references `contracts/plugin-interface.md section 2e`.",
+        "Given the Phase 1 comment and the mergeConfig JSDoc, When searched, Then the phrase 'The only phase that throws' matches 0 lines and the mergeConfig Invariants no longer say a throwing getter gives a TypeError (it states the getter's own error propagates).",
+        "Given the readCappedBody, applyShared and runConfigHook JSDoc blocks, When read, Then the readCappedBody 1 MiB cap sentence mentions byteLength as the trusted chunk size, the applyShared and runConfigHook rollback claims say 'ordinary objects' and 'best-effort', and the runConfigHook log claim mentions L-UNRESOLVED placeholder names (no values)."
+      ],
+      "notes": "Cycle 0027 PO: selected (priority 1, USER-sourced size concern). Tightened: measurable size (<= 1839 lines), 110-char cap on comment lines only (18 CODE lines already exceed 110 and cannot change in a comment-only item), Codes: lines confirmed NOT required by source-layout.test.ts so `Codes: none.` lines are deleted, test-anchor strings listed so the layout test passes unchanged. Comment-only, one file, one cycle.",
+      "source": "user",
+      "cycle_done": 27
+    },
+    {
+      "id": "T-039",
+      "title": "compare-plugin-shape tool hardening and ADR status lines",
+      "type": "tech-debt",
+      "priority": 4,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [
+        "T-037"
+      ],
+      "description": "Cycle 0026 review/security follow-ups: (tool) compare-plugin-shape.mjs splits operators into single characters so `a + ++b` -> `a++ + b` and `--a` -> `- -a` report PASS - tokenize multi-character operators; any `git show` failure (mistyped ref, shallow clone without tags) prints SKIP and exits 0 - distinguish 'git/history unavailable' (SKIP) from 'ref not found' (exit 2); output says 'multiset of:' where the spec says 'multiset of'; (ADR-0021 Consequences) the claim 'whitespace has no runtime meaning' is wrong for adjacent +/- tokens - correct it (architect); ADR-0007 and ADR-0008 status lines should mention the ADR-0021 amendment (architect); source-layout.test.ts ~L245 the AC-3 negative-control test fails noisily whenever the real source has an AC-3 problem - make it independent.",
+      "acceptance_criteria": [
+        "Given base and head differing only by `a + ++b` vs `a++ + b`, When the tool runs, Then it reports FAIL.",
+        "Given a mistyped --base-ref, When the tool runs, Then it exits 2, not SKIP/0."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-040",
+      "title": "Installer: align written key with the key the smoke test checks",
+      "type": "bug",
+      "priority": 2,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [],
+      "description": "Cycle 0027 review/security/architect follow-up. On update, a non-empty provider.azurefoundry.options.headers[\"x-bf-vk\"] wins over a freshly supplied KILO_BIFROST_KEY (which is still written to provider.bifrost.options.apiKey), so the smoke test can check a different key than the one just written and the \"set KILO_BIFROST_KEY and re-run\" hint can mislead. Also the installer still writes the provider.bifrost.apiKey placeholder when creating/updating config. Decide which key wins (or write the supplied key into the x-bf-vk header), stop writing the redundant placeholder, update personal-config template, hints and ADR-0022/installer-cli contract.",
+      "acceptance_criteria": [
+        "Given an existing config whose azurefoundry x-bf-vk header differs from a supplied KILO_BIFROST_KEY, When the installer runs, Then the key written and the key smoke-tested are the same key.",
+        "Given an existing azurefoundry-shaped config, When the installer runs, Then no bifrost.apiKey placeholder is added."
+      ],
+      "source": "review",
+      "cycle_done": null
+    },
+    {
+      "id": "T-041",
+      "title": "Tests for ADR-0022 smoke edge rules",
+      "type": "test",
+      "priority": 3,
+      "status": "todo",
+      "scope": {
+        "backend": true,
+        "frontend": false
+      },
+      "depends_on": [],
+      "description": "Cycle 0027 review follow-up: smoke.test.ts has no test that a non-string provider.bifrost baseURL must NOT fall back to azurefoundry (stays no-base-url), nor that an empty or non-string azurefoundry x-bf-vk header falls back to bifrost.apiKey in storedApiKey. Optional hardening: storedApiKey reads own properties only (Object.hasOwn); e2e-harness.md section 3 heading still says \"version for 1.0.0\".",
+      "acceptance_criteria": [
+        "Given bifrost.baseURL = 123 and an azurefoundry baseURL, When the smoke runs, Then it reports fail no-base-url.",
+        "Given an empty x-bf-vk header and a bifrost apiKey, When storedApiKey runs, Then it returns the apiKey."
+      ],
+      "source": "review",
+      "cycle_done": null
+    }
+  ]
+}
