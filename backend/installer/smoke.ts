@@ -101,11 +101,17 @@ function ownPlainProperty(source: unknown, key: string): unknown {
   return readOwn(source, key);
 }
 
+function readProviderBaseUrl(provider: unknown, name: string): unknown {
+  const entry = ownPlainProperty(provider, name);
+  const options = ownPlainProperty(entry, "options");
+  return ownPlainProperty(options, "baseURL");
+}
+
+// The shared config may declare the Bifrost gateway URL on provider.bifrost or, as the team config does, on provider.azurefoundry.
 function readSharedBaseUrl(shared: Record<string, unknown>): unknown {
   const provider = ownPlainProperty(shared, "provider");
-  const bifrost = ownPlainProperty(provider, "bifrost");
-  const options = ownPlainProperty(bifrost, "options");
-  return ownPlainProperty(options, "baseURL");
+  const own = readProviderBaseUrl(provider, "bifrost");
+  return own !== undefined ? own : readProviderBaseUrl(provider, "azurefoundry");
 }
 
 function isVisibleAscii(text: string): boolean {
@@ -403,7 +409,7 @@ async function checkBifrost(
         method: "GET" as const,
         headers: {
           Accept: "application/json",
-          Authorization: `Bearer ${keyCheck.key}`,
+          "x-bf-vk": keyCheck.key,
         },
         redirect: "manual" as const,
         signal: controller.signal,

@@ -47,7 +47,8 @@ const azdoOk = (content: string): FakeAnswer => ({
 });
 const bifrostAuth = (k: string): FakeAnswer => ({
   mode: "auth",
-  authorization: "Bearer " + k,
+  header: "x-bf-vk",
+  authorization: k,
   answer: { status: 200, body: '{"object":"list","data":[]}' },
 });
 const rec = (level: string, message: string) => ({ body: { service: SVC, level, message } });

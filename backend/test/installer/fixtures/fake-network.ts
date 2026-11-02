@@ -10,7 +10,7 @@ export type FakeAnswer =
   | FakeStaticAnswer
   | { mode: "hang" }
   | { mode: "throw"; message?: string }
-  | { mode: "auth"; authorization: string; answer: FakeStaticAnswer };
+  | { mode: "auth"; authorization: string; header?: string; answer: FakeStaticAnswer };
 
 export interface FakeScenario {
   azdo?: FakeAnswer;
@@ -92,7 +92,7 @@ const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Pro
       throw new Error(answer.message ?? "fake-network: forced failure");
     }
     if (answer.mode === "auth") {
-      if (headers["authorization"] === answer.authorization) return renderStatic(answer.answer);
+      if (headers[answer.header ?? "authorization"] === answer.authorization) return renderStatic(answer.answer);
       return new Response('{"error":"unauthorized"}', {
         status: 401,
         headers: { "content-type": "application/json" },

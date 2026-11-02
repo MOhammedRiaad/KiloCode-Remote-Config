@@ -193,10 +193,18 @@ export function renderUpdated(result: Json): string {
   return `${UPDATED_HEADER}${JSON.stringify(result, null, 2)}\n`;
 }
 
-/** The apiKey stored in a config object, if any. */
-export function storedApiKey(config: Json): unknown {
+function providerOptions(config: Json, name: string): unknown {
   const provider = config["provider"];
-  const bifrost = isPlainObject(provider) ? provider["bifrost"] : undefined;
-  const options = isPlainObject(bifrost) ? bifrost["options"] : undefined;
-  return isPlainObject(options) ? options["apiKey"] : undefined;
+  const entry = isPlainObject(provider) ? provider[name] : undefined;
+  return isPlainObject(entry) ? entry["options"] : undefined;
+}
+
+/** The Bifrost virtual key stored in a config object, if any: the azurefoundry x-bf-vk header, else the bifrost apiKey. */
+export function storedApiKey(config: Json): unknown {
+  const azure = providerOptions(config, "azurefoundry");
+  const headers = isPlainObject(azure) ? azure["headers"] : undefined;
+  const headerKey = isPlainObject(headers) ? headers["x-bf-vk"] : undefined;
+  if (typeof headerKey === "string" && headerKey !== "") return headerKey;
+  const bifrost = providerOptions(config, "bifrost");
+  return isPlainObject(bifrost) ? bifrost["apiKey"] : undefined;
 }
