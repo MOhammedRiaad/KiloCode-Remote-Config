@@ -1,6 +1,6 @@
 name: AI Factory
 
-# Runs the autonomous SDLC loop on a schedule in a disposable GitHub runner.
+# Runs the autonomous SDLC loop in a disposable GitHub runner (manual dispatch only).
 # Required repository secrets:
 #   ANTHROPIC_API_KEY   (or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`)
 #   FACTORY_GH_TOKEN    fine-grained PAT: contents, pull requests, issues, workflows = read/write.
@@ -8,9 +8,9 @@ name: AI Factory
 #                       (events from the default GITHUB_TOKEN do not trigger workflows).
 # Repo settings: allow squash merge; optionally enable auto-merge and require the CI checks on main.
 
+# Manual only: the factory runs locally (scripts/factory-loop.*), so there is no schedule.
+# To run it on GitHub again, add `schedule: [{ cron: "0 */6 * * *" }]` here and set the secrets above.
 on:
-  schedule:
-    - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
       cycles:
@@ -26,27 +26,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  # Secrets cannot be used in a job-level `if`, so a tiny job reports whether the factory can run at all.
-  preflight:
-    runs-on: ubuntu-latest
-    outputs:
-      ready: ${{ steps.check.outputs.ready }}
-    steps:
-      - id: check
-        env:
-          FACTORY_GH_TOKEN: ${{ secrets.FACTORY_GH_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: |
-          if [ -n "$FACTORY_GH_TOKEN" ] && { [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; }; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::AI Factory skipped: set FACTORY_GH_TOKEN and ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN) repository secrets to enable it."
-          fi
   factory:
-    needs: preflight
-    if: needs.preflight.outputs.ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 340
     steps:
